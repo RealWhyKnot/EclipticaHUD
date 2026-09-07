@@ -1,0 +1,30 @@
+[package]
+name = "ecliptica-hud"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Boss target and damage HUD for Ecliptica in VRChat, desktop panel plus SteamVR overlay"
+
+[dependencies]
+openvr = "0.9.0"
+
+[dependencies.windows-sys]
+version = "0.60"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Storage_FileSystem",
+]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
