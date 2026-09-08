@@ -1,6 +1,6 @@
 use crate::logwatch::LogWatch;
 use crate::parse::GameState;
-use crate::render::Renderer;
+use crate::render::{Frame, Renderer};
 use crate::vr::VrOverlay;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -9,11 +9,14 @@ use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::*;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const TIMER_ID: usize = 1;
-const FLASH_SECS: u64 = 3;
+const FLASH_MS: f32 = 3000.0;
+const WM_MOUSELEAVE: u32 = 0x02a3;
 
 struct App {
     gs: GameState,
@@ -23,11 +26,56 @@ struct App {
     rgba: Vec<u8>,
     last_ts: u64,
     last_ts_at: Instant,
+    hover_close: bool,
+    pressed_close: bool,
+    tracking: bool,
+    flash_at: Option<Instant>,
+    last_target_since: u64,
+    progress_shown: f32,
+    dps_peak: u64,
+    dps_boss: Option<String>,
+    dps_frac_shown: f32,
+    timer_ms: u32,
+}
+
+fn approach(cur: &mut f32, target: f32) -> bool {
+    let d = target - *cur;
+    if d.abs() < 0.002 {
+        *cur = target;
+        false
+    } else {
+        *cur += d * 0.18;
+        true
+    }
 }
 
 impl App {
     fn now(&self) -> u64 {
         self.last_ts + self.last_ts_at.elapsed().as_secs()
+    }
+
+    fn flash_t(&self) -> f32 {
+        match self.flash_at {
+            Some(t) => (t.elapsed().as_millis() as f32 / FLASH_MS).min(1.0),
+            None => 1.0,
+        }
+    }
+
+    fn repaint(&mut self, hwnd: HWND) {
+        let frame = Frame {
+            now: self.now(),
+            flash_t: self.flash_t(),
+            hover_close: self.hover_close,
+            pressed_close: self.pressed_close,
+            vr: self.vr.status(),
+            log_ok: self.watch.path.is_some(),
+            progress_shown: self.progress_shown,
+            dps_frac_shown: self.dps_frac_shown,
+        };
+        self.renderer.draw(&mut self.gs, &frame);
+        unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+        self.renderer.rgba(&mut self.rgba);
+        self.vr.submit(&self.rgba, self.renderer.width as u32, self.renderer.height as u32, true);
     }
 
     fn tick(&mut self, hwnd: HWND) {
@@ -43,15 +91,38 @@ impl App {
             self.last_ts_at = Instant::now();
         }
         let now = self.now();
-        let flash = self.gs.target.is_some() && now.saturating_sub(self.gs.target_since) < FLASH_SECS;
-        let redraw = self.gs.changed || self.gs.boss.is_some() || flash;
+        if self.gs.target_since != self.last_target_since {
+            self.last_target_since = self.gs.target_since;
+            if self.gs.target.is_some() {
+                self.flash_at = Some(Instant::now());
+            }
+        }
+        if self.gs.boss != self.dps_boss {
+            self.dps_boss = self.gs.boss.clone();
+            self.dps_peak = 0;
+        }
+        let rolling = self.gs.rolling_dps(now);
+        self.dps_peak = self.dps_peak.max(rolling);
+        let dps_target = if self.gs.boss.is_some() && self.dps_peak > 0 {
+            rolling as f32 / self.dps_peak as f32
+        } else {
+            0.0
+        };
+        let mut anim = approach(&mut self.progress_shown, self.gs.progress);
+        anim |= approach(&mut self.dps_frac_shown, dps_target);
+        anim |= self.flash_at.is_some() && self.flash_t() < 1.0;
+        let redraw = self.gs.changed || anim || self.gs.boss.is_some();
         self.gs.changed = false;
         if redraw {
-            self.renderer.draw(&mut self.gs, now, flash);
-            unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
-            self.renderer.rgba(&mut self.rgba);
+            self.repaint(hwnd);
+        } else {
+            self.vr.submit(&self.rgba, self.renderer.width as u32, self.renderer.height as u32, false);
         }
-        self.vr.submit(&self.rgba, self.renderer.width as u32, self.renderer.height as u32, redraw);
+        let want: u32 = if anim { 33 } else { 1000 };
+        if want != self.timer_ms {
+            self.timer_ms = want;
+            unsafe { SetTimer(hwnd, TIMER_ID, want, None) };
+        }
     }
 }
 
@@ -135,15 +206,76 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             HTCAPTION as LRESULT
         }
+        WM_MOUSEMOVE => {
+            let x = (lp & 0xffff) as i16 as i32;
+            let y = ((lp >> 16) & 0xffff) as i16 as i32;
+            if let Some(app) = app_mut(hwnd) {
+                let over = app.renderer.close_hit(x, y);
+                if over != app.hover_close {
+                    app.hover_close = over;
+                    app.repaint(hwnd);
+                }
+                if over && !app.tracking {
+                    let mut tme = TRACKMOUSEEVENT {
+                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 0,
+                    };
+                    if TrackMouseEvent(&mut tme) != 0 {
+                        app.tracking = true;
+                    }
+                }
+            }
+            0
+        }
+        WM_MOUSELEAVE | WM_NCMOUSEMOVE => {
+            if let Some(app) = app_mut(hwnd) {
+                if msg == WM_MOUSELEAVE {
+                    app.tracking = false;
+                }
+                if app.hover_close {
+                    app.hover_close = false;
+                    app.repaint(hwnd);
+                }
+            }
+            if msg == WM_NCMOUSEMOVE {
+                DefWindowProcW(hwnd, msg, wp, lp)
+            } else {
+                0
+            }
+        }
         WM_LBUTTONDOWN => {
             let x = (lp & 0xffff) as i16 as i32;
             let y = ((lp >> 16) & 0xffff) as i16 as i32;
             if let Some(app) = app_mut(hwnd) {
                 if app.renderer.close_hit(x, y) {
-                    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    app.pressed_close = true;
+                    SetCapture(hwnd);
+                    app.repaint(hwnd);
                 }
             }
             0
+        }
+        WM_LBUTTONUP => {
+            let x = (lp & 0xffff) as i16 as i32;
+            let y = ((lp >> 16) & 0xffff) as i16 as i32;
+            ReleaseCapture();
+            if let Some(app) = app_mut(hwnd) {
+                if app.pressed_close {
+                    app.pressed_close = false;
+                    let inside = app.renderer.close_hit(x, y);
+                    app.repaint(hwnd);
+                    if inside {
+                        PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    }
+                }
+            }
+            0
+        }
+        WM_SETCURSOR if (lp & 0xffff) as u32 == HTCLIENT => {
+            SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_HAND));
+            1
         }
         WM_KEYDOWN if wp == VK_ESCAPE as usize => {
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
@@ -192,6 +324,16 @@ pub fn run() {
             rgba: Vec::new(),
             last_ts: 0,
             last_ts_at: Instant::now(),
+            hover_close: false,
+            pressed_close: false,
+            tracking: false,
+            flash_at: None,
+            last_target_since: 0,
+            progress_shown: 0.0,
+            dps_peak: 0,
+            dps_boss: None,
+            dps_frac_shown: 0.0,
+            timer_ms: 1000,
         };
 
         let module = GetModuleHandleW(std::ptr::null());

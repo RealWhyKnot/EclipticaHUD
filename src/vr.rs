@@ -25,6 +25,13 @@ pub struct VrOverlay {
     last_try: Option<Instant>,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum VrStatus {
+    Off,
+    On,
+    Failing,
+}
+
 fn steamvr_running() -> bool {
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -81,6 +88,14 @@ impl VrOverlay {
         let transform = openvr::pose::Matrix3x4(WRIST_TRANSFORM);
         if overlay.set_transform_tracked_device_relative(inner.handle, index, &transform).is_ok() {
             inner.attached = true;
+        }
+    }
+
+    pub fn status(&self) -> VrStatus {
+        match &self.inner {
+            None => VrStatus::Off,
+            Some(inner) if inner.failures > 0 => VrStatus::Failing,
+            Some(_) => VrStatus::On,
         }
     }
 
