@@ -152,6 +152,7 @@ pub struct GameState {
     pub last_kill: Option<KillSummary>,
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
+    dead_seen: Option<(String, u64)>,
     pub changed: bool,
 }
 
@@ -182,11 +183,14 @@ impl GameState {
             Event::NonStrikeTotal(n) => {
                 if let Some(mut k) = self.pending_kill.take() {
                     k.non_strike = n;
-                    let dupe = self.last_kill.as_ref().is_some_and(|p| {
-                        p.boss == k.boss
-                            && k.ts.saturating_sub(p.ts) <= KILL_DEDUPE_SECS
-                            && p.strike + p.non_strike >= k.strike + k.non_strike
+                    let chained = self.dead_seen.as_ref().is_some_and(|(boss, ts)| {
+                        *boss == k.boss && k.ts.saturating_sub(*ts) <= KILL_DEDUPE_SECS
                     });
+                    self.dead_seen = Some((k.boss.clone(), k.ts));
+                    let dupe = chained
+                        && self.last_kill.as_ref().is_some_and(|p| {
+                            p.boss == k.boss && p.strike + p.non_strike >= k.strike + k.non_strike
+                        });
                     if !dupe {
                         self.last_kill = Some(k);
                     }
@@ -373,6 +377,29 @@ mod tests {
         assert_eq!(k.strike, 4793);
         kill(&mut gs, "09:26:00", 900);
         assert_eq!(gs.last_kill.as_ref().unwrap().strike, 900);
+    }
+
+    #[test]
+    fn kill_echo_chain_outlives_window() {
+        let mut gs = GameState::default();
+        let kill = |gs: &mut GameState, secs: u64, s: u64| {
+            let t = fmt_clock(3600 + secs);
+            gs.feed(&format!("2026.09.08 {t} Debug      -  Boss Gravetender dead, personal damage dealt: "));
+            gs.feed(&format!("2026.09.08 {t} Debug      -  STRIKE DMG: {s}"));
+            gs.feed(&format!("2026.09.08 {t} Debug      -  NON-STRIKE DMG: 0"));
+        };
+        kill(&mut gs, 0, 9173);
+        let first_ts = gs.last_kill.as_ref().unwrap().ts;
+        let mut t = 13;
+        while t <= 110 {
+            kill(&mut gs, t, 0);
+            t += 3;
+        }
+        let k = gs.last_kill.as_ref().unwrap();
+        assert_eq!(k.strike, 9173);
+        assert_eq!(k.ts, first_ts);
+        kill(&mut gs, 380, 0);
+        assert_eq!(gs.last_kill.as_ref().unwrap().strike, 0);
     }
 
     #[test]
