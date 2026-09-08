@@ -22,6 +22,7 @@ pub enum Event {
         progress: f32,
         class: String,
     },
+    StageProgress(u32),
     Intermission,
     Lobby,
     RoomLeft,
@@ -43,6 +44,7 @@ impl Event {
             Event::DamageTaken { .. } => "damage_taken",
             Event::Ownership { .. } => "ownership",
             Event::Stage { .. } => "stage",
+            Event::StageProgress(_) => "stage_progress",
             Event::Intermission => "intermission",
             Event::Lobby => "lobby",
             Event::RoomLeft => "room_left",
@@ -134,6 +136,9 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
             return Some(Event::Lobby);
         }
         return None;
+    }
+    if let Some(rest) = msg.strip_prefix("Advancing Stage Progress to: ") {
+        return Some(Event::StageProgress(rest.trim().parse().ok()?));
     }
     if let Some(rest) = msg.strip_prefix("Boss ") {
         let name = rest
@@ -304,6 +309,16 @@ mod tests {
             })
         );
         assert_eq!(parse_msg("spawn token, Maybe, 5"), None);
+    }
+
+    #[test]
+    fn stage_progress() {
+        assert_eq!(
+            parse_msg("Advancing Stage Progress to: 5"),
+            Some(Event::StageProgress(5))
+        );
+        assert_eq!(parse_msg("Advancing Stage Event: 4"), None);
+        assert_eq!(parse_msg("Advancing Stage Progress to: x"), None);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use crate::names::{boss_name, phase_name, stage_name};
 use crate::state::{base_name, fmt_clock, phase_num, GameState, Mode};
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
@@ -282,7 +283,12 @@ impl Renderer {
             Mode::Lobby => ("in lobby".to_string(), AMBER),
             Mode::Intermission => ("intermission".to_string(), ACCENT),
             Mode::Stage => (
-                format!("{}   {:.0}%   {}", gs.stage, gs.progress * 100.0, gs.class),
+                format!(
+                    "{}   {}   {}",
+                    stage_name(&gs.stage),
+                    phase_name(gs.progress),
+                    gs.class
+                ),
                 GOOD,
             ),
         };
@@ -318,7 +324,13 @@ impl Renderer {
         arrow(self, RUN_NEXT_HIT, f.run_sel, GLYPH_NEXT);
         let (run_label, run_color) = match f.view_run {
             None => ("no runs yet".to_string(), DIM),
-            Some(i) if f.live() => (format!("RUN {}/{}", i + 1, gs.runs.len()), DIM),
+            Some(i) if f.live() => {
+                let mut s = format!("RUN {}/{}", i + 1, gs.runs.len());
+                if let Some(n) = gs.stage_no {
+                    s.push_str(&format!("   stage {n}"));
+                }
+                (s, DIM)
+            }
             Some(i) => {
                 let r = &gs.runs[i];
                 let mut s = format!(
@@ -326,8 +338,11 @@ impl Renderer {
                     i + 1,
                     gs.runs.len(),
                     &fmt_clock(r.start_ts)[..5],
-                    r.stage
+                    stage_name(&r.stage)
                 );
+                if let Some(n) = r.stage_no {
+                    s.push_str(&format!("   stage {n}"));
+                }
                 if r.deaths > 0 {
                     s.push_str(&format!("   {}", fmt_deaths(r.deaths)));
                 }
@@ -398,9 +413,9 @@ impl Renderer {
                 (Some(boss), target) => {
                     let pn = phase_num(boss);
                     let shown = if pn > 1 {
-                        format!("{} (P{pn})", base_name(boss))
+                        format!("{} (P{pn})", boss_name(base_name(boss)))
                     } else {
-                        boss.clone()
+                        boss_name(boss).to_string()
                     };
                     self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, &shown);
                     self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "TARGET");
@@ -432,7 +447,15 @@ impl Renderer {
         } else {
             match hist {
                 Some((name, start, _, _, last, n_phases)) => {
-                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, name);
+                    self.text(
+                        M + 60,
+                        88,
+                        166,
+                        F_BOSS,
+                        TEXT,
+                        DT_LEFT,
+                        boss_name(base_name(name)),
+                    );
                     self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "RESULT");
                     if n_phases > 1 {
                         let chip = match f.view_phase {
@@ -481,7 +504,7 @@ impl Renderer {
                 Some(k) => {
                     let line = format!(
                         "last kill  {}   {} strike + {} other",
-                        k.boss,
+                        boss_name(base_name(&k.boss)),
                         group_digits(k.strike),
                         group_digits(k.non_strike)
                     );
@@ -553,7 +576,15 @@ impl Renderer {
             }
             self.text(M, y, 58, F_BODY, DIM, DT_LEFT, &fmt_clock(entry.ts));
             self.text(M + 62, y, 150, F_BODY, TEXT, DT_LEFT, &entry.player);
-            self.text(M + 216, y, W - 216, F_BODY, DIM, DT_LEFT, &entry.boss);
+            self.text(
+                M + 216,
+                y,
+                W - 216,
+                F_BODY,
+                DIM,
+                DT_LEFT,
+                boss_name(base_name(&entry.boss)),
+            );
             y += 20;
         }
         if gs.history.is_empty() {

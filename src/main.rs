@@ -2,6 +2,7 @@
 
 mod app;
 mod logwatch;
+mod names;
 mod parse;
 mod render;
 mod state;

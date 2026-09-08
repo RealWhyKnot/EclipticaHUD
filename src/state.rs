@@ -38,6 +38,7 @@ pub struct Run {
     pub end_ts: Option<u64>,
     pub stage: String,
     pub class: String,
+    pub stage_no: Option<u32>,
     pub fights: Vec<BossFight>,
     pub deaths: u32,
 }
@@ -100,6 +101,7 @@ pub struct GameState {
     pub stage: String,
     pub progress: f32,
     pub class: String,
+    pub stage_no: Option<u32>,
     pub boss: Option<String>,
     pub fight_start: u64,
     pub fight_dmg: u64,
@@ -158,6 +160,7 @@ impl GameState {
         self.stage.clear();
         self.class.clear();
         self.progress = 0.0;
+        self.stage_no = None;
         self.pending_kill = None;
         self.dead_seen = None;
         self.dead_until = 0;
@@ -312,6 +315,7 @@ impl GameState {
                 self.boss = None;
                 self.target = None;
                 self.progress = 0.0;
+                self.stage_no = None;
                 self.level_tokens.clear();
                 self.pending_tokens.clear();
                 self.close_run(ts);
@@ -323,12 +327,17 @@ impl GameState {
                 self.stage.clear();
                 self.class.clear();
                 self.progress = 0.0;
+                self.stage_no = None;
                 self.level_tokens.clear();
                 self.pending_tokens.clear();
                 self.close_run(ts);
             }
             Event::TokenSpawn { rune, chance } => {
                 self.pending_tokens.push((rune, chance));
+            }
+            Event::StageProgress(n) => {
+                self.stage_no = Some(n);
+                self.open_run(ts).stage_no = Some(n);
             }
             Event::PlayerDead => {
                 if ts >= self.dead_until {
@@ -660,6 +669,27 @@ mod tests {
         assert_eq!(gs.level_tokens, vec![(true, 35), (true, 55)]);
         feed_at(&mut gs, "08:50:00", "ECLIPTICA - now in lobby");
         assert!(gs.level_tokens.is_empty());
+    }
+
+    #[test]
+    fn stage_counter() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:00", "Advancing Stage Progress to: 1");
+        feed_at(
+            &mut gs,
+            "09:10:01",
+            "ECLIPTICA - now in stage: Stage_Hallow on phase: 0 as class: Spellhammer",
+        );
+        assert_eq!(gs.stage_no, Some(1));
+        assert_eq!(gs.runs.len(), 1);
+        assert_eq!(gs.runs[0].stage_no, Some(1));
+        feed_at(&mut gs, "09:20:00", "Advancing Stage Progress to: 2");
+        assert_eq!(gs.runs[0].stage_no, Some(2));
+        feed_at(&mut gs, "09:30:00", "ECLIPTICA - now in lobby");
+        assert!(gs.stage_no.is_none());
+        assert_eq!(gs.runs[0].stage_no, Some(2));
+        gs.log_rotated();
+        assert!(gs.stage_no.is_none());
     }
 
     #[test]
