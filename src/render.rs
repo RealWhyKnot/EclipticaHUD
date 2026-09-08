@@ -10,6 +10,7 @@ pub const LOGICAL_H: i32 = 560;
 pub const CLOSE_HIT: (i32, i32, i32, i32) = (324, 0, 36, 36);
 pub const CLOSE_BTN: (i32, i32, i32, i32) = (328, 8, 24, 24);
 pub const UPDATE_HIT: (i32, i32) = (210, LOGICAL_H - 32);
+pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 100, 308, 40);
 
 const BG: u32 = rgb(0x14, 0x14, 0x1c);
 const CARD: u32 = rgb(0x1d, 0x1d, 0x29);
@@ -52,6 +53,7 @@ pub struct Frame {
     pub progress_shown: f32,
     pub dps_frac_shown: f32,
     pub update: Badge,
+    pub sound_on: bool,
 }
 
 pub struct Renderer {
@@ -72,6 +74,7 @@ const F_BIG: usize = 4;
 const F_GLYPH: usize = 5;
 
 const GLYPH_CLOSE: &str = "\u{E8BB}";
+const GLYPH_MUTE: &str = "\u{E74F}";
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
@@ -276,6 +279,9 @@ impl Renderer {
                 self.text(M + 12, 60, W - 24, F_LABEL, DIM, DT_LEFT, "BOSS");
                 self.text(M + 60, 60, W - 84, F_BOSS, TEXT, DT_LEFT, boss);
                 self.text(M + 12, 86, W - 24, F_LABEL, DIM, DT_LEFT, "TARGET");
+                if !f.sound_on {
+                    self.text(M + 12, 86, W - 24, F_GLYPH, DIM, DT_RIGHT, GLYPH_MUTE);
+                }
                 let color = mix(ACCENT, TEXT, ease_out_cubic(f.flash_t));
                 match target {
                     Some(t) => {
@@ -387,6 +393,11 @@ impl Renderer {
         x >= self.px(UPDATE_HIT.0) && y >= self.px(UPDATE_HIT.1)
     }
 
+    pub fn target_hit(&self, x: i32, y: i32) -> bool {
+        let (tx, ty, tw, th) = TARGET_HIT;
+        x >= self.px(tx) && x < self.px(tx + tw) && y >= self.px(ty) && y < self.px(ty + th)
+    }
+
     pub fn rgba(&self, out: &mut Vec<u8>) {
         let n = (self.width * self.height * 4) as usize;
         out.resize(n, 0);
@@ -457,6 +468,20 @@ mod tests {
     }
 
     #[test]
+    fn target_hit_geometry() {
+        let (tx, ty, tw, th) = TARGET_HIT;
+        assert!(tx >= 14 && tx + tw <= LOGICAL_W - 14);
+        assert!(ty >= 54 && ty + th <= 150);
+        assert!(ty > CLOSE_HIT.1 + CLOSE_HIT.3);
+        let r = Renderer::new(96);
+        assert!(r.target_hit(tx, ty));
+        assert!(r.target_hit(tx + tw - 1, ty + th - 1));
+        assert!(!r.target_hit(tx - 1, ty));
+        assert!(!r.target_hit(tx, ty + th));
+        assert!(!r.target_hit(tx + tw, ty));
+    }
+
+    #[test]
     fn mix_endpoints() {
         assert_eq!(mix(ACCENT, TEXT, 0.0), ACCENT);
         assert_eq!(mix(ACCENT, TEXT, 1.0), TEXT);
@@ -483,6 +508,7 @@ mod tests {
             progress_shown: 0.5,
             dps_frac_shown: 0.5,
             update: Badge::None,
+            sound_on: true,
         };
         r.draw(&mut gs, &f);
         let pix = |x: i32, y: i32| -> u32 {

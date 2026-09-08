@@ -24,6 +24,7 @@ pub struct App {
     pub hover_close: bool,
     pub pressed_close: bool,
     pub tracking: bool,
+    pub sound_on: bool,
     flash_at: Option<Instant>,
     last_target_since: u64,
     progress_shown: f32,
@@ -32,6 +33,19 @@ pub struct App {
     dps_frac_shown: f32,
     timer_ms: u32,
     badge: Badge,
+}
+
+fn blip() {
+    #[cfg(not(test))]
+    unsafe {
+        static BLIP: &[u8] = include_bytes!("../assets/target.wav");
+        use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+        PlaySoundW(
+            BLIP.as_ptr() as _,
+            std::ptr::null_mut(),
+            SND_ASYNC | SND_MEMORY | SND_NODEFAULT,
+        );
+    }
 }
 
 fn approach(cur: &mut f32, target: f32) -> bool {
@@ -58,6 +72,7 @@ impl App {
             hover_close: false,
             pressed_close: false,
             tracking: false,
+            sound_on: true,
             flash_at: None,
             last_target_since: 0,
             progress_shown: 0.0,
@@ -95,6 +110,7 @@ impl App {
             progress_shown: self.progress_shown,
             dps_frac_shown: self.dps_frac_shown,
             update: self.badge.clone(),
+            sound_on: self.sound_on,
         };
         self.renderer.draw(&mut self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
@@ -123,6 +139,9 @@ impl App {
             self.last_target_since = self.gs.target_since;
             if self.gs.target.is_some() {
                 self.flash_at = Some(Instant::now());
+                if self.sound_on {
+                    blip();
+                }
             }
         }
         if self.gs.boss != self.dps_boss {
@@ -182,6 +201,7 @@ mod tests {
     #[test]
     fn flash_on_target_change() {
         let mut app = headless();
+        assert!(app.sound_on);
         let t = app.tick();
         assert!(!t.redraw);
         assert_eq!(t.timer_ms, None);

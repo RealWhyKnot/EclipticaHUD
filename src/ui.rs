@@ -19,13 +19,32 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn pos_file() -> Option<PathBuf> {
+fn data_file(name: &str) -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(base).join("EclipticaHUD").join("pos.txt"))
+    Some(PathBuf::from(base).join("EclipticaHUD").join(name))
+}
+
+fn sound_on_from(text: &str) -> bool {
+    text.trim() != "0"
+}
+
+fn load_sound() -> bool {
+    data_file("sound.txt")
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_none_or(|t| sound_on_from(&t))
+}
+
+fn save_sound(on: bool) {
+    if let Some(path) = data_file("sound.txt") {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, if on { "1" } else { "0" });
+    }
 }
 
 fn load_pos() -> Option<(i32, i32)> {
-    let text = std::fs::read_to_string(pos_file()?).ok()?;
+    let text = std::fs::read_to_string(data_file("pos.txt")?).ok()?;
     let mut it = text.split_whitespace().map(|v| v.parse().ok());
     Some((it.next()??, it.next()??))
 }
@@ -40,7 +59,7 @@ fn save_pos(hwnd: HWND) {
     if unsafe { GetWindowRect(hwnd, &mut r) } == 0 {
         return;
     }
-    if let Some(path) = pos_file() {
+    if let Some(path) = data_file("pos.txt") {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -125,6 +144,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if let Some(app) = app_mut(hwnd) {
                 if app.renderer.close_hit(pt.x, pt.y)
                     || (app.update_ready() && app.renderer.update_hit(pt.x, pt.y))
+                    || (app.gs.boss.is_some()
+                        && app.gs.target.is_some()
+                        && app.renderer.target_hit(pt.x, pt.y))
                 {
                     return HTCLIENT as LRESULT;
                 }
@@ -184,6 +206,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     if tick.redraw {
                         InvalidateRect(hwnd, std::ptr::null(), 0);
                     }
+                } else if app.gs.boss.is_some()
+                    && app.gs.target.is_some()
+                    && app.renderer.target_hit(x, y)
+                {
+                    app.sound_on = !app.sound_on;
+                    save_sound(app.sound_on);
+                    repaint(app, hwnd);
                 }
             }
             0
@@ -249,6 +278,7 @@ pub fn run() {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let dpi = GetDpiForSystem();
         let mut app = App::new(Renderer::new(dpi));
+        app.sound_on = load_sound();
         let (w, h) = (app.renderer.width, app.renderer.height);
 
         let module = GetModuleHandleW(std::ptr::null());
@@ -305,5 +335,19 @@ pub fn run() {
     }
     if update::restart_pending() {
         update::relaunch();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sound_default_and_parse() {
+        assert!(!sound_on_from("0"));
+        assert!(!sound_on_from("0\n"));
+        assert!(sound_on_from("1"));
+        assert!(sound_on_from(""));
+        assert!(sound_on_from("garbage"));
     }
 }
