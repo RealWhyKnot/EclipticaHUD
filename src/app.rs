@@ -1,6 +1,7 @@
 use crate::logwatch::LogWatch;
 use crate::render::{Frame, Renderer};
 use crate::state::GameState;
+use crate::update::{self, Badge};
 use crate::vr::VrOverlay;
 use std::time::Instant;
 
@@ -9,6 +10,7 @@ const FLASH_MS: f32 = 3000.0;
 pub struct Tick {
     pub redraw: bool,
     pub timer_ms: Option<u32>,
+    pub quit: bool,
 }
 
 pub struct App {
@@ -29,6 +31,7 @@ pub struct App {
     dps_boss: Option<String>,
     dps_frac_shown: f32,
     timer_ms: u32,
+    badge: Badge,
 }
 
 fn approach(cur: &mut f32, target: f32) -> bool {
@@ -62,7 +65,12 @@ impl App {
             dps_boss: None,
             dps_frac_shown: 0.0,
             timer_ms: 1000,
+            badge: Badge::None,
         }
+    }
+
+    pub fn update_ready(&self) -> bool {
+        matches!(self.badge, Badge::Ready(_))
     }
 
     fn now(&self) -> u64 {
@@ -86,6 +94,7 @@ impl App {
             log_ok: self.watch.path.is_some(),
             progress_shown: self.progress_shown,
             dps_frac_shown: self.dps_frac_shown,
+            update: self.badge.clone(),
         };
         self.renderer.draw(&mut self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
@@ -127,10 +136,15 @@ impl App {
         } else {
             0.0
         };
+        let badge = update::badge();
+        let badge_changed = badge != self.badge;
+        if badge_changed {
+            self.badge = badge;
+        }
         let mut anim = approach(&mut self.progress_shown, self.gs.progress);
         anim |= approach(&mut self.dps_frac_shown, dps_target);
         anim |= self.flash_at.is_some() && self.flash_t() < 1.0;
-        let redraw = self.gs.changed || anim || self.gs.boss.is_some();
+        let redraw = self.gs.changed || anim || self.gs.boss.is_some() || badge_changed;
         self.gs.changed = false;
         if redraw {
             self.render();
@@ -145,7 +159,11 @@ impl App {
         let want: u32 = if anim { 33 } else { 1000 };
         let timer_ms = (want != self.timer_ms).then_some(want);
         self.timer_ms = want;
-        Tick { redraw, timer_ms }
+        Tick {
+            redraw,
+            timer_ms,
+            quit: update::restart_pending(),
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::app::App;
 use crate::render::Renderer;
+use crate::update;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Dwm::*;
@@ -91,6 +92,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 if let Some(ms) = tick.timer_ms {
                     SetTimer(hwnd, TIMER_ID, ms, None);
                 }
+                if tick.quit {
+                    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                }
             }
             0
         }
@@ -119,7 +123,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let mut pt = POINT { x, y };
             ScreenToClient(hwnd, &mut pt);
             if let Some(app) = app_mut(hwnd) {
-                if app.renderer.close_hit(pt.x, pt.y) {
+                if app.renderer.close_hit(pt.x, pt.y)
+                    || (app.update_ready() && app.renderer.update_hit(pt.x, pt.y))
+                {
                     return HTCLIENT as LRESULT;
                 }
             }
@@ -172,6 +178,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     app.pressed_close = true;
                     SetCapture(hwnd);
                     repaint(app, hwnd);
+                } else if app.update_ready() && app.renderer.update_hit(x, y) {
+                    update::spawn_install();
+                    let tick = app.tick();
+                    if tick.redraw {
+                        InvalidateRect(hwnd, std::ptr::null(), 0);
+                    }
                 }
             }
             0
@@ -231,6 +243,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 }
 
 pub fn run() {
+    update::cleanup_old();
+    update::spawn_check();
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let dpi = GetDpiForSystem();
@@ -288,5 +302,8 @@ pub fn run() {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+    if update::restart_pending() {
+        update::relaunch();
     }
 }

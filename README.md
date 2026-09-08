@@ -20,6 +20,8 @@ Grab a release or build it, then run `ecliptica-hud.exe`. The panel appears bott
 
 If SteamVR is running (or starts later), a wrist overlay appears on the left controller automatically.
 
+The footer shows the running version. When a newer release is out it shows the new tag instead; click it and the app downloads the release, verifies its SHA256, swaps itself, and restarts.
+
 `ecliptica-hud.exe --scan [logfile]` parses a log and prints every recognized event plus totals to stdout, which is handy for checking what the parser sees. Without an argument it scans the newest VRChat log.
 
 ## Code layout
@@ -28,6 +30,7 @@ If SteamVR is running (or starts later), a wrist overlay appears on the left con
 - `state.rs` folds events into the game state the HUD shows
 - `logwatch.rs` tails the newest VRChat log across rotations
 - `app.rs` ties log, state, and rendering together and paces redraws
+- `update.rs` checks GitHub releases and installs updates in place
 - `render.rs` draws the panel into an offscreen bitmap
 - `vr.rs` mirrors that bitmap to a SteamVR wrist overlay
 - `ui.rs` is the Win32 window and input plumbing

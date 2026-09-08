@@ -1,4 +1,5 @@
 use crate::state::{fmt_clock, GameState, Mode};
+use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -8,6 +9,7 @@ pub const LOGICAL_H: i32 = 560;
 
 pub const CLOSE_HIT: (i32, i32, i32, i32) = (324, 0, 36, 36);
 pub const CLOSE_BTN: (i32, i32, i32, i32) = (328, 8, 24, 24);
+pub const UPDATE_HIT: (i32, i32) = (210, LOGICAL_H - 32);
 
 const BG: u32 = rgb(0x14, 0x14, 0x1c);
 const CARD: u32 = rgb(0x1d, 0x1d, 0x29);
@@ -49,6 +51,7 @@ pub struct Frame {
     pub log_ok: bool,
     pub progress_shown: f32,
     pub dps_frac_shown: f32,
+    pub update: Badge,
 }
 
 pub struct Renderer {
@@ -366,11 +369,22 @@ impl Renderer {
         let log_color = if f.log_ok { GOOD } else { AMBER };
         self.dot(M + 96, fy + 4, 8, log_color);
         self.text(M + 110, fy, 80, F_TINY, DIM, DT_LEFT, "LOG");
+        let (utext, ucolor) = match &f.update {
+            Badge::None => (VERSION.to_string(), DIM),
+            Badge::Ready(tag) => (format!("update {tag}"), ACCENT),
+            Badge::Installing => ("updating".to_string(), AMBER),
+            Badge::Failed => ("update failed".to_string(), DANGER),
+        };
+        self.text(M, fy, W, F_TINY, ucolor, DT_RIGHT, &utext);
         unsafe { GdiFlush() };
     }
 
     pub fn close_hit(&self, x: i32, y: i32) -> bool {
         x >= self.px(CLOSE_HIT.0) && y < self.px(CLOSE_HIT.1 + CLOSE_HIT.3)
+    }
+
+    pub fn update_hit(&self, x: i32, y: i32) -> bool {
+        x >= self.px(UPDATE_HIT.0) && y >= self.px(UPDATE_HIT.1)
     }
 
     pub fn rgba(&self, out: &mut Vec<u8>) {
@@ -468,6 +482,7 @@ mod tests {
             log_ok: true,
             progress_shown: 0.5,
             dps_frac_shown: 0.5,
+            update: Badge::None,
         };
         r.draw(&mut gs, &f);
         let pix = |x: i32, y: i32| -> u32 {

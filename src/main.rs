@@ -6,6 +6,7 @@ mod parse;
 mod render;
 mod state;
 mod ui;
+mod update;
 mod vr;
 
 use state::{fmt_clock, GameState};
