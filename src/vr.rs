@@ -1,4 +1,6 @@
 use std::time::Instant;
+use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
 
 const OVERLAY_KEY: &str = "whyknot.eclipticahud";
 const OVERLAY_NAME: &str = "Ecliptica HUD";
@@ -23,6 +25,27 @@ pub struct VrOverlay {
     last_try: Option<Instant>,
 }
 
+fn steamvr_running() -> bool {
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = false;
+        let mut more = Process32FirstW(snap, &mut entry) != 0;
+        while more && !found {
+            let name: Vec<u16> = entry.szExeFile.iter().copied().take_while(|&c| c != 0).collect();
+            let name = String::from_utf16_lossy(&name);
+            found = name.eq_ignore_ascii_case("vrserver.exe");
+            more = Process32NextW(snap, &mut entry) != 0;
+        }
+        windows_sys::Win32::Foundation::CloseHandle(snap);
+        found
+    }
+}
+
 impl VrOverlay {
     pub fn new() -> Self {
         VrOverlay { inner: None, last_try: None }
@@ -30,6 +53,9 @@ impl VrOverlay {
 
     fn try_init(&mut self) {
         self.last_try = Some(Instant::now());
+        if !steamvr_running() {
+            return;
+        }
         let context = match unsafe { openvr::init(openvr::ApplicationType::Overlay) } {
             Ok(c) => c,
             Err(_) => return,
