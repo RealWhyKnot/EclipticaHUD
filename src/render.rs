@@ -1,4 +1,4 @@
-use crate::parse::{fmt_clock, GameState, Mode};
+use crate::state::{fmt_clock, GameState, Mode};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::*;

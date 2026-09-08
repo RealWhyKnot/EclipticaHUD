@@ -22,6 +22,17 @@ If SteamVR is running (or starts later), a wrist overlay appears on the left con
 
 `ecliptica-hud.exe --scan [logfile]` parses a log and prints every recognized event plus totals to stdout, which is handy for checking what the parser sees. Without an argument it scans the newest VRChat log.
 
+## Code layout
+
+- `parse.rs` turns raw log lines into events
+- `state.rs` folds events into the game state the HUD shows
+- `logwatch.rs` tails the newest VRChat log across rotations
+- `app.rs` ties log, state, and rendering together and paces redraws
+- `render.rs` draws the panel into an offscreen bitmap
+- `vr.rs` mirrors that bitmap to a SteamVR wrist overlay
+- `ui.rs` is the Win32 window and input plumbing
+- `main.rs` picks between the window and `--scan`
+
 ## Building
 
 Requires the MSVC toolchain, CMake, and LLVM (libclang) for the OpenVR bindings.

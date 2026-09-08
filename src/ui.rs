@@ -1,9 +1,6 @@
-use crate::logwatch::LogWatch;
-use crate::parse::GameState;
-use crate::render::{Frame, Renderer};
-use crate::vr::VrOverlay;
+use crate::app::App;
+use crate::render::Renderer;
 use std::path::PathBuf;
-use std::time::Instant;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -15,116 +12,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 const TIMER_ID: usize = 1;
-const FLASH_MS: f32 = 3000.0;
 const WM_MOUSELEAVE: u32 = 0x02a3;
-
-struct App {
-    gs: GameState,
-    watch: LogWatch,
-    renderer: Renderer,
-    vr: VrOverlay,
-    rgba: Vec<u8>,
-    last_ts: u64,
-    last_ts_at: Instant,
-    hover_close: bool,
-    pressed_close: bool,
-    tracking: bool,
-    flash_at: Option<Instant>,
-    last_target_since: u64,
-    progress_shown: f32,
-    dps_peak: u64,
-    dps_boss: Option<String>,
-    dps_frac_shown: f32,
-    timer_ms: u32,
-}
-
-fn approach(cur: &mut f32, target: f32) -> bool {
-    let d = target - *cur;
-    if d.abs() < 0.002 {
-        *cur = target;
-        false
-    } else {
-        *cur += d * 0.18;
-        true
-    }
-}
-
-impl App {
-    fn now(&self) -> u64 {
-        self.last_ts + self.last_ts_at.elapsed().as_secs()
-    }
-
-    fn flash_t(&self) -> f32 {
-        match self.flash_at {
-            Some(t) => (t.elapsed().as_millis() as f32 / FLASH_MS).min(1.0),
-            None => 1.0,
-        }
-    }
-
-    fn repaint(&mut self, hwnd: HWND) {
-        let frame = Frame {
-            now: self.now(),
-            flash_t: self.flash_t(),
-            hover_close: self.hover_close,
-            pressed_close: self.pressed_close,
-            vr: self.vr.status(),
-            log_ok: self.watch.path.is_some(),
-            progress_shown: self.progress_shown,
-            dps_frac_shown: self.dps_frac_shown,
-        };
-        self.renderer.draw(&mut self.gs, &frame);
-        unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
-        self.renderer.rgba(&mut self.rgba);
-        self.vr.submit(&self.rgba, self.renderer.width as u32, self.renderer.height as u32, true);
-    }
-
-    fn tick(&mut self, hwnd: HWND) {
-        let gs = &mut self.gs;
-        let mut newest = 0u64;
-        self.watch.poll(|line| {
-            if let Some(ts) = gs.feed(line) {
-                newest = newest.max(ts);
-            }
-        });
-        if newest > self.last_ts {
-            self.last_ts = newest;
-            self.last_ts_at = Instant::now();
-        }
-        let now = self.now();
-        if self.gs.target_since != self.last_target_since {
-            self.last_target_since = self.gs.target_since;
-            if self.gs.target.is_some() {
-                self.flash_at = Some(Instant::now());
-            }
-        }
-        if self.gs.boss != self.dps_boss {
-            self.dps_boss = self.gs.boss.clone();
-            self.dps_peak = 0;
-        }
-        let rolling = self.gs.rolling_dps(now);
-        self.dps_peak = self.dps_peak.max(rolling);
-        let dps_target = if self.gs.boss.is_some() && self.dps_peak > 0 {
-            rolling as f32 / self.dps_peak as f32
-        } else {
-            0.0
-        };
-        let mut anim = approach(&mut self.progress_shown, self.gs.progress);
-        anim |= approach(&mut self.dps_frac_shown, dps_target);
-        anim |= self.flash_at.is_some() && self.flash_t() < 1.0;
-        let redraw = self.gs.changed || anim || self.gs.boss.is_some();
-        self.gs.changed = false;
-        if redraw {
-            self.repaint(hwnd);
-        } else {
-            self.vr.submit(&self.rgba, self.renderer.width as u32, self.renderer.height as u32, false);
-        }
-        let want: u32 = if anim { 33 } else { 1000 };
-        if want != self.timer_ms {
-            self.timer_ms = want;
-            unsafe { SetTimer(hwnd, TIMER_ID, want, None) };
-        }
-    }
-}
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -157,7 +45,7 @@ fn save_pos(hwnd: HWND) {
 fn default_pos(w: i32, h: i32) -> (i32, i32) {
     let mut work = RECT { left: 0, top: 0, right: 1920, bottom: 1080 };
     unsafe {
-        windows_sys::Win32::UI::WindowsAndMessaging::SystemParametersInfoW(
+        SystemParametersInfoW(
             SPI_GETWORKAREA,
             0,
             &mut work as *mut RECT as *mut core::ffi::c_void,
@@ -172,6 +60,11 @@ unsafe fn app_mut(hwnd: HWND) -> Option<&'static mut App> {
     p.as_mut()
 }
 
+unsafe fn repaint(app: &mut App, hwnd: HWND) {
+    app.render();
+    InvalidateRect(hwnd, std::ptr::null(), 0);
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_NCCREATE => {
@@ -181,7 +74,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_TIMER if wp == TIMER_ID => {
             if let Some(app) = app_mut(hwnd) {
-                app.tick(hwnd);
+                let tick = app.tick();
+                if tick.redraw {
+                    InvalidateRect(hwnd, std::ptr::null(), 0);
+                }
+                if let Some(ms) = tick.timer_ms {
+                    SetTimer(hwnd, TIMER_ID, ms, None);
+                }
             }
             0
         }
@@ -213,7 +112,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let over = app.renderer.close_hit(x, y);
                 if over != app.hover_close {
                     app.hover_close = over;
-                    app.repaint(hwnd);
+                    repaint(app, hwnd);
                 }
                 if over && !app.tracking {
                     let mut tme = TRACKMOUSEEVENT {
@@ -236,7 +135,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 if app.hover_close {
                     app.hover_close = false;
-                    app.repaint(hwnd);
+                    repaint(app, hwnd);
                 }
             }
             if msg == WM_NCMOUSEMOVE {
@@ -252,7 +151,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 if app.renderer.close_hit(x, y) {
                     app.pressed_close = true;
                     SetCapture(hwnd);
-                    app.repaint(hwnd);
+                    repaint(app, hwnd);
                 }
             }
             0
@@ -265,7 +164,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 if app.pressed_close {
                     app.pressed_close = false;
                     let inside = app.renderer.close_hit(x, y);
-                    app.repaint(hwnd);
+                    repaint(app, hwnd);
                     if inside {
                         PostMessageW(hwnd, WM_CLOSE, 0, 0);
                     }
@@ -298,6 +197,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     app.renderer.height,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
+                repaint(app, hwnd);
             }
             0
         }
@@ -314,27 +214,8 @@ pub fn run() {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let dpi = GetDpiForSystem();
-        let renderer = Renderer::new(dpi);
-        let (w, h) = (renderer.width, renderer.height);
-        let mut app = App {
-            gs: GameState::default(),
-            watch: LogWatch::new(),
-            renderer,
-            vr: VrOverlay::new(),
-            rgba: Vec::new(),
-            last_ts: 0,
-            last_ts_at: Instant::now(),
-            hover_close: false,
-            pressed_close: false,
-            tracking: false,
-            flash_at: None,
-            last_target_since: 0,
-            progress_shown: 0.0,
-            dps_peak: 0,
-            dps_boss: None,
-            dps_frac_shown: 0.0,
-            timer_ms: 1000,
-        };
+        let mut app = App::new(Renderer::new(dpi));
+        let (w, h) = (app.renderer.width, app.renderer.height);
 
         let module = GetModuleHandleW(std::ptr::null());
         let class_name = wide("EclipticaHUD");
@@ -367,8 +248,8 @@ pub fn run() {
         let round: i32 = DWMWCP_ROUND as i32;
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE as u32, &round as *const i32 as *const core::ffi::c_void, 4);
 
-        app.gs.changed = true;
-        app.tick(hwnd);
+        app.tick();
+        app.render();
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         SetTimer(hwnd, TIMER_ID, 1000, None);
 

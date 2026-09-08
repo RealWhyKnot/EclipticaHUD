@@ -1,12 +1,14 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+mod app;
 mod logwatch;
 mod parse;
 mod render;
+mod state;
 mod ui;
 mod vr;
 
-use parse::{fmt_clock, GameState};
+use state::{fmt_clock, GameState};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -42,19 +44,7 @@ fn scan(path: Option<String>) {
         }
         let Some(line) = parse::split_line(raw.trim_end_matches(['\r', '\n'])) else { continue };
         if let Some(ev) = parse::parse_msg(line.msg) {
-            let label = match &ev {
-                parse::Event::BossFight { .. } => "boss_fight",
-                parse::Event::BossDead { .. } => "boss_dead",
-                parse::Event::StrikeTotal(_) => "strike_total",
-                parse::Event::NonStrikeTotal(_) => "non_strike_total",
-                parse::Event::DealtStrike(_) => "dealt_strike",
-                parse::Event::DamageTaken { .. } => "damage_taken",
-                parse::Event::Ownership { .. } => "ownership",
-                parse::Event::Stage { .. } => "stage",
-                parse::Event::Intermission => "intermission",
-                parse::Event::Lobby => "lobby",
-            };
-            *counts.entry(label).or_insert(0u64) += 1;
+            *counts.entry(ev.label()).or_insert(0u64) += 1;
             let before = gs.targets_total;
             gs.apply(line.ts, ev);
             if gs.targets_total > before {

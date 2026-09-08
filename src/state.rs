@@ -1,0 +1,253 @@
+use crate::parse::{parse_msg, split_line, Event};
+use std::collections::{HashSet, VecDeque};
+
+#[derive(Debug, Clone)]
+pub struct TargetEntry {
+    pub ts: u64,
+    pub player: String,
+    pub boss: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TakenEntry {
+    pub ts: u64,
+    pub amount: u64,
+    pub source: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct KillSummary {
+    pub ts: u64,
+    pub boss: String,
+    pub strike: u64,
+    pub non_strike: u64,
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
+pub enum Mode {
+    #[default]
+    Idle,
+    Lobby,
+    Intermission,
+    Stage,
+}
+
+const DPS_WINDOW: u64 = 10;
+const KILL_DEDUPE_SECS: u64 = 30;
+
+#[derive(Default)]
+pub struct GameState {
+    bosses: HashSet<String>,
+    pub mode: Mode,
+    pub stage: String,
+    pub progress: f32,
+    pub class: String,
+    pub boss: Option<String>,
+    pub fight_start: u64,
+    pub fight_dmg: u64,
+    pub target: Option<String>,
+    pub target_since: u64,
+    pub history: VecDeque<TargetEntry>,
+    pub targets_total: u64,
+    pub taken: VecDeque<TakenEntry>,
+    pub last_kill: Option<KillSummary>,
+    hits: VecDeque<(u64, u64)>,
+    pending_kill: Option<KillSummary>,
+    dead_seen: Option<(String, u64)>,
+    pub changed: bool,
+}
+
+impl GameState {
+    pub fn apply(&mut self, ts: u64, ev: Event) {
+        self.changed = true;
+        match ev {
+            Event::BossFight { name } => {
+                self.bosses.insert(name.clone());
+                if self.boss.as_deref() != Some(&name) {
+                    self.boss = Some(name);
+                    self.fight_start = ts;
+                    self.fight_dmg = 0;
+                }
+            }
+            Event::BossDead { name } => {
+                self.pending_kill = Some(KillSummary { ts, boss: name.clone(), strike: 0, non_strike: 0 });
+                if self.boss.as_deref() == Some(&name) {
+                    self.boss = None;
+                    self.target = None;
+                }
+            }
+            Event::StrikeTotal(n) => {
+                if let Some(k) = self.pending_kill.as_mut() {
+                    k.strike = n;
+                }
+            }
+            Event::NonStrikeTotal(n) => {
+                if let Some(mut k) = self.pending_kill.take() {
+                    k.non_strike = n;
+                    let chained = self.dead_seen.as_ref().is_some_and(|(boss, ts)| {
+                        *boss == k.boss && k.ts.saturating_sub(*ts) <= KILL_DEDUPE_SECS
+                    });
+                    self.dead_seen = Some((k.boss.clone(), k.ts));
+                    let dupe = chained
+                        && self.last_kill.as_ref().is_some_and(|p| {
+                            p.boss == k.boss && p.strike + p.non_strike >= k.strike + k.non_strike
+                        });
+                    if !dupe {
+                        self.last_kill = Some(k);
+                    }
+                }
+            }
+            Event::DealtStrike(n) => {
+                self.hits.push_back((ts, n));
+                if self.boss.is_some() {
+                    self.fight_dmg += n;
+                }
+            }
+            Event::DamageTaken { amount, source } => {
+                self.taken.push_back(TakenEntry { ts, amount, source });
+                if self.taken.len() > 20 {
+                    self.taken.pop_front();
+                }
+            }
+            Event::Ownership { object, player } => {
+                if self.bosses.contains(&object) {
+                    self.target = Some(player.clone());
+                    self.target_since = ts;
+                    self.targets_total += 1;
+                    self.history.push_back(TargetEntry { ts, player, boss: object });
+                    if self.history.len() > 100 {
+                        self.history.pop_front();
+                    }
+                }
+            }
+            Event::Stage { name, progress, class } => {
+                self.mode = Mode::Stage;
+                self.stage = name;
+                self.progress = progress;
+                self.class = class;
+            }
+            Event::Intermission => {
+                self.mode = Mode::Intermission;
+                self.boss = None;
+                self.target = None;
+            }
+            Event::Lobby => {
+                self.mode = Mode::Lobby;
+                self.boss = None;
+                self.target = None;
+                self.progress = 0.0;
+            }
+        }
+    }
+
+    pub fn feed(&mut self, raw: &str) -> Option<u64> {
+        let line = split_line(raw)?;
+        if let Some(ev) = parse_msg(line.msg) {
+            self.apply(line.ts, ev);
+        }
+        Some(line.ts)
+    }
+
+    pub fn rolling_dps(&mut self, now: u64) -> u64 {
+        while self.hits.front().is_some_and(|h| h.0 + DPS_WINDOW < now) {
+            self.hits.pop_front();
+        }
+        self.hits.iter().map(|h| h.1).sum::<u64>() / DPS_WINDOW
+    }
+
+    pub fn fight_dps(&self, now: u64) -> u64 {
+        if self.boss.is_none() {
+            return 0;
+        }
+        self.fight_dmg / now.saturating_sub(self.fight_start).max(1)
+    }
+}
+
+pub fn fmt_clock(ts: u64) -> String {
+    format!("{:02}:{:02}:{:02}", ts / 3600 % 24, ts / 60 % 60, ts % 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const P: &str = "2026.09.07 09:12:28 Debug      -  ";
+
+    #[test]
+    fn boss_gating() {
+        let mut gs = GameState::default();
+        gs.feed(&format!("{P}ownership of Neko1 transferred to Alice"));
+        assert!(gs.target.is_none());
+        gs.feed(&format!("{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"));
+        gs.feed(&format!("{P}ownership of Neko1 transferred to Alice"));
+        assert!(gs.target.is_none());
+        gs.feed(&format!("{P}ownership of Kakarot transferred to Alice"));
+        assert_eq!(gs.target.as_deref(), Some("Alice"));
+        assert_eq!(gs.history.len(), 1);
+    }
+
+    #[test]
+    fn kill_dedupe() {
+        let mut gs = GameState::default();
+        let kill = |gs: &mut GameState, t: &str, s: u64| {
+            gs.feed(&format!("2026.09.07 {t} Debug      -  Boss Kakarot dead, personal damage dealt: "));
+            gs.feed(&format!("2026.09.07 {t} Debug      -  STRIKE DMG: {s}"));
+            gs.feed(&format!("2026.09.07 {t} Debug      -  NON-STRIKE DMG: 0"));
+        };
+        kill(&mut gs, "09:24:12", 4793);
+        kill(&mut gs, "09:24:18", 0);
+        let k = gs.last_kill.as_ref().unwrap();
+        assert_eq!(k.strike, 4793);
+        kill(&mut gs, "09:26:00", 900);
+        assert_eq!(gs.last_kill.as_ref().unwrap().strike, 900);
+    }
+
+    #[test]
+    fn kill_echo_chain_outlives_window() {
+        let mut gs = GameState::default();
+        let kill = |gs: &mut GameState, secs: u64, s: u64| {
+            let t = fmt_clock(3600 + secs);
+            gs.feed(&format!("2026.09.08 {t} Debug      -  Boss Gravetender dead, personal damage dealt: "));
+            gs.feed(&format!("2026.09.08 {t} Debug      -  STRIKE DMG: {s}"));
+            gs.feed(&format!("2026.09.08 {t} Debug      -  NON-STRIKE DMG: 0"));
+        };
+        kill(&mut gs, 0, 9173);
+        let first_ts = gs.last_kill.as_ref().unwrap().ts;
+        let mut t = 13;
+        while t <= 110 {
+            kill(&mut gs, t, 0);
+            t += 3;
+        }
+        let k = gs.last_kill.as_ref().unwrap();
+        assert_eq!(k.strike, 9173);
+        assert_eq!(k.ts, first_ts);
+        kill(&mut gs, 380, 0);
+        assert_eq!(gs.last_kill.as_ref().unwrap().strike, 0);
+    }
+
+    #[test]
+    fn dps_windows() {
+        let mut gs = GameState::default();
+        let t0 = split_line(&format!("{P}Dealing 100 STRIKE damage")).unwrap().ts;
+        gs.feed(&format!("{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"));
+        gs.feed(&format!("{P}Dealing 100 STRIKE damage"));
+        gs.feed(&format!("{P}Dealing 50 STRIKE damage"));
+        assert_eq!(gs.fight_dmg, 150);
+        assert_eq!(gs.rolling_dps(t0), 15);
+        assert_eq!(gs.rolling_dps(t0 + 60), 0);
+        assert_eq!(gs.fight_dps(t0 + 10), 15);
+        gs.feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
+        assert!(gs.boss.is_none());
+        assert_eq!(gs.fight_dps(t0 + 10), 0);
+    }
+
+    #[test]
+    fn boss_fight_resets() {
+        let mut gs = GameState::default();
+        gs.feed(&format!("{P}ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0.6"));
+        gs.feed(&format!("{P}Dealing 100 STRIKE damage"));
+        gs.feed(&format!("{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0.6"));
+        assert_eq!(gs.fight_dmg, 0);
+        assert_eq!(gs.boss.as_deref(), Some("YukiPhase2"));
+    }
+}
