@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+msg_file="$1"
+[ -f "$msg_file" ] || exit 0
+
+subject="$(grep -m1 -vE '^(#|$)' "$msg_file" || true)"
+[ -n "$subject" ] || exit 0
+
+case "$subject" in
+  Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+
+if ! printf '%s\n' "$subject" | grep -qE '^(feat|fix|chore|ci|docs|refactor|test|perf|diag|style)(\([a-z0-9-]+\))?!?: .+'; then
+  echo "" >&2
+  echo "commit-msg: subject is not a conventional commit." >&2
+  echo "" >&2
+  echo "  subject: $subject" >&2
+  echo "" >&2
+  echo "Use <type>(<scope>): <summary> with type feat, fix, chore, ci, docs, refactor, test, perf, diag or style." >&2
+  echo "Release notes are built from these subjects." >&2
+  echo "" >&2
+  exit 1
+fi
+
+exit 0

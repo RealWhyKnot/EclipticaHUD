@@ -1,0 +1,139 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build (vYYYY.M.D.N or vYYYY.M.D.N-beta)
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish ${{ inputs.tag || github.ref_name }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = $env:RELEASE_TAG
+          $sha = (git rev-list -n 1 $tag).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $sha) { throw "Tag '$tag' does not exist in this checkout." }
+          $isBeta = $tag -match '^v\d{4}\.\d+\.\d+\.\d+-beta$'
+          if (-not $isBeta -and $tag -notmatch '^v\d{4}\.\d+\.\d+\.\d+$') {
+            throw "Tag '$tag' must be vYYYY.M.D.N or vYYYY.M.D.N-beta."
+          }
+          $version = $tag.Substring(1)
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "version=$version"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "prerelease=$($isBeta.ToString().ToLowerInvariant())"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha=$sha"
+          Write-Host "tag=$tag version=$version prerelease=$isBeta"
+
+      - name: Install LLVM for bindgen
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files\LLVM\bin\libclang.dll')) {
+            choco install llvm -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install llvm failed ($LASTEXITCODE)" }
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value 'LIBCLANG_PATH=C:\Program Files\LLVM\bin'
+
+      - name: Build and test
+        shell: pwsh
+        env:
+          EHUD_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          cargo test
+          if ($LASTEXITCODE -ne 0) { throw "tests failed ($LASTEXITCODE)" }
+          cargo build --release
+          if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $name = "ecliptica-hud-${{ steps.tag.outputs.version }}.exe"
+          $exe = "target/release/$name"
+          Copy-Item target/release/ecliptica-hud.exe $exe
+          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText("$exe.sha256", "$hash  $name`n", (New-Object System.Text.UTF8Encoding($false)))
+          $sizeMiB = [math]::Round((Get-Item -LiteralPath $exe).Length / 1MB, 2)
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "exe=$exe"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "name=$name"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "size=$sizeMiB"
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "sha256=$hash"
+
+      - name: Build release notes
+        id: notes
+        uses: RealWhyKnot/workflows/release-notes@v1
+        with:
+          tag: ${{ env.RELEASE_TAG }}
+          title: Ecliptica HUD ${{ env.RELEASE_TAG }}
+          extra: |
+            ### Download
+
+            - `${{ steps.package.outputs.name }}` (${{ steps.package.outputs.size }} MiB)
+            - SHA256 `${{ steps.package.outputs.sha256 }}`
+
+      - name: Publish release
+        shell: pwsh
+        run: |
+          $tag = $env:RELEASE_TAG
+          $extra = @()
+          if ('${{ steps.tag.outputs.prerelease }}' -eq 'true') { $extra = @('--prerelease', '--latest=false') }
+          gh release create $tag '${{ steps.package.outputs.exe }}' '${{ steps.package.outputs.exe }}.sha256' --repo '${{ github.repository }}' --target '${{ steps.tag.outputs.sha }}' --title $tag --notes-file '${{ steps.notes.outputs.file }}' @extra
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }
+
+      - name: Verify uploaded asset
+        shell: pwsh
+        run: |
+          $tag = $env:RELEASE_TAG
+          $expected = 'sha256:${{ steps.package.outputs.sha256 }}'
+          $exeName = '${{ steps.package.outputs.name }}'
+          $ok = $false
+          for ($i = 0; $i -lt 6 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 2
+            $json = gh api "repos/${{ github.repository }}/releases/tags/$tag" 2>$null
+            $fetched = $LASTEXITCODE -eq 0
+            $global:LASTEXITCODE = 0
+            if (-not $fetched) { continue }
+            $release = $json | ConvertFrom-Json
+            $asset = $release.assets | Where-Object { $_.name -eq $exeName }
+            if ($asset -and $asset.digest -eq $expected) { $ok = $true }
+          }
+          if (-not $ok) { throw "Uploaded $exeName digest does not match $expected." }
+          Write-Host "Verified $exeName digest $expected"
+
+      - name: Remove partial release on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          gh release delete $env:RELEASE_TAG --repo '${{ github.repository }}' --yes 2>$null
+          $global:LASTEXITCODE = 0

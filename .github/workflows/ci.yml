@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint, build and test
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install LLVM for bindgen
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files\LLVM\bin\libclang.dll')) {
+            choco install llvm -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install llvm failed ($LASTEXITCODE)" }
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value 'LIBCLANG_PATH=C:\Program Files\LLVM\bin'
+
+      - name: Rust components
+        shell: pwsh
+        run: |
+          rustup component add rustfmt clippy
+          if ($LASTEXITCODE -ne 0) { throw "rustup component add failed ($LASTEXITCODE)" }
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: ecliptica-hud-${{ github.sha }}
+          path: target/release/ecliptica-hud.exe
+          retention-days: 14
