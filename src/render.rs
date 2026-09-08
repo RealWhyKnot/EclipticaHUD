@@ -1,4 +1,4 @@
-use crate::state::{fmt_clock, GameState, Mode};
+use crate::state::{base_name, fmt_clock, GameState, Mode};
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Foundation::RECT;
@@ -15,6 +15,7 @@ pub const RUN_PREV_HIT: (i32, i32, i32, i32) = (14, 54, 26, 24);
 pub const RUN_NEXT_HIT: (i32, i32, i32, i32) = (320, 54, 26, 24);
 pub const FIGHT_PREV_HIT: (i32, i32, i32, i32) = (240, 86, 26, 20);
 pub const FIGHT_NEXT_HIT: (i32, i32, i32, i32) = (308, 86, 26, 20);
+pub const PHASE_HIT: (i32, i32, i32, i32) = (220, 110, 114, 20);
 
 const BG: u32 = rgb(0x14, 0x14, 0x1c);
 const CARD: u32 = rgb(0x1d, 0x1d, 0x29);
@@ -59,14 +60,15 @@ pub struct Frame {
     pub update: Badge,
     pub sound_on: bool,
     pub view_run: Option<usize>,
-    pub view_fight: Option<usize>,
+    pub view_group: Option<usize>,
+    pub view_phase: Option<usize>,
     pub run_sel: bool,
-    pub fight_sel: bool,
+    pub group_sel: bool,
 }
 
 impl Frame {
     fn live(&self) -> bool {
-        !self.run_sel && !self.fight_sel
+        !self.run_sel && !self.group_sel && self.view_phase.is_none()
     }
 }
 
@@ -331,18 +333,50 @@ impl Renderer {
 
         self.rround(M, 82, W, 96, 8, CARD);
         let viewed_run = f.view_run.map(|i| &gs.runs[i]);
-        let viewed_fight = viewed_run.and_then(|r| f.view_fight.and_then(|i| r.fights.get(i)));
-        let n_fights = viewed_run.map_or(0, |r| r.fights.len());
+        let groups = viewed_run.map(|r| r.groups()).unwrap_or_default();
+        let viewed_group = viewed_run.and_then(|r| {
+            f.view_group
+                .and_then(|i| groups.get(i))
+                .map(|g| &r.fights[g.clone()])
+        });
+        let hist = viewed_group.map(|fights| match f.view_phase.and_then(|i| fights.get(i)) {
+            Some(ph) => (
+                ph.name.as_str(),
+                ph.start_ts,
+                ph.dmg,
+                ph.kill,
+                ph,
+                fights.len(),
+            ),
+            None => {
+                let last = &fights[fights.len() - 1];
+                (
+                    base_name(&last.name),
+                    fights[0].start_ts,
+                    fights.iter().map(|p| p.dmg).sum(),
+                    fights
+                        .iter()
+                        .filter_map(|p| p.kill)
+                        .reduce(|a, b| (a.0 + b.0, a.1 + b.1)),
+                    last,
+                    fights.len(),
+                )
+            }
+        });
         self.text(M + 12, 88, W - 24, F_LABEL, DIM, DT_LEFT, "BOSS");
-        if n_fights > 0 {
+        if !groups.is_empty() {
             arrow(
                 self,
                 FIGHT_PREV_HIT,
-                f.view_fight.is_some_and(|i| i > 0),
+                f.view_group.is_some_and(|i| i > 0),
                 GLYPH_PREV,
             );
-            arrow(self, FIGHT_NEXT_HIT, f.fight_sel, GLYPH_NEXT);
-            let idx = format!("{}/{}", f.view_fight.map_or(n_fights, |i| i + 1), n_fights);
+            arrow(self, FIGHT_NEXT_HIT, f.group_sel, GLYPH_NEXT);
+            let idx = format!(
+                "{}/{}",
+                f.view_group.map_or(groups.len(), |i| i + 1),
+                groups.len()
+            );
             self.text_rect(266, 86, 42, 20, F_TINY, DIM, DT_CENTER | DT_VCENTER, &idx);
         }
         if f.live() {
@@ -376,17 +410,25 @@ impl Renderer {
                 }
             }
         } else {
-            match viewed_fight {
-                Some(fight) => {
-                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, &fight.name);
+            match hist {
+                Some((name, start, _, _, last, n_phases)) => {
+                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, name);
                     self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "RESULT");
-                    let (res, color) = match (&fight.kill, fight.end_ts) {
+                    if n_phases > 1 {
+                        let chip = match f.view_phase {
+                            Some(i) => format!("phase {}/{n_phases}", i + 1),
+                            None => format!("{n_phases} phases"),
+                        };
+                        let (cx, cy, cw, ch) = PHASE_HIT;
+                        self.text_rect(cx, cy, cw, ch, F_TINY, DIM, DT_RIGHT | DT_VCENTER, &chip);
+                    }
+                    let (res, color) = match (last.kill, last.end_ts) {
                         (Some(_), _) => ("killed", GOOD),
                         (None, Some(_)) => ("unfinished", DIM),
                         (None, None) => ("in progress", AMBER),
                     };
                     self.text(M + 12, 128, W - 24, F_BOSS, color, DT_LEFT, res);
-                    let end = fight.end_ts.unwrap_or(now);
+                    let end = last.end_ts.unwrap_or(now);
                     self.text(
                         M + 12,
                         128,
@@ -394,7 +436,7 @@ impl Renderer {
                         F_TINY,
                         DIM,
                         DT_RIGHT,
-                        &fmt_dur(end.saturating_sub(fight.start_ts)),
+                        &fmt_dur(end.saturating_sub(start)),
                     );
                 }
                 None => self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss fights"),
@@ -427,13 +469,13 @@ impl Renderer {
                 }
                 None => self.text(M + 12, 242, W - 24, F_BODY, DIM, DT_LEFT, "no kills yet"),
             }
-        } else if let Some(fight) = viewed_fight {
-            let end = fight.end_ts.unwrap_or(now);
-            let dur = end.saturating_sub(fight.start_ts);
-            stat(self, 0, "DMG", group_digits(fight.dmg));
-            stat(self, 1, "DPS", (fight.dmg / dur.max(1)).to_string());
+        } else if let Some((_, start, dmg, kill, last, _)) = hist {
+            let end = last.end_ts.unwrap_or(now);
+            let dur = end.saturating_sub(start);
+            stat(self, 0, "DMG", group_digits(dmg));
+            stat(self, 1, "DPS", (dmg / dur.max(1)).to_string());
             stat(self, 2, "TIME", fmt_dur(dur));
-            match fight.kill {
+            match kill {
                 Some((s, ns)) => {
                     let line = format!(
                         "kill  {} strike + {} other",
@@ -541,6 +583,10 @@ impl Renderer {
 
     pub fn fight_next_hit(&self, x: i32, y: i32) -> bool {
         self.in_rect(FIGHT_NEXT_HIT, x, y)
+    }
+
+    pub fn phase_hit(&self, x: i32, y: i32) -> bool {
+        self.in_rect(PHASE_HIT, x, y)
     }
 
     pub fn rgba(&self, out: &mut Vec<u8>) {
@@ -663,9 +709,10 @@ mod tests {
             update: Badge::None,
             sound_on: true,
             view_run: Some(0),
-            view_fight: Some(0),
+            view_group: Some(0),
+            view_phase: None,
             run_sel: false,
-            fight_sel: false,
+            group_sel: false,
         };
         r.draw(&mut gs, &f);
         let pix = |r: &Renderer, x: i32, y: i32| -> u32 {
@@ -683,9 +730,21 @@ mod tests {
 
         let hist = Frame {
             run_sel: true,
-            fight_sel: true,
+            group_sel: true,
+            view_phase: Some(0),
             ..f
         };
         r.draw(&mut gs, &hist);
+    }
+
+    #[test]
+    fn phase_hit_geometry() {
+        let (x, y, w, h) = PHASE_HIT;
+        assert!(x >= 14 && x + w <= 346);
+        assert!(y >= 82 && y + h <= 178);
+        let r = Renderer::new(96);
+        assert!(r.phase_hit(x, y));
+        assert!(!r.phase_hit(x - 1, y));
+        assert!(!r.phase_hit(x, y + h));
     }
 }

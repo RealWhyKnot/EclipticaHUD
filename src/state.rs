@@ -41,6 +41,44 @@ pub struct Run {
     pub fights: Vec<BossFight>,
 }
 
+impl Run {
+    pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
+        let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+        for (i, f) in self.fights.iter().enumerate() {
+            let chained = out.last().is_some_and(|g| {
+                let prev = &self.fights[g.end - 1];
+                base_name(&prev.name) == base_name(&f.name)
+                    && phase_num(&f.name) > phase_num(&prev.name)
+            });
+            match out.last_mut() {
+                Some(g) if chained => g.end = i + 1,
+                _ => out.push(i..i + 1),
+            }
+        }
+        out
+    }
+}
+
+pub fn base_name(name: &str) -> &str {
+    let Some(pos) = name.rfind("Phase") else {
+        return name;
+    };
+    let digits = &name[pos + 5..];
+    if pos > 0 && !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        &name[..pos]
+    } else {
+        name
+    }
+}
+
+pub fn phase_num(name: &str) -> u32 {
+    if base_name(name) == name {
+        return 1;
+    }
+    let pos = name.rfind("Phase").unwrap();
+    name[pos + 5..].parse().unwrap_or(1)
+}
+
 #[derive(Default, Debug, Clone, PartialEq)]
 pub enum Mode {
     #[default]
@@ -126,7 +164,18 @@ impl GameState {
         match ev {
             Event::BossFight { name } => {
                 self.bosses.insert(name.clone());
-                if self.boss.as_deref() != Some(&name) {
+                let just_ended = self
+                    .runs
+                    .last()
+                    .filter(|r| r.end_ts.is_none())
+                    .is_some_and(|r| {
+                        r.fights.iter().rev().any(|f| {
+                            f.name == name
+                                && f.end_ts
+                                    .is_some_and(|e| ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
+                        })
+                    });
+                if self.boss.as_deref() != Some(&name) && !just_ended {
                     self.boss = Some(name.clone());
                     self.fight_start = ts;
                     self.fight_dmg = 0;
@@ -437,6 +486,80 @@ mod tests {
         let run = &gs.runs[0];
         assert_eq!(run.end_ts, Some(last));
         assert_eq!(run.fights[0].end_ts, Some(last));
+    }
+
+    #[test]
+    fn phase_helpers() {
+        assert_eq!(base_name("Yuki"), "Yuki");
+        assert_eq!(base_name("YukiPhase2"), "Yuki");
+        assert_eq!(base_name("ManalyteAncientPhase2"), "ManalyteAncient");
+        assert_eq!(base_name("M41D"), "M41D");
+        assert_eq!(base_name("NX-Obsidian"), "NX-Obsidian");
+        assert_eq!(base_name("Phase2"), "Phase2");
+        assert_eq!(base_name("PhaseShifter"), "PhaseShifter");
+        assert_eq!(phase_num("Yuki"), 1);
+        assert_eq!(phase_num("YukiPhase2"), 2);
+        assert_eq!(phase_num("AntKingPhase3"), 3);
+    }
+
+    #[test]
+    fn groups_merge_phases_split_rekills() {
+        let fight = |name: &str| BossFight {
+            name: name.into(),
+            start_ts: 0,
+            end_ts: None,
+            dmg: 0,
+            kill: None,
+        };
+        let run = Run {
+            fights: vec![
+                fight("Yuki"),
+                fight("YukiPhase2"),
+                fight("Kakarot"),
+                fight("Kakarot"),
+                fight("Nan"),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(run.groups(), vec![0..2, 2..3, 3..4, 4..5]);
+        assert!(Run::default().groups().is_empty());
+    }
+
+    #[test]
+    fn boss_flap_after_kill_ignored() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "10:55:34",
+            "ECLIPTICA - now fighting boss: AntKing(Clone) on phase: 0.9562449",
+        );
+        feed_at(
+            &mut gs,
+            "10:58:36",
+            "Boss AntKing dead, personal damage dealt: ",
+        );
+        feed_at(&mut gs, "10:58:36", "STRIKE DMG: 23681");
+        feed_at(&mut gs, "10:58:36", "NON-STRIKE DMG: 0");
+        feed_at(
+            &mut gs,
+            "10:58:36",
+            "ECLIPTICA - now fighting boss: AntKingPhase2(Clone) on phase: 0.9562449",
+        );
+        feed_at(
+            &mut gs,
+            "10:58:36",
+            "ECLIPTICA - now fighting boss: AntKing(Clone) on phase: 0.9562449",
+        );
+        feed_at(
+            &mut gs,
+            "10:58:36",
+            "ECLIPTICA - now fighting boss: AntKingPhase2(Clone) on phase: 0.9562449",
+        );
+        assert_eq!(gs.boss.as_deref(), Some("AntKingPhase2"));
+        let run = &gs.runs[0];
+        assert_eq!(run.fights.len(), 2);
+        assert_eq!(run.fights[0].kill, Some((23681, 0)));
+        assert_eq!(run.groups(), vec![0..2]);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::logwatch::{self, LogWatch};
 use crate::render::{Frame, Renderer};
-use crate::state::{BossFight, GameState, Run};
+use crate::state::{GameState, Run};
 use crate::update::{self, Badge};
 use crate::vr::VrOverlay;
 use std::io::Read;
@@ -28,7 +28,8 @@ pub struct App {
     pub tracking: bool,
     pub sound_on: bool,
     pub sel_run: Option<usize>,
-    pub sel_fight: Option<usize>,
+    pub sel_group: Option<usize>,
+    pub sel_phase: Option<usize>,
     flash_at: Option<Instant>,
     last_target_since: u64,
     progress_shown: f32,
@@ -98,7 +99,8 @@ impl App {
             tracking: false,
             sound_on: true,
             sel_run: None,
-            sel_fight: None,
+            sel_group: None,
+            sel_phase: None,
             flash_at: None,
             last_target_since: 0,
             progress_shown: 0.0,
@@ -126,22 +128,24 @@ impl App {
         Some((i, &self.gs.runs[i]))
     }
 
-    pub fn viewed_fight(&self) -> Option<(usize, &BossFight)> {
+    pub fn viewed_group(&self) -> Option<(usize, std::ops::Range<usize>)> {
         let (_, run) = self.viewed_run()?;
-        let n = run.fights.len();
-        let i = self.sel_fight.unwrap_or(n.checked_sub(1)?).min(n - 1);
-        Some((i, &run.fights[i]))
+        let groups = run.groups();
+        let n = groups.len();
+        let i = self.sel_group.unwrap_or(n.checked_sub(1)?).min(n - 1);
+        Some((i, groups[i].clone()))
     }
 
     pub fn is_live(&self) -> bool {
-        self.sel_run.is_none() && self.sel_fight.is_none()
+        self.sel_run.is_none() && self.sel_group.is_none() && self.sel_phase.is_none()
     }
 
     pub fn run_prev(&mut self) -> bool {
         match self.viewed_run() {
             Some((i, _)) if i > 0 => {
                 self.sel_run = Some(i - 1);
-                self.sel_fight = None;
+                self.sel_group = None;
+                self.sel_phase = None;
                 true
             }
             _ => false,
@@ -152,32 +156,53 @@ impl App {
         match self.sel_run {
             Some(i) => {
                 self.sel_run = (i + 2 < self.gs.runs.len()).then_some(i + 1);
-                self.sel_fight = None;
+                self.sel_group = None;
+                self.sel_phase = None;
                 true
             }
             None => false,
         }
     }
 
-    pub fn fight_prev(&mut self) -> bool {
-        match self.viewed_fight() {
+    pub fn group_prev(&mut self) -> bool {
+        match self.viewed_group() {
             Some((i, _)) if i > 0 => {
-                self.sel_fight = Some(i - 1);
+                self.sel_group = Some(i - 1);
+                self.sel_phase = None;
                 true
             }
             _ => false,
         }
     }
 
-    pub fn fight_next(&mut self) -> bool {
-        match self.sel_fight {
+    pub fn group_next(&mut self) -> bool {
+        match self.sel_group {
             Some(i) => {
-                let n = self.viewed_run().map_or(0, |(_, r)| r.fights.len());
-                self.sel_fight = (i + 2 < n).then_some(i + 1);
+                let n = self.viewed_run().map_or(0, |(_, r)| r.groups().len());
+                self.sel_group = (i + 2 < n).then_some(i + 1);
+                self.sel_phase = None;
                 true
             }
             None => false,
         }
+    }
+
+    pub fn phase_cycle(&mut self) -> bool {
+        if self.is_live() {
+            return false;
+        }
+        let Some((_, g)) = self.viewed_group() else {
+            return false;
+        };
+        if g.len() < 2 {
+            return false;
+        }
+        self.sel_phase = match self.sel_phase {
+            None => Some(0),
+            Some(i) if i + 1 < g.len() => Some(i + 1),
+            Some(_) => None,
+        };
+        true
     }
 
     fn now(&self) -> u64 {
@@ -204,9 +229,10 @@ impl App {
             update: self.badge.clone(),
             sound_on: self.sound_on,
             view_run: self.viewed_run().map(|(i, _)| i),
-            view_fight: self.viewed_fight().map(|(i, _)| i),
+            view_group: self.viewed_group().map(|(i, _)| i),
+            view_phase: self.sel_phase,
             run_sel: self.sel_run.is_some(),
-            fight_sel: self.sel_fight.is_some(),
+            group_sel: self.sel_group.is_some(),
         };
         self.renderer.draw(&mut self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
@@ -402,20 +428,32 @@ mod tests {
         app.gs.feed(&format!(
             "{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0"
         ));
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0"
+        ));
         app.gs.feed(&format!("{P}ECLIPTICA - now in lobby"));
         app.gs.feed(&format!("{P}{STAGE_B}"));
         assert_eq!(app.gs.runs.len(), 2);
         assert!(app.is_live());
         assert!(!app.run_next());
-        assert!(!app.fight_next());
+        assert!(!app.group_next());
+        assert!(!app.phase_cycle());
         assert!(app.run_prev());
         assert_eq!(app.sel_run, Some(0));
-        assert_eq!(app.viewed_fight().unwrap().1.name, "YukiPhase2");
-        assert!(app.fight_prev());
-        assert_eq!(app.viewed_fight().unwrap().1.name, "Yuki");
-        assert!(!app.fight_prev());
-        assert!(app.fight_next());
-        assert_eq!(app.sel_fight, None);
+        let (gi, g) = app.viewed_group().unwrap();
+        assert_eq!((gi, g.len()), (1, 1));
+        assert!(app.group_prev());
+        let (gi, g) = app.viewed_group().unwrap();
+        assert_eq!((gi, g.len()), (0, 2));
+        assert!(!app.group_prev());
+        assert!(app.phase_cycle());
+        assert_eq!(app.sel_phase, Some(0));
+        assert!(app.phase_cycle());
+        assert_eq!(app.sel_phase, Some(1));
+        assert!(app.phase_cycle());
+        assert_eq!(app.sel_phase, None);
+        assert!(app.group_next());
+        assert_eq!((app.sel_group, app.sel_phase), (None, None));
         assert!(app.run_next());
         assert!(app.is_live());
     }

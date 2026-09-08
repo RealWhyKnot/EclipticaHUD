@@ -152,8 +152,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                         && app.viewed_run().is_some_and(|(i, _)| i > 0))
                     || (app.renderer.run_next_hit(pt.x, pt.y) && app.sel_run.is_some())
                     || (app.renderer.fight_prev_hit(pt.x, pt.y)
-                        && app.viewed_fight().is_some_and(|(i, _)| i > 0))
-                    || (app.renderer.fight_next_hit(pt.x, pt.y) && app.sel_fight.is_some())
+                        && app.viewed_group().is_some_and(|(i, _)| i > 0))
+                    || (app.renderer.fight_next_hit(pt.x, pt.y) && app.sel_group.is_some())
+                    || (!app.is_live()
+                        && app.viewed_group().is_some_and(|(_, g)| g.len() > 1)
+                        && app.renderer.phase_hit(pt.x, pt.y))
                 {
                     return HTCLIENT as LRESULT;
                 }
@@ -223,8 +226,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     repaint(app, hwnd);
                 } else if (app.renderer.run_prev_hit(x, y) && app.run_prev())
                     || (app.renderer.run_next_hit(x, y) && app.run_next())
-                    || (app.renderer.fight_prev_hit(x, y) && app.fight_prev())
-                    || (app.renderer.fight_next_hit(x, y) && app.fight_next())
+                    || (app.renderer.fight_prev_hit(x, y) && app.group_prev())
+                    || (app.renderer.fight_next_hit(x, y) && app.group_next())
+                    || (app.renderer.phase_hit(x, y) && app.phase_cycle())
                 {
                     repaint(app, hwnd);
                 }
