@@ -26,6 +26,10 @@ pub enum Event {
     Lobby,
     RoomLeft,
     PlayerDead,
+    TokenSpawn {
+        rune: bool,
+        chance: u32,
+    },
 }
 
 impl Event {
@@ -43,6 +47,7 @@ impl Event {
             Event::Lobby => "lobby",
             Event::RoomLeft => "room_left",
             Event::PlayerDead => "player_dead",
+            Event::TokenSpawn { .. } => "token_spawn",
         }
     }
 }
@@ -143,6 +148,18 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
     }
     if msg.trim_end() == "Local controller dead, switching off." {
         return Some(Event::PlayerDead);
+    }
+    if let Some(rest) = msg.strip_prefix("spawn token, ") {
+        let (b, n) = rest.split_once(", ")?;
+        let rune = match b {
+            "True" => true,
+            "False" => false,
+            _ => return None,
+        };
+        return Some(Event::TokenSpawn {
+            rune,
+            chance: n.trim().parse().ok()?,
+        });
     }
     if let Some(rest) = msg.strip_prefix("STRIKE DMG: ") {
         return Some(Event::StrikeTotal(rest.trim().parse().ok()?));
@@ -268,6 +285,25 @@ mod tests {
                 .unwrap();
         assert_eq!(parse_msg(l.msg), Some(Event::PlayerDead));
         assert_eq!(parse_msg("Tracking boss as defeated in-run."), None);
+    }
+
+    #[test]
+    fn token_spawn() {
+        assert_eq!(
+            parse_msg("spawn token, False, 0"),
+            Some(Event::TokenSpawn {
+                rune: false,
+                chance: 0
+            })
+        );
+        assert_eq!(
+            parse_msg("spawn token, True, 55"),
+            Some(Event::TokenSpawn {
+                rune: true,
+                chance: 55
+            })
+        );
+        assert_eq!(parse_msg("spawn token, Maybe, 5"), None);
     }
 
     #[test]

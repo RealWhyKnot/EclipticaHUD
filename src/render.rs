@@ -289,6 +289,16 @@ impl Renderer {
         self.text(M, 28, W, F_BODY, status_color, DT_LEFT, &status);
         if gs.is_dead(now) {
             self.text(M, 28, W, F_BODY, DANGER, DT_RIGHT, "DEAD");
+        } else if gs.mode == Mode::Stage && !gs.level_tokens.is_empty() {
+            let rune = gs.level_tokens.iter().any(|t| t.0);
+            let txt = format!(
+                "{} token{}{}",
+                gs.level_tokens.len(),
+                if gs.level_tokens.len() == 1 { "" } else { "s" },
+                if rune { " +rune" } else { "" }
+            );
+            let color = if rune { AMBER } else { DIM };
+            self.text(M, 28, W, F_TINY, color, DT_RIGHT, &txt);
         }
         if gs.mode == Mode::Stage {
             self.bar(M, 47, W, 4, f.progress_shown, GOOD);

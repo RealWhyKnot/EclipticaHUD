@@ -110,6 +110,8 @@ pub struct GameState {
     pub taken: VecDeque<TakenEntry>,
     pub last_kill: Option<KillSummary>,
     pub runs: Vec<Run>,
+    pub level_tokens: Vec<(bool, u32)>,
+    pending_tokens: Vec<(bool, u32)>,
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
     dead_seen: Option<(String, u64)>,
@@ -159,6 +161,8 @@ impl GameState {
         self.pending_kill = None;
         self.dead_seen = None;
         self.dead_until = 0;
+        self.level_tokens.clear();
+        self.pending_tokens.clear();
         self.taken.clear();
         self.history.clear();
         self.changed = true;
@@ -286,6 +290,11 @@ impl GameState {
                 class,
             } => {
                 self.mode = Mode::Stage;
+                if !self.pending_tokens.is_empty() {
+                    self.level_tokens = std::mem::take(&mut self.pending_tokens);
+                } else if self.stage != name {
+                    self.level_tokens.clear();
+                }
                 self.stage = name.clone();
                 self.progress = progress;
                 self.class = class.clone();
@@ -303,6 +312,8 @@ impl GameState {
                 self.boss = None;
                 self.target = None;
                 self.progress = 0.0;
+                self.level_tokens.clear();
+                self.pending_tokens.clear();
                 self.close_run(ts);
             }
             Event::RoomLeft => {
@@ -312,7 +323,12 @@ impl GameState {
                 self.stage.clear();
                 self.class.clear();
                 self.progress = 0.0;
+                self.level_tokens.clear();
+                self.pending_tokens.clear();
                 self.close_run(ts);
+            }
+            Event::TokenSpawn { rune, chance } => {
+                self.pending_tokens.push((rune, chance));
             }
             Event::PlayerDead => {
                 if ts >= self.dead_until {
@@ -614,6 +630,36 @@ mod tests {
         assert_eq!(gs.runs.len(), 1);
         assert!(gs.boss.is_none());
         assert_eq!(gs.mode, Mode::Lobby);
+    }
+
+    #[test]
+    fn token_spawns_per_level() {
+        let mut gs = GameState::default();
+        for _ in 0..3 {
+            feed_at(&mut gs, "08:18:01", "spawn token, False, 0");
+        }
+        feed_at(
+            &mut gs,
+            "08:18:01",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer",
+        );
+        assert_eq!(gs.level_tokens, vec![(false, 0); 3]);
+        feed_at(
+            &mut gs,
+            "08:19:00",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer",
+        );
+        assert_eq!(gs.level_tokens.len(), 3);
+        feed_at(&mut gs, "08:46:50", "spawn token, True, 35");
+        feed_at(&mut gs, "08:46:50", "spawn token, True, 55");
+        feed_at(
+            &mut gs,
+            "08:46:50",
+            "ECLIPTICA - now in stage: Stage_GMFuncFlat on phase: 0.06 as class: Spellhammer",
+        );
+        assert_eq!(gs.level_tokens, vec![(true, 35), (true, 55)]);
+        feed_at(&mut gs, "08:50:00", "ECLIPTICA - now in lobby");
+        assert!(gs.level_tokens.is_empty());
     }
 
     #[test]
