@@ -24,6 +24,7 @@ pub enum Event {
     },
     Intermission,
     Lobby,
+    RoomLeft,
 }
 
 impl Event {
@@ -39,6 +40,7 @@ impl Event {
             Event::Stage { .. } => "stage",
             Event::Intermission => "intermission",
             Event::Lobby => "lobby",
+            Event::RoomLeft => "room_left",
         }
     }
 }
@@ -133,6 +135,9 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
         return Some(Event::BossDead {
             name: name.to_string(),
         });
+    }
+    if msg.trim_end() == "[Behaviour] OnLeftRoom" {
+        return Some(Event::RoomLeft);
     }
     if let Some(rest) = msg.strip_prefix("STRIKE DMG: ") {
         return Some(Event::StrikeTotal(rest.trim().parse().ok()?));
@@ -236,6 +241,19 @@ mod tests {
             Some(Event::Intermission)
         );
         assert_eq!(parse_msg("ECLIPTICA - now in lobby"), Some(Event::Lobby));
+    }
+
+    #[test]
+    fn room_left() {
+        let l = split_line("2026.09.06 21:44:44 Debug      -  [Behaviour] OnLeftRoom").unwrap();
+        assert_eq!(parse_msg(l.msg), Some(Event::RoomLeft));
+        assert!(
+            split_line("  at \u{cc}\u{ce}\u{ce}\u{cc}.OnLeftRoom () [0x00000] in <0>:0 ").is_none()
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] Entering Room: Ecliptica - Demo Playtest"),
+            None
+        );
     }
 
     #[test]

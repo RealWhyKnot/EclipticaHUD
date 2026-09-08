@@ -1,8 +1,10 @@
-use crate::logwatch::LogWatch;
+use crate::logwatch::{self, LogWatch};
 use crate::render::{Frame, Renderer};
-use crate::state::GameState;
+use crate::state::{BossFight, GameState, Run};
 use crate::update::{self, Badge};
 use crate::vr::VrOverlay;
+use std::io::Read;
+use std::path::Path;
 use std::time::Instant;
 
 const FLASH_MS: f32 = 3000.0;
@@ -25,6 +27,8 @@ pub struct App {
     pub pressed_close: bool,
     pub tracking: bool,
     pub sound_on: bool,
+    pub sel_run: Option<usize>,
+    pub sel_fight: Option<usize>,
     flash_at: Option<Instant>,
     last_target_since: u64,
     progress_shown: f32,
@@ -45,6 +49,26 @@ fn blip() {
             std::ptr::null_mut(),
             SND_ASYNC | SND_MEMORY | SND_NODEFAULT,
         );
+    }
+}
+
+fn backfill(gs: &mut GameState, dir: &Path) {
+    let logs = logwatch::all_logs(dir);
+    let Some((_, old)) = logs.split_last() else {
+        return;
+    };
+    for path in old {
+        let Ok(mut file) = logwatch::open_shared(path) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        if file.read_to_end(&mut bytes).is_err() {
+            continue;
+        }
+        for line in String::from_utf8_lossy(&bytes).lines() {
+            gs.feed(line);
+        }
+        gs.log_rotated();
     }
 }
 
@@ -73,6 +97,8 @@ impl App {
             pressed_close: false,
             tracking: false,
             sound_on: true,
+            sel_run: None,
+            sel_fight: None,
             flash_at: None,
             last_target_since: 0,
             progress_shown: 0.0,
@@ -86,6 +112,72 @@ impl App {
 
     pub fn update_ready(&self) -> bool {
         matches!(self.badge, Badge::Ready(_))
+    }
+
+    pub fn backfill_history(&mut self) {
+        if let Some(dir) = logwatch::log_dir() {
+            backfill(&mut self.gs, &dir);
+        }
+    }
+
+    pub fn viewed_run(&self) -> Option<(usize, &Run)> {
+        let n = self.gs.runs.len();
+        let i = self.sel_run.unwrap_or(n.checked_sub(1)?).min(n - 1);
+        Some((i, &self.gs.runs[i]))
+    }
+
+    pub fn viewed_fight(&self) -> Option<(usize, &BossFight)> {
+        let (_, run) = self.viewed_run()?;
+        let n = run.fights.len();
+        let i = self.sel_fight.unwrap_or(n.checked_sub(1)?).min(n - 1);
+        Some((i, &run.fights[i]))
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.sel_run.is_none() && self.sel_fight.is_none()
+    }
+
+    pub fn run_prev(&mut self) -> bool {
+        match self.viewed_run() {
+            Some((i, _)) if i > 0 => {
+                self.sel_run = Some(i - 1);
+                self.sel_fight = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn run_next(&mut self) -> bool {
+        match self.sel_run {
+            Some(i) => {
+                self.sel_run = (i + 2 < self.gs.runs.len()).then_some(i + 1);
+                self.sel_fight = None;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn fight_prev(&mut self) -> bool {
+        match self.viewed_fight() {
+            Some((i, _)) if i > 0 => {
+                self.sel_fight = Some(i - 1);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn fight_next(&mut self) -> bool {
+        match self.sel_fight {
+            Some(i) => {
+                let n = self.viewed_run().map_or(0, |(_, r)| r.fights.len());
+                self.sel_fight = (i + 2 < n).then_some(i + 1);
+                true
+            }
+            None => false,
+        }
     }
 
     fn now(&self) -> u64 {
@@ -111,6 +203,10 @@ impl App {
             dps_frac_shown: self.dps_frac_shown,
             update: self.badge.clone(),
             sound_on: self.sound_on,
+            view_run: self.viewed_run().map(|(i, _)| i),
+            view_fight: self.viewed_fight().map(|(i, _)| i),
+            run_sel: self.sel_run.is_some(),
+            fight_sel: self.sel_fight.is_some(),
         };
         self.renderer.draw(&mut self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
@@ -125,11 +221,14 @@ impl App {
     pub fn tick(&mut self) -> Tick {
         let gs = &mut self.gs;
         let mut newest = 0u64;
-        self.watch.poll(|line| {
+        let rotated = self.watch.poll(|line| {
             if let Some(ts) = gs.feed(line) {
                 newest = newest.max(ts);
             }
         });
+        if rotated {
+            self.gs.log_rotated();
+        }
         if newest > self.last_ts {
             self.last_ts = newest;
             self.last_ts_at = Instant::now();
@@ -218,6 +317,107 @@ mod tests {
             .feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
         app.tick();
         assert_eq!(app.dps_boss, None);
+    }
+
+    const STAGE_A: &str =
+        "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Blade";
+    const STAGE_B: &str =
+        "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Twinmage";
+
+    #[test]
+    fn backfill_reads_all_but_newest() {
+        let dir = std::env::temp_dir().join(format!("ehud_backfill_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_a = dir.join("output_log_2026-01-01_00-00-00.txt");
+        std::fs::write(
+            &log_a,
+            format!("2026.01.01 10:00:00 Debug      -  {STAGE_A}\r\n"),
+        )
+        .unwrap();
+        let log_b = dir.join("output_log_2026-01-02_00-00-00.txt");
+        std::fs::write(
+            &log_b,
+            format!("2026.01.02 10:00:00 Debug      -  {STAGE_B}\n"),
+        )
+        .unwrap();
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&log_b)
+            .unwrap()
+            .set_modified(future)
+            .unwrap();
+        let mut gs = GameState::default();
+        backfill(&mut gs, &dir);
+        assert_eq!(gs.runs.len(), 1);
+        assert!(gs.runs[0].end_ts.is_some());
+        assert_eq!(gs.runs[0].class, "Blade");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rotation_in_tick_closes_run() {
+        let dir = std::env::temp_dir().join(format!("ehud_rotate_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_a = dir.join("output_log_2026-01-01_00-00-00.txt");
+        std::fs::write(
+            &log_a,
+            format!("2026.01.01 10:00:00 Debug      -  {STAGE_A}\n"),
+        )
+        .unwrap();
+        let mut app = App::new(Renderer::new(96));
+        app.watch = LogWatch::for_dir(dir.clone());
+        app.tick();
+        assert_eq!(app.gs.runs.len(), 1);
+        assert!(app.gs.runs[0].end_ts.is_none());
+        let log_b = dir.join("output_log_2026-01-02_00-00-00.txt");
+        std::fs::write(
+            &log_b,
+            format!("2026.01.02 10:00:00 Debug      -  {STAGE_B}\n"),
+        )
+        .unwrap();
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&log_b)
+            .unwrap()
+            .set_modified(future)
+            .unwrap();
+        app.tick();
+        assert_eq!(app.gs.runs.len(), 1);
+        assert!(app.gs.runs[0].end_ts.is_some());
+        app.tick();
+        assert_eq!(app.gs.runs.len(), 2);
+        assert_eq!(app.gs.runs[1].class, "Twinmage");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn navigation() {
+        let mut app = headless();
+        app.gs.feed(&format!("{P}{STAGE_A}"));
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0"
+        ));
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0"
+        ));
+        app.gs.feed(&format!("{P}ECLIPTICA - now in lobby"));
+        app.gs.feed(&format!("{P}{STAGE_B}"));
+        assert_eq!(app.gs.runs.len(), 2);
+        assert!(app.is_live());
+        assert!(!app.run_next());
+        assert!(!app.fight_next());
+        assert!(app.run_prev());
+        assert_eq!(app.sel_run, Some(0));
+        assert_eq!(app.viewed_fight().unwrap().1.name, "YukiPhase2");
+        assert!(app.fight_prev());
+        assert_eq!(app.viewed_fight().unwrap().1.name, "Yuki");
+        assert!(!app.fight_prev());
+        assert!(app.fight_next());
+        assert_eq!(app.sel_fight, None);
+        assert!(app.run_next());
+        assert!(app.is_live());
     }
 
     #[test]

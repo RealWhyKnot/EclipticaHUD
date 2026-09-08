@@ -5,12 +5,16 @@ use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::*;
 
 pub const LOGICAL_W: i32 = 360;
-pub const LOGICAL_H: i32 = 560;
+pub const LOGICAL_H: i32 = 600;
 
 pub const CLOSE_HIT: (i32, i32, i32, i32) = (324, 0, 36, 36);
 pub const CLOSE_BTN: (i32, i32, i32, i32) = (328, 8, 24, 24);
 pub const UPDATE_HIT: (i32, i32) = (210, LOGICAL_H - 32);
-pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 100, 308, 40);
+pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 126, 308, 40);
+pub const RUN_PREV_HIT: (i32, i32, i32, i32) = (14, 54, 26, 24);
+pub const RUN_NEXT_HIT: (i32, i32, i32, i32) = (320, 54, 26, 24);
+pub const FIGHT_PREV_HIT: (i32, i32, i32, i32) = (240, 86, 26, 20);
+pub const FIGHT_NEXT_HIT: (i32, i32, i32, i32) = (308, 86, 26, 20);
 
 const BG: u32 = rgb(0x14, 0x14, 0x1c);
 const CARD: u32 = rgb(0x1d, 0x1d, 0x29);
@@ -54,6 +58,16 @@ pub struct Frame {
     pub dps_frac_shown: f32,
     pub update: Badge,
     pub sound_on: bool,
+    pub view_run: Option<usize>,
+    pub view_fight: Option<usize>,
+    pub run_sel: bool,
+    pub fight_sel: bool,
+}
+
+impl Frame {
+    fn live(&self) -> bool {
+        !self.run_sel && !self.fight_sel
+    }
 }
 
 pub struct Renderer {
@@ -75,6 +89,8 @@ const F_GLYPH: usize = 5;
 
 const GLYPH_CLOSE: &str = "\u{E8BB}";
 const GLYPH_MUTE: &str = "\u{E74F}";
+const GLYPH_PREV: &str = "\u{E76B}";
+const GLYPH_NEXT: &str = "\u{E76C}";
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
@@ -273,67 +289,177 @@ impl Renderer {
             self.bar(M, 47, W, 4, f.progress_shown, GOOD);
         }
 
-        self.rround(M, 54, W, 96, 8, CARD);
-        match (&gs.boss, &gs.target) {
-            (Some(boss), target) => {
-                self.text(M + 12, 60, W - 24, F_LABEL, DIM, DT_LEFT, "BOSS");
-                self.text(M + 60, 60, W - 84, F_BOSS, TEXT, DT_LEFT, boss);
-                self.text(M + 12, 86, W - 24, F_LABEL, DIM, DT_LEFT, "TARGET");
-                if !f.sound_on {
-                    self.text(M + 12, 86, W - 24, F_GLYPH, DIM, DT_RIGHT, GLYPH_MUTE);
-                }
-                let color = mix(ACCENT, TEXT, ease_out_cubic(f.flash_t));
-                match target {
-                    Some(t) => {
-                        self.text(M + 12, 100, W - 24, F_BIG, color, DT_LEFT, t);
-                        let held = now.saturating_sub(gs.target_since);
-                        self.text(
-                            M + 12,
-                            100,
-                            W - 24,
-                            F_TINY,
-                            DIM,
-                            DT_RIGHT,
-                            &format!("{held}s"),
-                        );
+        let arrow = |r: &Renderer, hit: (i32, i32, i32, i32), on: bool, glyph: &str| {
+            let (x, y, w, h) = hit;
+            let color = if on { TEXT } else { CARD };
+            r.text_rect(x, y, w, h, F_GLYPH, color, DT_CENTER | DT_VCENTER, glyph);
+        };
+        arrow(
+            self,
+            RUN_PREV_HIT,
+            f.view_run.is_some_and(|i| i > 0),
+            GLYPH_PREV,
+        );
+        arrow(self, RUN_NEXT_HIT, f.run_sel, GLYPH_NEXT);
+        let (run_label, run_color) = match f.view_run {
+            None => ("no runs yet".to_string(), DIM),
+            Some(i) if f.live() => (format!("RUN {}/{}", i + 1, gs.runs.len()), DIM),
+            Some(i) => {
+                let r = &gs.runs[i];
+                (
+                    format!(
+                        "RUN {}/{}   {}   {}",
+                        i + 1,
+                        gs.runs.len(),
+                        &fmt_clock(r.start_ts)[..5],
+                        r.stage
+                    ),
+                    TEXT,
+                )
+            }
+        };
+        self.text_rect(
+            44,
+            54,
+            LOGICAL_W - 88,
+            24,
+            F_LABEL,
+            run_color,
+            DT_CENTER | DT_VCENTER,
+            &run_label,
+        );
+
+        self.rround(M, 82, W, 96, 8, CARD);
+        let viewed_run = f.view_run.map(|i| &gs.runs[i]);
+        let viewed_fight = viewed_run.and_then(|r| f.view_fight.and_then(|i| r.fights.get(i)));
+        let n_fights = viewed_run.map_or(0, |r| r.fights.len());
+        self.text(M + 12, 88, W - 24, F_LABEL, DIM, DT_LEFT, "BOSS");
+        if n_fights > 0 {
+            arrow(
+                self,
+                FIGHT_PREV_HIT,
+                f.view_fight.is_some_and(|i| i > 0),
+                GLYPH_PREV,
+            );
+            arrow(self, FIGHT_NEXT_HIT, f.fight_sel, GLYPH_NEXT);
+            let idx = format!("{}/{}", f.view_fight.map_or(n_fights, |i| i + 1), n_fights);
+            self.text_rect(266, 86, 42, 20, F_TINY, DIM, DT_CENTER | DT_VCENTER, &idx);
+        }
+        if f.live() {
+            match (&gs.boss, &gs.target) {
+                (Some(boss), target) => {
+                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, boss);
+                    self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "TARGET");
+                    if !f.sound_on {
+                        self.text(M + 12, 114, W - 24, F_GLYPH, DIM, DT_RIGHT, GLYPH_MUTE);
                     }
-                    None => self.text(M + 12, 100, W - 24, F_BOSS, DIM, DT_LEFT, "-"),
+                    let color = mix(ACCENT, TEXT, ease_out_cubic(f.flash_t));
+                    match target {
+                        Some(t) => {
+                            self.text(M + 12, 128, W - 24, F_BIG, color, DT_LEFT, t);
+                            let held = now.saturating_sub(gs.target_since);
+                            self.text(
+                                M + 12,
+                                128,
+                                W - 24,
+                                F_TINY,
+                                DIM,
+                                DT_RIGHT,
+                                &format!("{held}s"),
+                            );
+                        }
+                        None => self.text(M + 12, 128, W - 24, F_BOSS, DIM, DT_LEFT, "-"),
+                    }
+                }
+                (None, _) => {
+                    self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss active");
                 }
             }
-            (None, _) => {
-                self.text(M + 12, 60, W - 24, F_LABEL, DIM, DT_LEFT, "BOSS");
-                self.text(M + 12, 84, W - 24, F_BOSS, DIM, DT_LEFT, "no boss active");
+        } else {
+            match viewed_fight {
+                Some(fight) => {
+                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, &fight.name);
+                    self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "RESULT");
+                    let (res, color) = match (&fight.kill, fight.end_ts) {
+                        (Some(_), _) => ("killed", GOOD),
+                        (None, Some(_)) => ("unfinished", DIM),
+                        (None, None) => ("in progress", AMBER),
+                    };
+                    self.text(M + 12, 128, W - 24, F_BOSS, color, DT_LEFT, res);
+                    let end = fight.end_ts.unwrap_or(now);
+                    self.text(
+                        M + 12,
+                        128,
+                        W - 24,
+                        F_TINY,
+                        DIM,
+                        DT_RIGHT,
+                        &fmt_dur(end.saturating_sub(fight.start_ts)),
+                    );
+                }
+                None => self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss fights"),
             }
         }
 
-        self.rround(M, 158, W, 92, 8, CARD);
+        self.rround(M, 186, W, 92, 8, CARD);
         let col = (W - 24) / 3;
         let stat = |r: &Renderer, i: i32, label: &str, value: String| {
             let x = M + 12 + i * col;
-            r.text(x, 164, col, F_LABEL, DIM, DT_LEFT, label);
-            r.text(x, 180, col, F_BOSS, AMBER, DT_LEFT, &value);
+            r.text(x, 192, col, F_LABEL, DIM, DT_LEFT, label);
+            r.text(x, 208, col, F_BOSS, AMBER, DT_LEFT, &value);
         };
-        stat(self, 0, "DPS 10s", gs.rolling_dps(now).to_string());
-        stat(self, 1, "FIGHT DPS", gs.fight_dps(now).to_string());
-        stat(self, 2, "FIGHT DMG", group_digits(gs.fight_dmg));
-        if gs.boss.is_some() {
-            self.bar(M + 12, 205, W - 24, 3, f.dps_frac_shown, ACCENT);
-        }
-        match &gs.last_kill {
-            Some(k) => {
-                let line = format!(
-                    "last kill  {}   {} strike + {} other",
-                    k.boss,
-                    group_digits(k.strike),
-                    group_digits(k.non_strike)
-                );
-                self.text(M + 12, 214, W - 24, F_BODY, TEXT, DT_LEFT, &line);
+        if f.live() {
+            stat(self, 0, "DPS 10s", gs.rolling_dps(now).to_string());
+            stat(self, 1, "FIGHT DPS", gs.fight_dps(now).to_string());
+            stat(self, 2, "FIGHT DMG", group_digits(gs.fight_dmg));
+            if gs.boss.is_some() {
+                self.bar(M + 12, 233, W - 24, 3, f.dps_frac_shown, ACCENT);
             }
-            None => self.text(M + 12, 214, W - 24, F_BODY, DIM, DT_LEFT, "no kills yet"),
+            match &gs.last_kill {
+                Some(k) => {
+                    let line = format!(
+                        "last kill  {}   {} strike + {} other",
+                        k.boss,
+                        group_digits(k.strike),
+                        group_digits(k.non_strike)
+                    );
+                    self.text(M + 12, 242, W - 24, F_BODY, TEXT, DT_LEFT, &line);
+                }
+                None => self.text(M + 12, 242, W - 24, F_BODY, DIM, DT_LEFT, "no kills yet"),
+            }
+        } else if let Some(fight) = viewed_fight {
+            let end = fight.end_ts.unwrap_or(now);
+            let dur = end.saturating_sub(fight.start_ts);
+            stat(self, 0, "DMG", group_digits(fight.dmg));
+            stat(self, 1, "DPS", (fight.dmg / dur.max(1)).to_string());
+            stat(self, 2, "TIME", fmt_dur(dur));
+            match fight.kill {
+                Some((s, ns)) => {
+                    let line = format!(
+                        "kill  {} strike + {} other",
+                        group_digits(s),
+                        group_digits(ns)
+                    );
+                    self.text(M + 12, 242, W - 24, F_BODY, TEXT, DT_LEFT, &line);
+                }
+                None => {
+                    self.text(
+                        M + 12,
+                        242,
+                        W - 24,
+                        F_BODY,
+                        DIM,
+                        DT_LEFT,
+                        "no kill recorded",
+                    );
+                }
+            }
+        } else {
+            self.text(M + 12, 208, W - 24, F_BODY, DIM, DT_LEFT, "no data");
         }
 
-        self.text(M, 258, W, F_LABEL, DIM, DT_LEFT, "DAMAGE TAKEN");
-        let mut y = 274;
+        self.text(M, 286, W, F_LABEL, DIM, DT_LEFT, "DAMAGE TAKEN");
+        let mut y = 302;
         for hit in gs.taken.iter().rev().take(3) {
             let src = if hit.source.is_empty() {
                 "environment"
@@ -349,8 +475,8 @@ impl Renderer {
             self.text(M, y, W, F_BODY, DIM, DT_LEFT, "none");
         }
 
-        self.text(M, 340, W, F_LABEL, DIM, DT_LEFT, "TARGET HISTORY");
-        let mut y = 356;
+        self.text(M, 368, W, F_LABEL, DIM, DT_LEFT, "TARGET HISTORY");
+        let mut y = 384;
         for entry in gs.history.iter().rev() {
             if y > LOGICAL_H - 52 {
                 break;
@@ -393,9 +519,28 @@ impl Renderer {
         x >= self.px(UPDATE_HIT.0) && y >= self.px(UPDATE_HIT.1)
     }
 
+    fn in_rect(&self, r: (i32, i32, i32, i32), x: i32, y: i32) -> bool {
+        x >= self.px(r.0) && x < self.px(r.0 + r.2) && y >= self.px(r.1) && y < self.px(r.1 + r.3)
+    }
+
     pub fn target_hit(&self, x: i32, y: i32) -> bool {
-        let (tx, ty, tw, th) = TARGET_HIT;
-        x >= self.px(tx) && x < self.px(tx + tw) && y >= self.px(ty) && y < self.px(ty + th)
+        self.in_rect(TARGET_HIT, x, y)
+    }
+
+    pub fn run_prev_hit(&self, x: i32, y: i32) -> bool {
+        self.in_rect(RUN_PREV_HIT, x, y)
+    }
+
+    pub fn run_next_hit(&self, x: i32, y: i32) -> bool {
+        self.in_rect(RUN_NEXT_HIT, x, y)
+    }
+
+    pub fn fight_prev_hit(&self, x: i32, y: i32) -> bool {
+        self.in_rect(FIGHT_PREV_HIT, x, y)
+    }
+
+    pub fn fight_next_hit(&self, x: i32, y: i32) -> bool {
+        self.in_rect(FIGHT_NEXT_HIT, x, y)
     }
 
     pub fn rgba(&self, out: &mut Vec<u8>) {
@@ -422,6 +567,14 @@ impl Drop for Renderer {
             DeleteObject(self.bitmap as _);
             DeleteDC(self.dc);
         }
+    }
+}
+
+fn fmt_dur(secs: u64) -> String {
+    if secs >= 60 {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
     }
 }
 
@@ -471,7 +624,7 @@ mod tests {
     fn target_hit_geometry() {
         let (tx, ty, tw, th) = TARGET_HIT;
         assert!(tx >= 14 && tx + tw <= LOGICAL_W - 14);
-        assert!(ty >= 54 && ty + th <= 150);
+        assert!(ty >= 82 && ty + th <= 178);
         assert!(ty > CLOSE_HIT.1 + CLOSE_HIT.3);
         let r = Renderer::new(96);
         assert!(r.target_hit(tx, ty));
@@ -509,19 +662,30 @@ mod tests {
             dps_frac_shown: 0.5,
             update: Badge::None,
             sound_on: true,
+            view_run: Some(0),
+            view_fight: Some(0),
+            run_sel: false,
+            fight_sel: false,
         };
         r.draw(&mut gs, &f);
-        let pix = |x: i32, y: i32| -> u32 {
+        let pix = |r: &Renderer, x: i32, y: i32| -> u32 {
             let s =
                 unsafe { std::slice::from_raw_parts(r.bits, (r.width * r.height * 4) as usize) };
             let i = ((y * r.width + x) * 4) as usize;
             rgb(s[i + 2] as u32, s[i + 1] as u32, s[i] as u32)
         };
-        assert_eq!(pix(0, 0), BG);
-        assert_eq!(pix(100, 49), GOOD);
-        assert_eq!(pix(300, 49), CARD);
-        assert_eq!(pix(100, 206), ACCENT);
-        assert_eq!(pix(20, 60), CARD);
-        assert_eq!(pix(336, 11), CARD);
+        assert_eq!(pix(&r, 0, 0), BG);
+        assert_eq!(pix(&r, 100, 49), GOOD);
+        assert_eq!(pix(&r, 300, 49), CARD);
+        assert_eq!(pix(&r, 100, 234), ACCENT);
+        assert_eq!(pix(&r, 20, 90), CARD);
+        assert_eq!(pix(&r, 336, 11), CARD);
+
+        let hist = Frame {
+            run_sel: true,
+            fight_sel: true,
+            ..f
+        };
+        r.draw(&mut gs, &hist);
     }
 }

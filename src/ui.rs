@@ -144,9 +144,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if let Some(app) = app_mut(hwnd) {
                 if app.renderer.close_hit(pt.x, pt.y)
                     || (app.update_ready() && app.renderer.update_hit(pt.x, pt.y))
-                    || (app.gs.boss.is_some()
+                    || (app.is_live()
+                        && app.gs.boss.is_some()
                         && app.gs.target.is_some()
                         && app.renderer.target_hit(pt.x, pt.y))
+                    || (app.renderer.run_prev_hit(pt.x, pt.y)
+                        && app.viewed_run().is_some_and(|(i, _)| i > 0))
+                    || (app.renderer.run_next_hit(pt.x, pt.y) && app.sel_run.is_some())
+                    || (app.renderer.fight_prev_hit(pt.x, pt.y)
+                        && app.viewed_fight().is_some_and(|(i, _)| i > 0))
+                    || (app.renderer.fight_next_hit(pt.x, pt.y) && app.sel_fight.is_some())
                 {
                     return HTCLIENT as LRESULT;
                 }
@@ -206,12 +213,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     if tick.redraw {
                         InvalidateRect(hwnd, std::ptr::null(), 0);
                     }
-                } else if app.gs.boss.is_some()
+                } else if app.is_live()
+                    && app.gs.boss.is_some()
                     && app.gs.target.is_some()
                     && app.renderer.target_hit(x, y)
                 {
                     app.sound_on = !app.sound_on;
                     save_sound(app.sound_on);
+                    repaint(app, hwnd);
+                } else if (app.renderer.run_prev_hit(x, y) && app.run_prev())
+                    || (app.renderer.run_next_hit(x, y) && app.run_next())
+                    || (app.renderer.fight_prev_hit(x, y) && app.fight_prev())
+                    || (app.renderer.fight_next_hit(x, y) && app.fight_next())
+                {
                     repaint(app, hwnd);
                 }
             }
@@ -279,6 +293,7 @@ pub fn run() {
         let dpi = GetDpiForSystem();
         let mut app = App::new(Renderer::new(dpi));
         app.sound_on = load_sound();
+        app.backfill_history();
         let (w, h) = (app.renderer.width, app.renderer.height);
 
         let module = GetModuleHandleW(std::ptr::null());

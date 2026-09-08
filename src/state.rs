@@ -23,6 +23,24 @@ pub struct KillSummary {
     pub non_strike: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct BossFight {
+    pub name: String,
+    pub start_ts: u64,
+    pub end_ts: Option<u64>,
+    pub dmg: u64,
+    pub kill: Option<(u64, u64)>,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct Run {
+    pub start_ts: u64,
+    pub end_ts: Option<u64>,
+    pub stage: String,
+    pub class: String,
+    pub fights: Vec<BossFight>,
+}
+
 #[derive(Default, Debug, Clone, PartialEq)]
 pub enum Mode {
     #[default]
@@ -51,22 +69,77 @@ pub struct GameState {
     pub targets_total: u64,
     pub taken: VecDeque<TakenEntry>,
     pub last_kill: Option<KillSummary>,
+    pub runs: Vec<Run>,
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
     dead_seen: Option<(String, u64)>,
+    last_ts: u64,
     pub changed: bool,
 }
 
 impl GameState {
+    fn open_run(&mut self, ts: u64) -> &mut Run {
+        if self.runs.last().is_none_or(|r| r.end_ts.is_some()) {
+            self.runs.push(Run {
+                start_ts: ts,
+                ..Default::default()
+            });
+        }
+        self.runs.last_mut().unwrap()
+    }
+
+    fn open_fight(&mut self) -> Option<&mut BossFight> {
+        self.runs
+            .last_mut()
+            .filter(|r| r.end_ts.is_none())
+            .and_then(|r| r.fights.last_mut())
+            .filter(|f| f.end_ts.is_none())
+    }
+
+    fn close_run(&mut self, ts: u64) {
+        if let Some(f) = self.open_fight() {
+            f.end_ts = Some(ts);
+        }
+        if let Some(r) = self.runs.last_mut() {
+            if r.end_ts.is_none() {
+                r.end_ts = Some(ts);
+            }
+        }
+    }
+
+    pub fn log_rotated(&mut self) {
+        self.close_run(self.last_ts);
+        self.mode = Mode::Idle;
+        self.boss = None;
+        self.target = None;
+        self.stage.clear();
+        self.class.clear();
+        self.progress = 0.0;
+        self.pending_kill = None;
+        self.dead_seen = None;
+        self.taken.clear();
+        self.history.clear();
+        self.changed = true;
+    }
     pub fn apply(&mut self, ts: u64, ev: Event) {
         self.changed = true;
         match ev {
             Event::BossFight { name } => {
                 self.bosses.insert(name.clone());
                 if self.boss.as_deref() != Some(&name) {
-                    self.boss = Some(name);
+                    self.boss = Some(name.clone());
                     self.fight_start = ts;
                     self.fight_dmg = 0;
+                    if let Some(f) = self.open_fight() {
+                        f.end_ts = Some(ts);
+                    }
+                    self.open_run(ts).fights.push(BossFight {
+                        name,
+                        start_ts: ts,
+                        end_ts: None,
+                        dmg: 0,
+                        kill: None,
+                    });
                 }
             }
             Event::BossDead { name } => {
@@ -79,6 +152,9 @@ impl GameState {
                 if self.boss.as_deref() == Some(&name) {
                     self.boss = None;
                     self.target = None;
+                    if let Some(f) = self.open_fight().filter(|f| f.name == name) {
+                        f.end_ts = Some(ts);
+                    }
                 }
             }
             Event::StrikeTotal(n) => {
@@ -98,6 +174,15 @@ impl GameState {
                             p.boss == k.boss && p.strike + p.non_strike >= k.strike + k.non_strike
                         });
                     if !dupe {
+                        if let Some(f) = self.runs.last_mut().and_then(|r| {
+                            r.fights
+                                .iter_mut()
+                                .rev()
+                                .find(|f| f.name == k.boss && f.kill.is_none())
+                        }) {
+                            f.kill = Some((k.strike, k.non_strike));
+                            f.end_ts.get_or_insert(k.ts);
+                        }
                         self.last_kill = Some(k);
                     }
                 }
@@ -106,6 +191,9 @@ impl GameState {
                 self.hits.push_back((ts, n));
                 if self.boss.is_some() {
                     self.fight_dmg += n;
+                    if let Some(f) = self.open_fight() {
+                        f.dmg += n;
+                    }
                 }
             }
             Event::DamageTaken { amount, source } => {
@@ -135,9 +223,12 @@ impl GameState {
                 class,
             } => {
                 self.mode = Mode::Stage;
-                self.stage = name;
+                self.stage = name.clone();
                 self.progress = progress;
-                self.class = class;
+                self.class = class.clone();
+                let run = self.open_run(ts);
+                run.stage = name;
+                run.class = class;
             }
             Event::Intermission => {
                 self.mode = Mode::Intermission;
@@ -149,12 +240,23 @@ impl GameState {
                 self.boss = None;
                 self.target = None;
                 self.progress = 0.0;
+                self.close_run(ts);
+            }
+            Event::RoomLeft => {
+                self.mode = Mode::Idle;
+                self.boss = None;
+                self.target = None;
+                self.stage.clear();
+                self.class.clear();
+                self.progress = 0.0;
+                self.close_run(ts);
             }
         }
     }
 
     pub fn feed(&mut self, raw: &str) -> Option<u64> {
         let line = split_line(raw)?;
+        self.last_ts = self.last_ts.max(line.ts);
         if let Some(ev) = parse_msg(line.msg) {
             self.apply(line.ts, ev);
         }
@@ -242,6 +344,111 @@ mod tests {
         assert_eq!(k.ts, first_ts);
         kill(&mut gs, 380, 0);
         assert_eq!(gs.last_kill.as_ref().unwrap().strike, 0);
+    }
+
+    fn feed_at(gs: &mut GameState, t: &str, msg: &str) {
+        gs.feed(&format!("2026.09.08 {t} Debug      -  {msg}"));
+    }
+
+    #[test]
+    fn run_lifecycle() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "08:18:01",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer",
+        );
+        assert_eq!(gs.runs.len(), 1);
+        assert!(gs.runs[0].end_ts.is_none());
+        feed_at(
+            &mut gs,
+            "08:19:54",
+            "ECLIPTICA - now fighting boss: DarkMouth(Clone) on phase: 0",
+        );
+        feed_at(&mut gs, "08:19:55", "Dealing 100 STRIKE damage");
+        feed_at(
+            &mut gs,
+            "08:20:10",
+            "Boss DarkMouth dead, personal damage dealt: ",
+        );
+        feed_at(&mut gs, "08:20:10", "STRIKE DMG: 4100");
+        feed_at(&mut gs, "08:20:10", "NON-STRIKE DMG: 55");
+        feed_at(&mut gs, "08:20:49", "ECLIPTICA - now in lobby");
+        let run = &gs.runs[0];
+        assert!(run.end_ts.is_some());
+        assert_eq!(run.stage, "Hall of Beginnings");
+        assert_eq!(run.class, "Spellhammer");
+        assert_eq!(run.fights.len(), 1);
+        let f = &run.fights[0];
+        assert_eq!(f.dmg, 100);
+        assert_eq!(f.kill, Some((4100, 55)));
+        assert!(f.end_ts.is_some());
+        feed_at(
+            &mut gs,
+            "08:21:25",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Nekomancer",
+        );
+        assert_eq!(gs.runs.len(), 2);
+        assert_eq!(gs.runs[1].class, "Nekomancer");
+    }
+
+    #[test]
+    fn room_left_ends_run() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "08:29:14",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Twinmage",
+        );
+        feed_at(
+            &mut gs,
+            "08:30:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0",
+        );
+        feed_at(&mut gs, "08:30:52", "[Behaviour] OnLeftRoom");
+        assert_eq!(gs.mode, Mode::Idle);
+        assert!(gs.boss.is_none());
+        let run = &gs.runs[0];
+        assert!(run.end_ts.is_some());
+        assert!(run.fights[0].end_ts.is_some());
+        assert_eq!(run.fights[0].kill, None);
+    }
+
+    #[test]
+    fn rotation_ends_run() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "08:29:14",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Twinmage",
+        );
+        feed_at(
+            &mut gs,
+            "08:29:20",
+            "damage has been taken: 5, from source: x",
+        );
+        let last = gs.feed(
+            "2026.09.08 08:30:00 Debug      -  ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0",
+        ).unwrap();
+        gs.log_rotated();
+        assert_eq!(gs.mode, Mode::Idle);
+        assert!(gs.boss.is_none());
+        assert!(gs.taken.is_empty());
+        let run = &gs.runs[0];
+        assert_eq!(run.end_ts, Some(last));
+        assert_eq!(run.fights[0].end_ts, Some(last));
+    }
+
+    #[test]
+    fn boss_without_stage_still_records() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "09:00:00",
+            "ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0",
+        );
+        assert_eq!(gs.runs.len(), 1);
+        assert_eq!(gs.runs[0].fights[0].name, "Yuki");
     }
 
     #[test]

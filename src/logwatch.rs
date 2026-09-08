@@ -11,21 +11,25 @@ pub fn log_dir() -> Option<PathBuf> {
     Some(Path::new(&profile).join("AppData/LocalLow/VRChat/VRChat"))
 }
 
+pub fn all_logs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("output_log_") && name.ends_with(".txt")
+        })
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    logs.sort();
+    logs.into_iter().map(|(_, p)| p).collect()
+}
+
 pub fn newest_log(dir: &Path) -> Option<PathBuf> {
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for entry in std::fs::read_dir(dir).ok()? {
-        let entry = entry.ok()?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with("output_log_") || !name.ends_with(".txt") {
-            continue;
-        }
-        let modified = entry.metadata().ok()?.modified().ok()?;
-        if best.as_ref().is_none_or(|(t, _)| modified > *t) {
-            best = Some((modified, entry.path()));
-        }
-    }
-    best.map(|(_, p)| p)
+    all_logs(dir).pop()
 }
 
 pub fn open_shared(path: &Path) -> std::io::Result<File> {
@@ -52,30 +56,42 @@ impl LogWatch {
         }
     }
 
-    pub fn poll(&mut self, mut on_line: impl FnMut(&str)) {
+    #[cfg(test)]
+    pub fn for_dir(dir: PathBuf) -> Self {
+        LogWatch {
+            dir: Some(dir),
+            ..Default::default()
+        }
+    }
+
+    pub fn poll(&mut self, mut on_line: impl FnMut(&str)) -> bool {
         let Some(dir) = self.dir.as_deref() else {
-            return;
+            return false;
         };
         let newest = newest_log(dir);
         if newest != self.path {
+            let rotated = self.path.is_some();
             self.file = newest.as_deref().and_then(|p| open_shared(p).ok());
             self.path = newest;
             self.offset = 0;
             self.carry.clear();
+            if rotated {
+                return true;
+            }
         }
         let Some(file) = self.file.as_mut() else {
-            return;
+            return false;
         };
         let len = match file.metadata() {
             Ok(m) => m.len(),
-            Err(_) => return,
+            Err(_) => return false,
         };
         if len < self.offset {
             self.offset = 0;
             self.carry.clear();
         }
         if len == self.offset || file.seek(SeekFrom::Start(self.offset)).is_err() {
-            return;
+            return false;
         }
         let mut buf = [0u8; CHUNK];
         while self.offset < len {
@@ -98,6 +114,7 @@ impl LogWatch {
             }
             self.carry.extend_from_slice(data);
         }
+        false
     }
 }
 
@@ -115,16 +132,13 @@ mod tests {
     use std::io::Write;
 
     fn watch_for(dir: &Path) -> LogWatch {
-        LogWatch {
-            dir: Some(dir.to_path_buf()),
-            ..Default::default()
-        }
+        LogWatch::for_dir(dir.to_path_buf())
     }
 
-    fn collect(w: &mut LogWatch) -> Vec<String> {
+    fn collect(w: &mut LogWatch) -> (Vec<String>, bool) {
         let mut out = Vec::new();
-        w.poll(|l| out.push(l.to_string()));
-        out
+        let rotated = w.poll(|l| out.push(l.to_string()));
+        (out, rotated)
     }
 
     #[test]
@@ -138,12 +152,14 @@ mod tests {
         fa.flush().unwrap();
 
         let mut w = watch_for(&dir);
-        assert_eq!(collect(&mut w), ["line one", "line two"]);
+        let (lines, rotated) = collect(&mut w);
+        assert_eq!(lines, ["line one", "line two"]);
+        assert!(!rotated);
 
         fa.write_all("al done\n".as_bytes()).unwrap();
         fa.flush().unwrap();
-        assert_eq!(collect(&mut w), ["partial done"]);
-        assert_eq!(collect(&mut w), Vec::<String>::new());
+        assert_eq!(collect(&mut w), (vec!["partial done".to_string()], false));
+        assert_eq!(collect(&mut w), (Vec::new(), false));
 
         let log_b = dir.join("output_log_2026-01-02_00-00-00.txt");
         std::fs::write(&log_b, "fresh \u{1d04}\u{29c} log\n").unwrap();
@@ -154,8 +170,13 @@ mod tests {
             .unwrap()
             .set_modified(future)
             .unwrap();
-        assert_eq!(collect(&mut w), ["fresh \u{1d04}\u{29c} log"]);
+        assert_eq!(collect(&mut w), (Vec::new(), true));
+        assert_eq!(
+            collect(&mut w),
+            (vec!["fresh \u{1d04}\u{29c} log".to_string()], false)
+        );
         assert_eq!(w.path.as_deref(), Some(log_b.as_path()));
+        assert_eq!(all_logs(&dir), [log_a.clone(), log_b.clone()]);
 
         drop(fa);
         std::fs::remove_dir_all(&dir).unwrap();
