@@ -70,7 +70,12 @@ impl GameState {
                 }
             }
             Event::BossDead { name } => {
-                self.pending_kill = Some(KillSummary { ts, boss: name.clone(), strike: 0, non_strike: 0 });
+                self.pending_kill = Some(KillSummary {
+                    ts,
+                    boss: name.clone(),
+                    strike: 0,
+                    non_strike: 0,
+                });
                 if self.boss.as_deref() == Some(&name) {
                     self.boss = None;
                     self.target = None;
@@ -114,13 +119,21 @@ impl GameState {
                     self.target = Some(player.clone());
                     self.target_since = ts;
                     self.targets_total += 1;
-                    self.history.push_back(TargetEntry { ts, player, boss: object });
+                    self.history.push_back(TargetEntry {
+                        ts,
+                        player,
+                        boss: object,
+                    });
                     if self.history.len() > 100 {
                         self.history.pop_front();
                     }
                 }
             }
-            Event::Stage { name, progress, class } => {
+            Event::Stage {
+                name,
+                progress,
+                class,
+            } => {
                 self.mode = Mode::Stage;
                 self.stage = name;
                 self.progress = progress;
@@ -178,7 +191,9 @@ mod tests {
         let mut gs = GameState::default();
         gs.feed(&format!("{P}ownership of Neko1 transferred to Alice"));
         assert!(gs.target.is_none());
-        gs.feed(&format!("{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"));
+        gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"
+        ));
         gs.feed(&format!("{P}ownership of Neko1 transferred to Alice"));
         assert!(gs.target.is_none());
         gs.feed(&format!("{P}ownership of Kakarot transferred to Alice"));
@@ -190,7 +205,9 @@ mod tests {
     fn kill_dedupe() {
         let mut gs = GameState::default();
         let kill = |gs: &mut GameState, t: &str, s: u64| {
-            gs.feed(&format!("2026.09.07 {t} Debug      -  Boss Kakarot dead, personal damage dealt: "));
+            gs.feed(&format!(
+                "2026.09.07 {t} Debug      -  Boss Kakarot dead, personal damage dealt: "
+            ));
             gs.feed(&format!("2026.09.07 {t} Debug      -  STRIKE DMG: {s}"));
             gs.feed(&format!("2026.09.07 {t} Debug      -  NON-STRIKE DMG: 0"));
         };
@@ -207,7 +224,9 @@ mod tests {
         let mut gs = GameState::default();
         let kill = |gs: &mut GameState, secs: u64, s: u64| {
             let t = fmt_clock(3600 + secs);
-            gs.feed(&format!("2026.09.08 {t} Debug      -  Boss Gravetender dead, personal damage dealt: "));
+            gs.feed(&format!(
+                "2026.09.08 {t} Debug      -  Boss Gravetender dead, personal damage dealt: "
+            ));
             gs.feed(&format!("2026.09.08 {t} Debug      -  STRIKE DMG: {s}"));
             gs.feed(&format!("2026.09.08 {t} Debug      -  NON-STRIKE DMG: 0"));
         };
@@ -228,8 +247,12 @@ mod tests {
     #[test]
     fn dps_windows() {
         let mut gs = GameState::default();
-        let t0 = split_line(&format!("{P}Dealing 100 STRIKE damage")).unwrap().ts;
-        gs.feed(&format!("{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"));
+        let t0 = split_line(&format!("{P}Dealing 100 STRIKE damage"))
+            .unwrap()
+            .ts;
+        gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"
+        ));
         gs.feed(&format!("{P}Dealing 100 STRIKE damage"));
         gs.feed(&format!("{P}Dealing 50 STRIKE damage"));
         assert_eq!(gs.fight_dmg, 150);
@@ -244,9 +267,13 @@ mod tests {
     #[test]
     fn boss_fight_resets() {
         let mut gs = GameState::default();
-        gs.feed(&format!("{P}ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0.6"));
+        gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0.6"
+        ));
         gs.feed(&format!("{P}Dealing 100 STRIKE damage"));
-        gs.feed(&format!("{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0.6"));
+        gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0.6"
+        ));
         assert_eq!(gs.fight_dmg, 0);
         assert_eq!(gs.boss.as_deref(), Some("YukiPhase2"));
     }

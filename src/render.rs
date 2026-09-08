@@ -89,14 +89,27 @@ impl Renderer {
             info.bmiHeader.biBitCount = 32;
             info.bmiHeader.biCompression = BI_RGB;
             let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, std::ptr::null_mut(), 0);
+            let bitmap = CreateDIBSection(
+                dc,
+                &info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                std::ptr::null_mut(),
+                0,
+            );
             SelectObject(dc, bitmap as _);
             SetBkMode(dc, TRANSPARENT as _);
             let font = |pt: i32, weight: i32, face: &str| {
                 let name = wide(face);
                 CreateFontW(
                     -((pt as f32 * scale) as i32),
-                    0, 0, 0, weight, 0, 0, 0,
+                    0,
+                    0,
+                    0,
+                    weight,
+                    0,
+                    0,
+                    0,
                     DEFAULT_CHARSET as u32,
                     OUT_DEFAULT_PRECIS as u32,
                     CLIP_DEFAULT_PRECIS as u32,
@@ -113,7 +126,15 @@ impl Renderer {
                 font(26, FW_BOLD as i32, "Segoe UI\0"),
                 font(10, FW_NORMAL as i32, "Segoe MDL2 Assets\0"),
             ];
-            Renderer { width, height, dc, bitmap, bits: bits as *mut u8, scale, fonts }
+            Renderer {
+                width,
+                height,
+                dc,
+                bitmap,
+                bits: bits as *mut u8,
+                scale,
+                fonts,
+            }
         }
     }
 
@@ -124,7 +145,12 @@ impl Renderer {
     fn fill(&self, x: i32, y: i32, w: i32, h: i32, color: u32) {
         unsafe {
             let brush = CreateSolidBrush(color);
-            let r = RECT { left: self.px(x), top: self.px(y), right: self.px(x + w), bottom: self.px(y + h) };
+            let r = RECT {
+                left: self.px(x),
+                top: self.px(y),
+                right: self.px(x + w),
+                bottom: self.px(y + h),
+            };
             FillRect(self.dc, &r, brush);
             DeleteObject(brush as _);
         }
@@ -162,11 +188,23 @@ impl Renderer {
         self.rround(x, y, d, d, d / 2, color);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn text(&self, x: i32, y: i32, w: i32, font: usize, color: u32, flags: u32, s: &str) {
         self.text_rect(x, y, w, 40, font, color, flags, s);
     }
 
-    fn text_rect(&self, x: i32, y: i32, w: i32, h: i32, font: usize, color: u32, flags: u32, s: &str) {
+    #[allow(clippy::too_many_arguments)]
+    fn text_rect(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        font: usize,
+        color: u32,
+        flags: u32,
+        s: &str,
+    ) {
         unsafe {
             SelectObject(self.dc, self.fonts[font] as _);
             SetTextColor(self.dc, color);
@@ -204,7 +242,16 @@ impl Renderer {
         } else {
             DIM
         };
-        self.text_rect(bx, by, bw, bh, F_GLYPH, glyph_color, DT_CENTER | DT_VCENTER, GLYPH_CLOSE);
+        self.text_rect(
+            bx,
+            by,
+            bw,
+            bh,
+            F_GLYPH,
+            glyph_color,
+            DT_CENTER | DT_VCENTER,
+            GLYPH_CLOSE,
+        );
 
         let (status, status_color) = match gs.mode {
             Mode::Idle => ("waiting for a run".to_string(), DIM),
@@ -231,7 +278,15 @@ impl Renderer {
                     Some(t) => {
                         self.text(M + 12, 100, W - 24, F_BIG, color, DT_LEFT, t);
                         let held = now.saturating_sub(gs.target_since);
-                        self.text(M + 12, 100, W - 24, F_TINY, DIM, DT_RIGHT, &format!("{held}s"));
+                        self.text(
+                            M + 12,
+                            100,
+                            W - 24,
+                            F_TINY,
+                            DIM,
+                            DT_RIGHT,
+                            &format!("{held}s"),
+                        );
                     }
                     None => self.text(M + 12, 100, W - 24, F_BOSS, DIM, DT_LEFT, "-"),
                 }
@@ -271,7 +326,11 @@ impl Renderer {
         self.text(M, 258, W, F_LABEL, DIM, DT_LEFT, "DAMAGE TAKEN");
         let mut y = 274;
         for hit in gs.taken.iter().rev().take(3) {
-            let src = if hit.source.is_empty() { "environment" } else { &hit.source };
+            let src = if hit.source.is_empty() {
+                "environment"
+            } else {
+                &hit.source
+            };
             self.text(M, y, 40, F_BODY, DANGER, DT_LEFT, &hit.amount.to_string());
             self.text(M + 44, y, W - 110, F_BODY, TEXT, DT_LEFT, src);
             self.text(M, y, W, F_TINY, DIM, DT_RIGHT, &fmt_clock(hit.ts));
@@ -318,7 +377,9 @@ impl Renderer {
         let n = (self.width * self.height * 4) as usize;
         out.resize(n, 0);
         let src = unsafe { std::slice::from_raw_parts(self.bits, n) };
-        for (d, s) in out.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        let (dst, _) = out.as_chunks_mut::<4>();
+        let (pix, _) = src.as_chunks::<4>();
+        for (d, s) in dst.iter_mut().zip(pix) {
             d[0] = s[2];
             d[1] = s[1];
             d[2] = s[0];
@@ -343,7 +404,7 @@ fn group_digits(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -391,8 +452,12 @@ mod tests {
     fn draw_smoke_bars() {
         const P: &str = "2026.09.07 09:12:28 Debug      -  ";
         let mut gs = GameState::default();
-        gs.feed(&format!("{P}ECLIPTICA - now in stage: Stage_Test on phase: 0.5 as class: Blade"));
-        gs.feed(&format!("{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.5"));
+        gs.feed(&format!(
+            "{P}ECLIPTICA - now in stage: Stage_Test on phase: 0.5 as class: Blade"
+        ));
+        gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.5"
+        ));
         let mut r = Renderer::new(96);
         let f = Frame {
             now: 0,
@@ -406,9 +471,8 @@ mod tests {
         };
         r.draw(&mut gs, &f);
         let pix = |x: i32, y: i32| -> u32 {
-            let s = unsafe {
-                std::slice::from_raw_parts(r.bits, (r.width * r.height * 4) as usize)
-            };
+            let s =
+                unsafe { std::slice::from_raw_parts(r.bits, (r.width * r.height * 4) as usize) };
             let i = ((y * r.width + x) * 4) as usize;
             rgb(s[i + 2] as u32, s[i + 1] as u32, s[i] as u32)
         };

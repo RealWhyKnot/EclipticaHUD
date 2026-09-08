@@ -89,7 +89,12 @@ impl App {
         };
         self.renderer.draw(&mut self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
-        self.vr.submit(&self.rgba, self.renderer.width as u32, self.renderer.height as u32, true);
+        self.vr.submit(
+            &self.rgba,
+            self.renderer.width as u32,
+            self.renderer.height as u32,
+            true,
+        );
     }
 
     pub fn tick(&mut self) -> Tick {
@@ -130,7 +135,12 @@ impl App {
         if redraw {
             self.render();
         } else {
-            self.vr.submit(&self.rgba, self.renderer.width as u32, self.renderer.height as u32, false);
+            self.vr.submit(
+                &self.rgba,
+                self.renderer.width as u32,
+                self.renderer.height as u32,
+                false,
+            );
         }
         let want: u32 = if anim { 33 } else { 1000 };
         let timer_ms = (want != self.timer_ms).then_some(want);
@@ -157,13 +167,17 @@ mod tests {
         let t = app.tick();
         assert!(!t.redraw);
         assert_eq!(t.timer_ms, None);
-        app.gs.feed(&format!("{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"));
-        app.gs.feed(&format!("{P}ownership of Kakarot transferred to Alice"));
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"
+        ));
+        app.gs
+            .feed(&format!("{P}ownership of Kakarot transferred to Alice"));
         let t = app.tick();
         assert!(t.redraw);
         assert_eq!(t.timer_ms, Some(33));
         assert!(app.flash_at.is_some());
-        app.gs.feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
+        app.gs
+            .feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
         app.tick();
         assert_eq!(app.dps_boss, None);
     }
@@ -171,7 +185,9 @@ mod tests {
     #[test]
     fn timer_settles_after_animation() {
         let mut app = headless();
-        app.gs.feed(&format!("{P}ECLIPTICA - now in stage: Stage_Test on phase: 0.5 as class: Blade"));
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now in stage: Stage_Test on phase: 0.5 as class: Blade"
+        ));
         let t = app.tick();
         assert!(t.redraw);
         assert_eq!(t.timer_ms, Some(33));

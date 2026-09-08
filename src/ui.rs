@@ -30,7 +30,12 @@ fn load_pos() -> Option<(i32, i32)> {
 }
 
 fn save_pos(hwnd: HWND) {
-    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut r = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     if unsafe { GetWindowRect(hwnd, &mut r) } == 0 {
         return;
     }
@@ -43,7 +48,12 @@ fn save_pos(hwnd: HWND) {
 }
 
 fn default_pos(w: i32, h: i32) -> (i32, i32) {
-    let mut work = RECT { left: 0, top: 0, right: 1920, bottom: 1080 };
+    let mut work = RECT {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
     unsafe {
         SystemParametersInfoW(
             SPI_GETWORKAREA,
@@ -88,7 +98,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
             if let Some(app) = app_mut(hwnd) {
-                BitBlt(hdc, 0, 0, app.renderer.width, app.renderer.height, app.renderer.dc, 0, 0, SRCCOPY);
+                BitBlt(
+                    hdc,
+                    0,
+                    0,
+                    app.renderer.width,
+                    app.renderer.height,
+                    app.renderer.dc,
+                    0,
+                    0,
+                    SRCCOPY,
+                );
             }
             EndPaint(hwnd, &ps);
             0
@@ -244,9 +264,19 @@ pub fn run() {
         );
 
         let dark: i32 = 1;
-        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE as u32, &dark as *const i32 as *const core::ffi::c_void, 4);
-        let round: i32 = DWMWCP_ROUND as i32;
-        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE as u32, &round as *const i32 as *const core::ffi::c_void, 4);
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            &dark as *const i32 as *const core::ffi::c_void,
+            4,
+        );
+        let round: i32 = DWMWCP_ROUND;
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &round as *const i32 as *const core::ffi::c_void,
+            4,
+        );
 
         app.tick();
         app.render();

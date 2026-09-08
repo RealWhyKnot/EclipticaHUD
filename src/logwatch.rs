@@ -29,7 +29,10 @@ pub fn newest_log(dir: &Path) -> Option<PathBuf> {
 }
 
 pub fn open_shared(path: &Path) -> std::io::Result<File> {
-    std::fs::OpenOptions::new().read(true).share_mode(SHARE_ALL).open(path)
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_ALL)
+        .open(path)
 }
 
 #[derive(Default)]
@@ -43,11 +46,16 @@ pub struct LogWatch {
 
 impl LogWatch {
     pub fn new() -> Self {
-        LogWatch { dir: log_dir(), ..Default::default() }
+        LogWatch {
+            dir: log_dir(),
+            ..Default::default()
+        }
     }
 
     pub fn poll(&mut self, mut on_line: impl FnMut(&str)) {
-        let Some(dir) = self.dir.as_deref() else { return };
+        let Some(dir) = self.dir.as_deref() else {
+            return;
+        };
         let newest = newest_log(dir);
         if newest != self.path {
             self.file = newest.as_deref().and_then(|p| open_shared(p).ok());
@@ -55,7 +63,9 @@ impl LogWatch {
             self.offset = 0;
             self.carry.clear();
         }
-        let Some(file) = self.file.as_mut() else { return };
+        let Some(file) = self.file.as_mut() else {
+            return;
+        };
         let len = match file.metadata() {
             Ok(m) => m.len(),
             Err(_) => return,
@@ -105,7 +115,10 @@ mod tests {
     use std::io::Write;
 
     fn watch_for(dir: &Path) -> LogWatch {
-        LogWatch { dir: Some(dir.to_path_buf()), ..Default::default() }
+        LogWatch {
+            dir: Some(dir.to_path_buf()),
+            ..Default::default()
+        }
     }
 
     fn collect(w: &mut LogWatch) -> Vec<String> {
@@ -120,7 +133,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let log_a = dir.join("output_log_2026-01-01_00-00-00.txt");
         let mut fa = File::create(&log_a).unwrap();
-        fa.write_all("line one\r\nline two\nparti".as_bytes()).unwrap();
+        fa.write_all("line one\r\nline two\nparti".as_bytes())
+            .unwrap();
         fa.flush().unwrap();
 
         let mut w = watch_for(&dir);

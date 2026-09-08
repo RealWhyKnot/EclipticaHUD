@@ -43,7 +43,12 @@ fn steamvr_running() -> bool {
         let mut found = false;
         let mut more = Process32FirstW(snap, &mut entry) != 0;
         while more && !found {
-            let name: Vec<u16> = entry.szExeFile.iter().copied().take_while(|&c| c != 0).collect();
+            let name: Vec<u16> = entry
+                .szExeFile
+                .iter()
+                .copied()
+                .take_while(|&c| c != 0)
+                .collect();
             let name = String::from_utf16_lossy(&name);
             found = name.eq_ignore_ascii_case("vrserver.exe");
             more = Process32NextW(snap, &mut entry) != 0;
@@ -55,7 +60,10 @@ fn steamvr_running() -> bool {
 
 impl VrOverlay {
     pub fn new() -> Self {
-        VrOverlay { inner: None, last_try: None }
+        VrOverlay {
+            inner: None,
+            last_try: None,
+        }
     }
 
     fn try_init(&mut self) {
@@ -67,26 +75,43 @@ impl VrOverlay {
             Ok(c) => c,
             Err(_) => return,
         };
-        let Ok(mut overlay) = context.overlay() else { return };
-        let Ok(handle) = overlay.create_overlay(OVERLAY_KEY, OVERLAY_NAME) else { return };
+        let Ok(mut overlay) = context.overlay() else {
+            return;
+        };
+        let Ok(handle) = overlay.create_overlay(OVERLAY_KEY, OVERLAY_NAME) else {
+            return;
+        };
         let _ = overlay.set_width(handle, WIDTH_METERS);
         let _ = overlay.set_visibility(handle, true);
-        self.inner = Some(Inner { context, handle, attached: false, needs_frame: true, failures: 0 });
+        self.inner = Some(Inner {
+            context,
+            handle,
+            attached: false,
+            needs_frame: true,
+            failures: 0,
+        });
     }
 
     fn attach(inner: &mut Inner) {
         if inner.attached {
             return;
         }
-        let Ok(system) = inner.context.system() else { return };
-        let Some(index) =
-            system.tracked_device_index_for_controller_role(openvr::TrackedControllerRole::LeftHand)
+        let Ok(system) = inner.context.system() else {
+            return;
+        };
+        let Some(index) = system
+            .tracked_device_index_for_controller_role(openvr::TrackedControllerRole::LeftHand)
         else {
             return;
         };
-        let Ok(mut overlay) = inner.context.overlay() else { return };
+        let Ok(mut overlay) = inner.context.overlay() else {
+            return;
+        };
         let transform = openvr::pose::Matrix3x4(WRIST_TRANSFORM);
-        if overlay.set_transform_tracked_device_relative(inner.handle, index, &transform).is_ok() {
+        if overlay
+            .set_transform_tracked_device_relative(inner.handle, index, &transform)
+            .is_ok()
+        {
             inner.attached = true;
         }
     }
@@ -101,12 +126,16 @@ impl VrOverlay {
 
     pub fn submit(&mut self, rgba: &[u8], width: u32, height: u32, changed: bool) {
         if self.inner.is_none() {
-            let due = self.last_try.is_none_or(|t| t.elapsed().as_secs() >= RETRY_SECS);
+            let due = self
+                .last_try
+                .is_none_or(|t| t.elapsed().as_secs() >= RETRY_SECS);
             if due {
                 self.try_init();
             }
         }
-        let Some(inner) = self.inner.as_mut() else { return };
+        let Some(inner) = self.inner.as_mut() else {
+            return;
+        };
         Self::attach(inner);
         if !(changed || inner.needs_frame) || rgba.is_empty() {
             return;

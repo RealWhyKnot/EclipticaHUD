@@ -1,13 +1,27 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-    BossFight { name: String },
-    BossDead { name: String },
+    BossFight {
+        name: String,
+    },
+    BossDead {
+        name: String,
+    },
     StrikeTotal(u64),
     NonStrikeTotal(u64),
     DealtStrike(u64),
-    DamageTaken { amount: u64, source: String },
-    Ownership { object: String, player: String },
-    Stage { name: String, progress: f32, class: String },
+    DamageTaken {
+        amount: u64,
+        source: String,
+    },
+    Ownership {
+        object: String,
+        player: String,
+    },
+    Stage {
+        name: String,
+        progress: f32,
+        class: String,
+    },
     Intermission,
     Lobby,
 }
@@ -42,7 +56,10 @@ pub fn split_line(raw: &str) -> Option<Line<'_>> {
     let ts = parse_ts(&raw[..19])?;
     let rest = &raw[19..];
     let sep = rest.find("-  ")?;
-    Some(Line { ts, msg: &rest[sep + 3..] })
+    Some(Line {
+        ts,
+        msg: &rest[sep + 3..],
+    })
 }
 
 fn parse_ts(s: &str) -> Option<u64> {
@@ -68,7 +85,10 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
         if player.is_empty() {
             return None;
         }
-        return Some(Event::Ownership { object: object.to_string(), player: player.to_string() });
+        return Some(Event::Ownership {
+            object: object.to_string(),
+            player: player.to_string(),
+        });
     }
     if let Some(rest) = msg.strip_prefix("Dealing ") {
         let n = rest.strip_suffix(" STRIKE damage")?.parse().ok()?;
@@ -84,7 +104,9 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
     if let Some(rest) = msg.strip_prefix("ECLIPTICA - now ") {
         if let Some(rest) = rest.strip_prefix("fighting boss: ") {
             let (name, _) = rest.split_once("(Clone)")?;
-            return Some(Event::BossFight { name: name.to_string() });
+            return Some(Event::BossFight {
+                name: name.to_string(),
+            });
         }
         if let Some(rest) = rest.strip_prefix("in stage: ") {
             let (name, rest) = rest.split_once(" on phase: ")?;
@@ -105,8 +127,12 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
         return None;
     }
     if let Some(rest) = msg.strip_prefix("Boss ") {
-        let name = rest.strip_suffix("dead, personal damage dealt: ")?.trim_end();
-        return Some(Event::BossDead { name: name.to_string() });
+        let name = rest
+            .strip_suffix("dead, personal damage dealt: ")?
+            .trim_end();
+        return Some(Event::BossDead {
+            name: name.to_string(),
+        });
     }
     if let Some(rest) = msg.strip_prefix("STRIKE DMG: ") {
         return Some(Event::StrikeTotal(rest.trim().parse().ok()?));
@@ -126,7 +152,10 @@ mod tests {
         let ev = parse_msg("ownership of ManalyteBig transferred to Be\u{430}rHands").unwrap();
         assert_eq!(
             ev,
-            Event::Ownership { object: "ManalyteBig".into(), player: "Be\u{430}rHands".into() }
+            Event::Ownership {
+                object: "ManalyteBig".into(),
+                player: "Be\u{430}rHands".into()
+            }
         );
         let ev = parse_msg("ownership of BigWolf transferred to \u{1d04}\u{29c}\u{1d07}\u{1d05}\u{1d1c}\u{493} \u{6c17}\u{307e}\u{3050}\u{308c}").unwrap();
         match ev {
@@ -139,30 +168,52 @@ mod tests {
     fn boss_lines() {
         assert_eq!(
             parse_msg("ECLIPTICA - now fighting boss: ObisidusPhase2(Clone) on phase: 0.7223684"),
-            Some(Event::BossFight { name: "ObisidusPhase2".into() })
+            Some(Event::BossFight {
+                name: "ObisidusPhase2".into()
+            })
         );
         assert_eq!(
             parse_msg("Boss Kakarot dead, personal damage dealt: "),
-            Some(Event::BossDead { name: "Kakarot".into() })
+            Some(Event::BossDead {
+                name: "Kakarot".into()
+            })
         );
-        assert_eq!(parse_msg("STRIKE DMG: 4793"), Some(Event::StrikeTotal(4793)));
-        assert_eq!(parse_msg("NON-STRIKE DMG: 0"), Some(Event::NonStrikeTotal(0)));
+        assert_eq!(
+            parse_msg("STRIKE DMG: 4793"),
+            Some(Event::StrikeTotal(4793))
+        );
+        assert_eq!(
+            parse_msg("NON-STRIKE DMG: 0"),
+            Some(Event::NonStrikeTotal(0))
+        );
     }
 
     #[test]
     fn damage_lines() {
-        assert_eq!(parse_msg("Dealing 140 STRIKE damage"), Some(Event::DealtStrike(140)));
+        assert_eq!(
+            parse_msg("Dealing 140 STRIKE damage"),
+            Some(Event::DealtStrike(140))
+        );
         assert_eq!(
             parse_msg("damage has been taken: 12, from source: (Khepri) attack_Claws2"),
-            Some(Event::DamageTaken { amount: 12, source: "(Khepri) attack_Claws2".into() })
+            Some(Event::DamageTaken {
+                amount: 12,
+                source: "(Khepri) attack_Claws2".into()
+            })
         );
         assert_eq!(
             parse_msg("damage has been taken: 2, from source: "),
-            Some(Event::DamageTaken { amount: 2, source: String::new() })
+            Some(Event::DamageTaken {
+                amount: 2,
+                source: String::new()
+            })
         );
         assert_eq!(
             parse_msg("damage has been taken: 2, from source:"),
-            Some(Event::DamageTaken { amount: 2, source: String::new() })
+            Some(Event::DamageTaken {
+                amount: 2,
+                source: String::new()
+            })
         );
     }
 
@@ -174,9 +225,16 @@ mod tests {
         .unwrap();
         assert_eq!(
             ev,
-            Event::Stage { name: "Hall of Beginnings".into(), progress: 0.0, class: "Spellhammer".into() }
+            Event::Stage {
+                name: "Hall of Beginnings".into(),
+                progress: 0.0,
+                class: "Spellhammer".into()
+            }
         );
-        assert_eq!(parse_msg("ECLIPTICA - now in intermission"), Some(Event::Intermission));
+        assert_eq!(
+            parse_msg("ECLIPTICA - now in intermission"),
+            Some(Event::Intermission)
+        );
         assert_eq!(parse_msg("ECLIPTICA - now in lobby"), Some(Event::Lobby));
     }
 
