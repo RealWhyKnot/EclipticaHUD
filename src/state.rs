@@ -39,6 +39,7 @@ pub struct Run {
     pub stage: String,
     pub class: String,
     pub fights: Vec<BossFight>,
+    pub deaths: u32,
 }
 
 impl Run {
@@ -90,6 +91,7 @@ pub enum Mode {
 
 const DPS_WINDOW: u64 = 10;
 const KILL_DEDUPE_SECS: u64 = 30;
+const DEATH_HOLD: u64 = 3;
 
 #[derive(Default)]
 pub struct GameState {
@@ -111,6 +113,7 @@ pub struct GameState {
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
     dead_seen: Option<(String, u64)>,
+    dead_until: u64,
     last_ts: u64,
     pub changed: bool,
 }
@@ -155,30 +158,41 @@ impl GameState {
         self.progress = 0.0;
         self.pending_kill = None;
         self.dead_seen = None;
+        self.dead_until = 0;
         self.taken.clear();
         self.history.clear();
         self.changed = true;
+    }
+
+    pub fn is_dead(&self, now: u64) -> bool {
+        now < self.dead_until
     }
     pub fn apply(&mut self, ts: u64, ev: Event) {
         self.changed = true;
         match ev {
             Event::BossFight { name } => {
                 self.bosses.insert(name.clone());
-                let just_ended = self
-                    .runs
-                    .last()
-                    .filter(|r| r.end_ts.is_none())
-                    .is_some_and(|r| {
-                        r.fights.iter().rev().any(|f| {
-                            f.name == name
-                                && f.end_ts
-                                    .is_some_and(|e| ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
-                        })
-                    });
+                let just_ended = self.runs.last().is_some_and(|r| {
+                    r.fights.iter().rev().any(|f| {
+                        f.name == name
+                            && f.end_ts
+                                .is_some_and(|e| ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
+                    })
+                });
+                let open_run = self.runs.last().filter(|r| r.end_ts.is_none());
+                let transition = open_run.and_then(|r| r.fights.last()).is_some_and(|prev| {
+                    base_name(&prev.name) == base_name(&name)
+                        && phase_num(&name) > phase_num(&prev.name)
+                        && prev
+                            .end_ts
+                            .is_none_or(|e| ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
+                });
                 if self.boss.as_deref() != Some(&name) && !just_ended {
                     self.boss = Some(name.clone());
-                    self.fight_start = ts;
-                    self.fight_dmg = 0;
+                    if !transition {
+                        self.fight_start = ts;
+                        self.fight_dmg = 0;
+                    }
                     if let Some(f) = self.open_fight() {
                         f.end_ts = Some(ts);
                     }
@@ -300,6 +314,14 @@ impl GameState {
                 self.progress = 0.0;
                 self.close_run(ts);
             }
+            Event::PlayerDead => {
+                if ts >= self.dead_until {
+                    if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
+                        r.deaths += 1;
+                    }
+                }
+                self.dead_until = ts + DEATH_HOLD;
+            }
         }
     }
 
@@ -395,8 +417,9 @@ mod tests {
         assert_eq!(gs.last_kill.as_ref().unwrap().strike, 0);
     }
 
-    fn feed_at(gs: &mut GameState, t: &str, msg: &str) {
-        gs.feed(&format!("2026.09.08 {t} Debug      -  {msg}"));
+    fn feed_at(gs: &mut GameState, t: &str, msg: &str) -> u64 {
+        gs.feed(&format!("2026.09.08 {t} Debug      -  {msg}"))
+            .unwrap()
     }
 
     #[test]
@@ -563,6 +586,37 @@ mod tests {
     }
 
     #[test]
+    fn boss_flap_after_lobby_ignored() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "10:34:13",
+            "ECLIPTICA - now in stage: Stage_Bringer on phase: 1 as class: Spellhammer",
+        );
+        feed_at(
+            &mut gs,
+            "10:56:27",
+            "ECLIPTICA - now fighting boss: JimBringerPhase3(Clone) on phase: 1",
+        );
+        feed_at(
+            &mut gs,
+            "11:12:46",
+            "Boss JimBringerPhase3 dead, personal damage dealt: ",
+        );
+        feed_at(&mut gs, "11:12:46", "STRIKE DMG: 21059");
+        feed_at(&mut gs, "11:12:46", "NON-STRIKE DMG: 0");
+        feed_at(&mut gs, "11:12:46", "ECLIPTICA - now in lobby");
+        feed_at(
+            &mut gs,
+            "11:12:46",
+            "ECLIPTICA - now fighting boss: JimBringerPhase3(Clone) on phase: 0",
+        );
+        assert_eq!(gs.runs.len(), 1);
+        assert!(gs.boss.is_none());
+        assert_eq!(gs.mode, Mode::Lobby);
+    }
+
+    #[test]
     fn boss_without_stage_still_records() {
         let mut gs = GameState::default();
         feed_at(
@@ -602,9 +656,107 @@ mod tests {
         ));
         gs.feed(&format!("{P}Dealing 100 STRIKE damage"));
         gs.feed(&format!(
-            "{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0.6"
+            "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.6"
         ));
         assert_eq!(gs.fight_dmg, 0);
+        assert_eq!(gs.boss.as_deref(), Some("Kakarot"));
+    }
+
+    #[test]
+    fn phase_transition_keeps_live_stats() {
+        let mut gs = GameState::default();
+        let t0 = feed_at(
+            &mut gs,
+            "12:21:33",
+            "ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0.6",
+        );
+        feed_at(&mut gs, "12:21:40", "Dealing 100 STRIKE damage");
+        feed_at(
+            &mut gs,
+            "12:22:45",
+            "ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0.6",
+        );
+        feed_at(&mut gs, "12:22:50", "Dealing 50 STRIKE damage");
+        assert_eq!(gs.fight_dmg, 150);
+        assert_eq!(gs.fight_start, t0);
         assert_eq!(gs.boss.as_deref(), Some("YukiPhase2"));
+        let run = &gs.runs[0];
+        assert_eq!(run.fights.len(), 2);
+        assert_eq!(run.groups(), vec![0..2]);
+        assert_eq!(run.fights[0].dmg, 100);
+        assert_eq!(run.fights[1].dmg, 50);
+    }
+
+    #[test]
+    fn jimbringer_three_phase_ordering() {
+        let mut gs = GameState::default();
+        let t0 = feed_at(
+            &mut gs,
+            "10:34:45",
+            "ECLIPTICA - now fighting boss: JimBringer(Clone) on phase: 1",
+        );
+        feed_at(&mut gs, "10:40:00", "Dealing 500 STRIKE damage");
+        feed_at(
+            &mut gs,
+            "10:46:56",
+            "Boss JimBringer dead, personal damage dealt: ",
+        );
+        feed_at(&mut gs, "10:46:56", "STRIKE DMG: 1000");
+        feed_at(&mut gs, "10:46:56", "NON-STRIKE DMG: 0");
+        feed_at(
+            &mut gs,
+            "10:46:57",
+            "ECLIPTICA - now fighting boss: JimBringerPhase2(Clone) on phase: 1",
+        );
+        feed_at(
+            &mut gs,
+            "10:46:57",
+            "ECLIPTICA - now fighting boss: JimBringerPhase2(Clone) on phase: 1",
+        );
+        feed_at(&mut gs, "10:50:00", "Dealing 700 STRIKE damage");
+        feed_at(
+            &mut gs,
+            "10:56:27",
+            "ECLIPTICA - now fighting boss: JimBringerPhase3(Clone) on phase: 1",
+        );
+        feed_at(
+            &mut gs,
+            "10:56:27",
+            "Boss JimBringerPhase2 dead, personal damage dealt: ",
+        );
+        feed_at(&mut gs, "10:56:27", "STRIKE DMG: 2000");
+        feed_at(&mut gs, "10:56:27", "NON-STRIKE DMG: 0");
+        feed_at(&mut gs, "10:57:00", "Dealing 300 STRIKE damage");
+        assert_eq!(gs.boss.as_deref(), Some("JimBringerPhase3"));
+        assert_eq!(gs.fight_dmg, 1500);
+        assert_eq!(gs.fight_start, t0);
+        let run = &gs.runs[0];
+        assert_eq!(run.fights.len(), 3);
+        assert_eq!(run.groups(), vec![0..3]);
+        assert_eq!(run.fights[0].kill, Some((1000, 0)));
+        assert_eq!(run.fights[1].kill, Some((2000, 0)));
+        assert_eq!(run.fights[2].kill, None);
+        assert_eq!(run.fights[1].dmg, 700);
+        assert_eq!(run.fights[2].dmg, 300);
+    }
+
+    #[test]
+    fn death_clusters_count_once() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "08:18:01",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer",
+        );
+        for t in ["08:20:42", "08:20:42", "08:20:43", "08:20:44", "08:20:46"] {
+            feed_at(&mut gs, t, "Local controller dead, switching off.");
+        }
+        let last = feed_at(&mut gs, "08:20:48", "Local controller dead, switching off.");
+        assert_eq!(gs.runs[0].deaths, 1);
+        assert!(gs.is_dead(last));
+        assert!(gs.is_dead(last + 2));
+        assert!(!gs.is_dead(last + 3));
+        feed_at(&mut gs, "08:25:55", "Local controller dead, switching off.");
+        assert_eq!(gs.runs[0].deaths, 2);
     }
 }

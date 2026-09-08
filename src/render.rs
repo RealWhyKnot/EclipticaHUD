@@ -1,4 +1,4 @@
-use crate::state::{base_name, fmt_clock, GameState, Mode};
+use crate::state::{base_name, fmt_clock, phase_num, GameState, Mode};
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Foundation::RECT;
@@ -287,6 +287,9 @@ impl Renderer {
             ),
         };
         self.text(M, 28, W, F_BODY, status_color, DT_LEFT, &status);
+        if gs.is_dead(now) {
+            self.text(M, 28, W, F_BODY, DANGER, DT_RIGHT, "DEAD");
+        }
         if gs.mode == Mode::Stage {
             self.bar(M, 47, W, 4, f.progress_shown, GOOD);
         }
@@ -308,16 +311,17 @@ impl Renderer {
             Some(i) if f.live() => (format!("RUN {}/{}", i + 1, gs.runs.len()), DIM),
             Some(i) => {
                 let r = &gs.runs[i];
-                (
-                    format!(
-                        "RUN {}/{}   {}   {}",
-                        i + 1,
-                        gs.runs.len(),
-                        &fmt_clock(r.start_ts)[..5],
-                        r.stage
-                    ),
-                    TEXT,
-                )
+                let mut s = format!(
+                    "RUN {}/{}   {}   {}",
+                    i + 1,
+                    gs.runs.len(),
+                    &fmt_clock(r.start_ts)[..5],
+                    r.stage
+                );
+                if r.deaths > 0 {
+                    s.push_str(&format!("   {}", fmt_deaths(r.deaths)));
+                }
+                (s, TEXT)
             }
         };
         self.text_rect(
@@ -382,7 +386,13 @@ impl Renderer {
         if f.live() {
             match (&gs.boss, &gs.target) {
                 (Some(boss), target) => {
-                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, boss);
+                    let pn = phase_num(boss);
+                    let shown = if pn > 1 {
+                        format!("{} (P{pn})", base_name(boss))
+                    } else {
+                        boss.clone()
+                    };
+                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, &shown);
                     self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "TARGET");
                     if !f.sound_on {
                         self.text(M + 12, 114, W - 24, F_GLYPH, DIM, DT_RIGHT, GLYPH_MUTE);
@@ -501,6 +511,14 @@ impl Renderer {
         }
 
         self.text(M, 286, W, F_LABEL, DIM, DT_LEFT, "DAMAGE TAKEN");
+        let live_deaths = gs
+            .runs
+            .last()
+            .filter(|r| r.end_ts.is_none())
+            .map_or(0, |r| r.deaths);
+        if live_deaths > 0 {
+            self.text(M, 286, W, F_TINY, DIM, DT_RIGHT, &fmt_deaths(live_deaths));
+        }
         let mut y = 302;
         for hit in gs.taken.iter().rev().take(3) {
             let src = if hit.source.is_empty() {
@@ -616,6 +634,10 @@ impl Drop for Renderer {
     }
 }
 
+fn fmt_deaths(n: u32) -> String {
+    format!("{n} death{}", if n == 1 { "" } else { "s" })
+}
+
 fn fmt_dur(secs: u64) -> String {
     if secs >= 60 {
         format!("{}m {:02}s", secs / 60, secs % 60)
@@ -696,6 +718,10 @@ mod tests {
         gs.feed(&format!(
             "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.5"
         ));
+        gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: KakarotPhase2(Clone) on phase: 0.5"
+        ));
+        gs.feed(&format!("{P}Local controller dead, switching off."));
         let mut r = Renderer::new(96);
         let f = Frame {
             now: 0,

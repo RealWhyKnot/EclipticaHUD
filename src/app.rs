@@ -1,6 +1,6 @@
 use crate::logwatch::{self, LogWatch};
 use crate::render::{Frame, Renderer};
-use crate::state::{GameState, Run};
+use crate::state::{base_name, GameState, Run};
 use crate::update::{self, Badge};
 use crate::vr::VrOverlay;
 use std::io::Read;
@@ -36,6 +36,7 @@ pub struct App {
     dps_peak: u64,
     dps_boss: Option<String>,
     dps_frac_shown: f32,
+    was_dead: bool,
     timer_ms: u32,
     badge: Badge,
 }
@@ -107,6 +108,7 @@ impl App {
             dps_peak: 0,
             dps_boss: None,
             dps_frac_shown: 0.0,
+            was_dead: false,
             timer_ms: 1000,
             badge: Badge::None,
         }
@@ -269,8 +271,9 @@ impl App {
                 }
             }
         }
-        if self.gs.boss != self.dps_boss {
-            self.dps_boss = self.gs.boss.clone();
+        let dps_base = self.gs.boss.as_deref().map(base_name);
+        if dps_base != self.dps_boss.as_deref() {
+            self.dps_boss = dps_base.map(str::to_string);
             self.dps_peak = 0;
         }
         let rolling = self.gs.rolling_dps(now);
@@ -288,7 +291,14 @@ impl App {
         let mut anim = approach(&mut self.progress_shown, self.gs.progress);
         anim |= approach(&mut self.dps_frac_shown, dps_target);
         anim |= self.flash_at.is_some() && self.flash_t() < 1.0;
-        let redraw = self.gs.changed || anim || self.gs.boss.is_some() || badge_changed;
+        let dead = self.gs.is_dead(now);
+        let redraw = self.gs.changed
+            || anim
+            || self.gs.boss.is_some()
+            || badge_changed
+            || dead
+            || dead != self.was_dead;
+        self.was_dead = dead;
         self.gs.changed = false;
         if redraw {
             self.render();
@@ -456,6 +466,30 @@ mod tests {
         assert_eq!((app.sel_group, app.sel_phase), (None, None));
         assert!(app.run_next());
         assert!(app.is_live());
+    }
+
+    #[test]
+    fn dps_peak_survives_phase_change() {
+        let mut app = headless();
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0"
+        ));
+        app.gs.feed(&format!("{P}Dealing 100 STRIKE damage"));
+        app.tick();
+        let peak = app.dps_peak;
+        assert!(peak > 0);
+        assert_eq!(app.dps_boss.as_deref(), Some("Yuki"));
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0"
+        ));
+        app.tick();
+        assert_eq!(app.dps_peak, peak);
+        assert_eq!(app.dps_boss.as_deref(), Some("Yuki"));
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0"
+        ));
+        app.tick();
+        assert_eq!(app.dps_boss.as_deref(), Some("Kakarot"));
     }
 
     #[test]

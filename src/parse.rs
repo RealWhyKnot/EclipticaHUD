@@ -25,6 +25,7 @@ pub enum Event {
     Intermission,
     Lobby,
     RoomLeft,
+    PlayerDead,
 }
 
 impl Event {
@@ -41,6 +42,7 @@ impl Event {
             Event::Intermission => "intermission",
             Event::Lobby => "lobby",
             Event::RoomLeft => "room_left",
+            Event::PlayerDead => "player_dead",
         }
     }
 }
@@ -138,6 +140,9 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
     }
     if msg.trim_end() == "[Behaviour] OnLeftRoom" {
         return Some(Event::RoomLeft);
+    }
+    if msg.trim_end() == "Local controller dead, switching off." {
+        return Some(Event::PlayerDead);
     }
     if let Some(rest) = msg.strip_prefix("STRIKE DMG: ") {
         return Some(Event::StrikeTotal(rest.trim().parse().ok()?));
@@ -254,6 +259,15 @@ mod tests {
             parse_msg("[Behaviour] Entering Room: Ecliptica - Demo Playtest"),
             None
         );
+    }
+
+    #[test]
+    fn player_dead() {
+        let l =
+            split_line("2026.09.08 08:20:42 Debug      -  Local controller dead, switching off.")
+                .unwrap();
+        assert_eq!(parse_msg(l.msg), Some(Event::PlayerDead));
+        assert_eq!(parse_msg("Tracking boss as defeated in-run."), None);
     }
 
     #[test]
