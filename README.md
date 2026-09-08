@@ -24,18 +24,6 @@ The footer shows the running version. When a newer release is out it shows the n
 
 `ecliptica-hud.exe --scan [logfile]` parses a log and prints every recognized event plus totals to stdout, which is handy for checking what the parser sees. Without an argument it scans the newest VRChat log.
 
-## Code layout
-
-- `parse.rs` turns raw log lines into events
-- `state.rs` folds events into the game state the HUD shows
-- `logwatch.rs` tails the newest VRChat log across rotations
-- `app.rs` ties log, state, and rendering together and paces redraws
-- `update.rs` checks GitHub releases and installs updates in place
-- `render.rs` draws the panel into an offscreen bitmap
-- `vr.rs` mirrors that bitmap to a SteamVR wrist overlay
-- `ui.rs` is the Win32 window and input plumbing
-- `main.rs` picks between the window and `--scan`
-
 ## Building
 
 Requires the MSVC toolchain, CMake, and LLVM (libclang) for the OpenVR bindings.
