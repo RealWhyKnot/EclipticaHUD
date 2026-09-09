@@ -32,6 +32,8 @@ pub fn boss_name(internal: &str) -> &str {
         "Oone" => "O-One",
         "NeoPilot" => "Neo Pilot",
         "JimBringer" => "Jim C. Bringer",
+        "Obisidus" => "Irides",
+        "ManalyteAncient" => "Abaddon",
         _ => internal,
     }
 }
@@ -67,7 +69,9 @@ mod tests {
     fn mapping_and_passthrough() {
         assert_eq!(boss_name("FlyLord"), "Beelzebub");
         assert_eq!(boss_name("Oone"), "O-One");
-        assert_eq!(boss_name("Obisidus"), "Obisidus");
+        assert_eq!(boss_name("Obisidus"), "Irides");
+        assert_eq!(boss_name("ManalyteAncient"), "Abaddon");
+        assert_eq!(boss_name("Kodama"), "Kodama");
         assert_eq!(stage_name("GMBigcity"), "GM_BigCity");
         assert_eq!(stage_name("Hall of Beginnings"), "Hall of Beginnings");
     }
