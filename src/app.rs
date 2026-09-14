@@ -79,6 +79,8 @@ pub struct App {
     pub sel_phase: Option<usize>,
     pub vrc_running: bool,
     pub vrcx_running: bool,
+    pub vrcx_presence: Option<bool>,
+    pub vrcx_taken: bool,
     vrc_checked: Option<Instant>,
     last_env: Option<Env>,
     pub dpi: u32,
@@ -212,6 +214,8 @@ impl App {
             sel_phase: None,
             vrc_running: true,
             vrcx_running: false,
+            vrcx_presence: None,
+            vrcx_taken: false,
             vrc_checked: None,
             last_env: None,
             dpi,
@@ -280,6 +284,35 @@ impl App {
         }
         self.alpha = next;
         true
+    }
+
+    pub fn vrcx_conflict(&self) -> bool {
+        self.discord_on && self.vrcx_running && self.vrcx_presence == Some(true)
+    }
+
+    pub fn take_over_vrcx(&mut self) -> bool {
+        if !crate::vrcx::set_presence(false) {
+            return false;
+        }
+        self.vrcx_taken = true;
+        self.vrcx_presence = Some(false);
+        if cfg!(not(test)) {
+            crate::vrcx::restart();
+        }
+        true
+    }
+
+    pub fn release_vrcx(&mut self) {
+        if !self.vrcx_taken {
+            return;
+        }
+        self.vrcx_taken = false;
+        if crate::vrcx::set_presence(true) {
+            self.vrcx_presence = Some(true);
+            if cfg!(not(test)) && self.vrcx_running {
+                crate::vrcx::restart();
+            }
+        }
     }
 
     pub fn set_window(&mut self, window: u64) {
@@ -704,7 +737,7 @@ impl App {
             scale: self.scale,
             alpha: self.alpha,
             window: self.gs.win(),
-            vrcx: self.vrcx_running,
+            vrcx: self.vrcx_conflict(),
             flash_t: timed(self.flash_at, FLASH_MS),
             taken_flash_t: timed(self.taken_flash_at, TAKEN_FLASH_MS),
             dead_pulse: self.dead_pulse(),
@@ -785,6 +818,11 @@ impl App {
             self.vrc_checked = Some(Instant::now());
             self.vrc_running = crate::vr::process_running("VRChat.exe");
             self.vrcx_running = crate::vr::process_running("VRCX.exe");
+            self.vrcx_presence = if self.vrcx_running {
+                crate::vrcx::presence_on()
+            } else {
+                None
+            };
         }
         let env = self.env();
         let env_changed = self.last_env.is_some_and(|e| e != env);

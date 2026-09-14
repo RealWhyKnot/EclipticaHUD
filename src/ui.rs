@@ -94,6 +94,14 @@ fn save_window(window: u64) {
     write_data("window.txt", window.to_string());
 }
 
+fn load_vrcx_taken() -> bool {
+    load_text("vrcx.txt").is_some_and(|t| t.trim() == "1")
+}
+
+fn save_vrcx_taken(taken: bool) {
+    write_data("vrcx.txt", if taken { "1" } else { "0" }.to_string());
+}
+
 fn save_alpha(alpha: u8) {
     write_data("alpha.txt", alpha.to_string());
 }
@@ -479,8 +487,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                                 sync_topmost(hwnd);
                             }
                             Hit::Discord => {
-                                app.activate(hit);
-                                save_discord(app.discord_on);
+                                if app.vrcx_conflict() {
+                                    app.take_over_vrcx();
+                                } else {
+                                    app.activate(hit);
+                                    save_discord(app.discord_on);
+                                    if !app.discord_on {
+                                        app.release_vrcx();
+                                    }
+                                }
+                                save_vrcx_taken(app.vrcx_taken);
                             }
                             Hit::ScaleDown | Hit::ScaleUp => {
                                 if app.activate(hit) {
@@ -561,6 +577,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 if !app.log.hwnd.is_null() {
                     save_log_pos(app.log.hwnd, app.log.visible);
                 }
+                app.release_vrcx();
+                save_vrcx_taken(app.vrcx_taken);
             }
             DefWindowProcW(hwnd, msg, wp, lp)
         }
@@ -764,6 +782,7 @@ pub fn run() {
             load_text("window.txt").map_or(crate::state::DEFAULT_WINDOW, |t| window_from(&t)),
         );
         app.backfill_history();
+        app.vrcx_taken = load_vrcx_taken();
         if load_discord() {
             app.set_discord(true);
         }

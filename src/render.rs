@@ -284,7 +284,7 @@ impl Hit {
             Hit::WindowDown => "Shorter window for the live DPS and damage taken",
             Hit::WindowUp => "Longer window for the live DPS and damage taken",
             Hit::Discord if c.discord_on && c.vrcx => {
-                "VRCX is running; its Discord presence, if on, hides this status"
+                "VRCX's presence hides this status; click to turn it off and restart VRCX"
             }
             Hit::Discord if c.discord_on => {
                 "Showing this run as your Discord status; click to stop"
@@ -2362,7 +2362,7 @@ mod tests {
             ..ctx
         };
         assert!(Hit::Discord.tip(warn).starts_with("VRCX"));
-        assert!(Hit::Discord.tip(warn).chars().count() <= 70);
+        assert!(Hit::Discord.tip(warn).chars().count() <= 76);
         assert!(Hit::ScaleUp.tip(ctx).contains("bigger"));
         assert!(Hit::Target.tip(ctx).contains("unmute"));
         assert!(Hit::Log.tip(ctx).starts_with("Close"));
