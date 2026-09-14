@@ -10,6 +10,14 @@ use crate::game::source::{describe_source, generic_attacker};
 use crate::hud::timeline::{self, Row};
 use windows_sys::Win32::Graphics::Gdi::*;
 
+struct LogRow<'a> {
+    mark: u32,
+    ts: u64,
+    tag: (&'a str, usize, u32),
+    who: (&'a str, u32),
+    what: Option<&'a str>,
+}
+
 impl Renderer {
     pub fn draw_log(&mut self, src: Option<timeline::Source<'_>>, lv: &LogView) {
         self.fill(0, 0, LOG_W, LOG_H, BG);
@@ -141,129 +149,59 @@ impl Renderer {
                 );
             }
             Row::Hit(h) => {
-                self.rround(x, y + 5, 3, timeline::ROW_H - 10, 1, DANGER);
-                let vc = DT_LEFT | DT_VCENTER;
-                self.text_rect(
-                    x + 12,
-                    y,
-                    62,
-                    timeline::ROW_H,
-                    F_TINY,
-                    DIM,
-                    vc,
-                    &fmt_clock(h.ts),
-                );
-                self.text_rect(
-                    x + 76,
-                    y,
-                    44,
-                    timeline::ROW_H,
-                    F_BODY,
-                    DANGER,
-                    DT_RIGHT | DT_VCENTER,
-                    &h.amount.to_string(),
-                );
                 let (who, attack) = describe_source(&h.source, h.amount);
                 let who_color = if generic_attacker(&who) { DIM } else { TEXT };
-                self.text_rect(
-                    x + 130,
+                self.log_row(
+                    x,
                     y,
-                    120,
-                    timeline::ROW_H,
-                    F_BODY,
-                    who_color,
-                    vc,
-                    &who,
-                );
-                self.text_rect(
-                    x + 254,
-                    y,
-                    w - 254,
-                    timeline::ROW_H,
-                    F_BODY,
-                    DIM,
-                    vc,
-                    &attack,
+                    w,
+                    LogRow {
+                        mark: DANGER,
+                        ts: h.ts,
+                        tag: (&h.amount.to_string(), F_BODY, DANGER),
+                        who: (&who, who_color),
+                        what: Some(&attack),
+                    },
                 );
             }
-            Row::Target(t) => {
-                self.rround(x, y + 5, 3, timeline::ROW_H - 10, 1, ACCENT);
-                let vc = DT_LEFT | DT_VCENTER;
-                self.text_rect(
-                    x + 12,
-                    y,
-                    62,
-                    timeline::ROW_H,
-                    F_TINY,
-                    DIM,
-                    vc,
-                    &fmt_clock(t.ts),
-                );
-                self.text_rect(
-                    x + 76,
-                    y,
-                    44,
-                    timeline::ROW_H,
-                    F_TINY,
-                    ACCENT,
-                    DT_RIGHT | DT_VCENTER,
-                    "aggro",
-                );
-                self.text_rect(
-                    x + 130,
-                    y,
-                    120,
-                    timeline::ROW_H,
-                    F_BODY,
-                    TEXT,
-                    vc,
-                    &t.player,
-                );
-                self.text_rect(
-                    x + 254,
-                    y,
-                    w - 254,
-                    timeline::ROW_H,
-                    F_BODY,
-                    DIM,
-                    vc,
-                    boss_name(base_name(&t.boss)),
-                );
-            }
-            Row::Death { ts, .. } => {
-                self.rround(x, y + 5, 3, timeline::ROW_H - 10, 1, DANGER);
-                let vc = DT_LEFT | DT_VCENTER;
-                self.text_rect(
-                    x + 12,
-                    y,
-                    62,
-                    timeline::ROW_H,
-                    F_TINY,
-                    DIM,
-                    vc,
-                    &fmt_clock(*ts),
-                );
-                self.text_rect(
-                    x + 76,
-                    y,
-                    44,
-                    timeline::ROW_H,
-                    F_TINY,
-                    DANGER,
-                    DT_RIGHT | DT_VCENTER,
-                    "death",
-                );
-                self.text_rect(
-                    x + 130,
-                    y,
-                    w - 130,
-                    timeline::ROW_H,
-                    F_BODY,
-                    DANGER,
-                    vc,
-                    "you died",
-                );
-            }
+            Row::Target(t) => self.log_row(
+                x,
+                y,
+                w,
+                LogRow {
+                    mark: ACCENT,
+                    ts: t.ts,
+                    tag: ("aggro", F_TINY, ACCENT),
+                    who: (&t.player, TEXT),
+                    what: Some(boss_name(base_name(&t.boss))),
+                },
+            ),
+            Row::Death { ts, .. } => self.log_row(
+                x,
+                y,
+                w,
+                LogRow {
+                    mark: DANGER,
+                    ts: *ts,
+                    tag: ("death", F_TINY, DANGER),
+                    who: ("you died", DANGER),
+                    what: None,
+                },
+            ),
+        }
+    }
+
+    fn log_row(&self, x: i32, y: i32, w: i32, r: LogRow) {
+        let vc = DT_LEFT | DT_VCENTER;
+        let h = timeline::ROW_H;
+        self.rround(x, y + 5, 3, h - 10, 1, r.mark);
+        self.text_rect(x + 12, y, 62, h, F_TINY, DIM, vc, &fmt_clock(r.ts));
+        let (tag, font, color) = r.tag;
+        self.text_rect(x + 76, y, 44, h, font, color, DT_RIGHT | DT_VCENTER, tag);
+        let who_w = if r.what.is_some() { 120 } else { w - 130 };
+        self.text_rect(x + 130, y, who_w, h, F_BODY, r.who.1, vc, r.who.0);
+        if let Some(what) = r.what {
+            self.text_rect(x + 254, y, w - 254, h, F_BODY, DIM, vc, what);
         }
     }
 }
