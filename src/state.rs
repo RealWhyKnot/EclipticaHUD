@@ -83,7 +83,6 @@ pub struct BossFight {
 
 #[derive(Debug, Clone, Default)]
 pub struct StageStats {
-    pub name: String,
     pub start_ts: u64,
     pub end_ts: Option<u64>,
     pub dmg: u64,
@@ -651,7 +650,6 @@ impl GameState {
                 if self.stage_stats.start_ts == 0 || self.stage != name || self.boss.is_some() {
                     self.close_stage(ts);
                     self.stage_stats = StageStats {
-                        name: name.clone(),
                         start_ts: ts,
                         ..Default::default()
                     };
@@ -1284,8 +1282,10 @@ mod tests {
         assert_eq!(gs.rolling_dps(t0 + 9), 15);
         assert_eq!(gs.rolling_dps(t0 + 10), 0);
         assert_eq!(gs.rolling_dps(t0 + 60), 0);
-        let mut short = GameState::default();
-        short.window = 3;
+        let mut short = GameState {
+            window: 3,
+            ..Default::default()
+        };
         short.feed(&format!("{P}Dealing 90 STRIKE damage"));
         assert_eq!(short.rolling_dps(t0 + 2), 30);
         assert_eq!(short.rolling_dps(t0 + 3), 0);
@@ -1919,7 +1919,7 @@ mod tests {
             "09:13:00",
             "ECLIPTICA - now in stage: Stage_GMFuncFlat on phase: 0.1 as class: Spellhammer",
         );
-        assert_eq!(gs.stage_stats.name, "GMFuncFlat");
+        assert_eq!(gs.stage, "GMFuncFlat");
         assert_eq!(gs.stage_stats.dmg, 0);
         feed_at(&mut gs, "09:13:10", "Dealing 5 STRIKE damage");
         feed_at(&mut gs, "09:14:00", LOBBY);
