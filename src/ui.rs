@@ -47,6 +47,32 @@ fn save_sound(on: bool) {
     write_data("sound.txt", if on { "1" } else { "0" }.to_string());
 }
 
+fn load_topmost() -> bool {
+    data_file("top.txt")
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_none_or(|t| sound_on_from(&t))
+}
+
+fn save_topmost(on: bool) {
+    write_data("top.txt", if on { "1" } else { "0" }.to_string());
+}
+
+unsafe fn sync_topmost(main: HWND) {
+    let Some(app) = app_mut(main) else {
+        return;
+    };
+    let after = if app.topmost {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    };
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+    SetWindowPos(main, after, 0, 0, 0, 0, flags);
+    if !app.log.hwnd.is_null() {
+        SetWindowPos(app.log.hwnd, after, 0, 0, 0, 0, flags);
+    }
+}
+
 fn parse_pos(text: &str) -> Option<(i32, i32, bool)> {
     let mut it = text.split_whitespace();
     let x = it.next()?.parse().ok()?;
@@ -219,6 +245,7 @@ unsafe fn sync_log(main: HWND) {
     let want = app.log.visible;
     if want && app.log.hwnd.is_null() {
         create_log_window(main);
+        sync_topmost(main);
     }
     let Some(app) = app_ptr.as_mut() else {
         return;
@@ -364,6 +391,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                             Hit::Target => {
                                 app.activate(hit);
                                 save_sound(app.sound_on);
+                            }
+                            Hit::Pin => {
+                                app.activate(hit);
+                                save_topmost(app.topmost);
+                                sync_topmost(hwnd);
                             }
                             _ => {
                                 app.activate(hit);
@@ -623,6 +655,7 @@ pub fn run() {
         let dpi = GetDpiForSystem();
         let mut app = App::new(dpi);
         app.sound_on = load_sound();
+        app.topmost = load_topmost();
         app.backfill_history();
         let (w, h) = (app.renderer.width, app.renderer.height);
 
@@ -665,6 +698,7 @@ pub fn run() {
         app.tick();
         app.render();
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        sync_topmost(hwnd);
         SetTimer(hwnd, TIMER_ID, 1000, None);
         if load_pos("logpos.txt").is_some_and(|(_, _, open)| open) {
             app.log_open();

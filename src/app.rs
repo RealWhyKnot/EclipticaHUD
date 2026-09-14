@@ -62,6 +62,7 @@ pub struct App {
     pub pressed: Option<Hit>,
     pub tracking: bool,
     pub sound_on: bool,
+    pub topmost: bool,
     pub sel_run: Option<usize>,
     pub sel_group: Option<usize>,
     pub sel_phase: Option<usize>,
@@ -178,6 +179,7 @@ impl App {
             pressed: None,
             tracking: false,
             sound_on: true,
+            topmost: true,
             sel_run: None,
             sel_group: None,
             sel_phase: None,
@@ -235,7 +237,7 @@ impl App {
 
     pub fn hit_enabled(&self, hit: Hit) -> bool {
         match hit {
-            Hit::Close | Hit::Log => true,
+            Hit::Close | Hit::Log | Hit::Pin => true,
             Hit::Info(Info::Version) => !self.update_ready(),
             Hit::Info(i) if i.live_only() => self.is_live(),
             Hit::Info(i) if i.history_only() => !self.is_live(),
@@ -332,6 +334,10 @@ impl App {
             Hit::Phase => self.phase_cycle(),
             Hit::Log => {
                 self.log_toggle();
+                true
+            }
+            Hit::Pin => {
+                self.topmost = !self.topmost;
                 true
             }
             Hit::Close | Hit::Update | Hit::Info(_) => false,
@@ -493,6 +499,7 @@ impl App {
             taken_rate_shown: self.taken_rate_shown,
             update: self.badge.clone(),
             sound_on: self.sound_on,
+            topmost: self.topmost,
             view_run: self.viewed_run().map(|(i, _)| i),
             view_group: self.viewed_group().map(|(i, _)| i),
             view_phase: self.sel_phase,
@@ -832,6 +839,9 @@ mod tests {
         assert!(app.is_live());
         assert!(!app.hit_enabled(Hit::Target));
         assert!(app.hit_enabled(Hit::Log));
+        assert!(app.topmost);
+        assert!(app.activate(Hit::Pin));
+        assert!(!app.topmost);
         assert!(app.hit_enabled(Hit::Info(Info::LastHit)));
         assert!(!app.hit_enabled(Hit::Info(Info::Result)));
         assert!(app.run_prev());

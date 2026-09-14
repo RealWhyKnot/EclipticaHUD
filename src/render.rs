@@ -18,6 +18,8 @@ pub const CLOSE_HIT: (i32, i32, i32, i32) = (324, 0, 36, 36);
 pub const CLOSE_BTN: (i32, i32, i32, i32) = (328, 8, 24, 24);
 pub const LOG_HIT: (i32, i32, i32, i32) = (292, 0, 32, 36);
 pub const LOG_BTN: (i32, i32, i32, i32) = (296, 8, 24, 24);
+pub const PIN_HIT: (i32, i32, i32, i32) = (260, 0, 32, 36);
+pub const PIN_BTN: (i32, i32, i32, i32) = (264, 8, 24, 24);
 pub const UPDATE_HIT: (i32, i32) = (210, LOGICAL_H - 32);
 pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 126, 308, 40);
 pub const RUN_PREV_HIT: (i32, i32, i32, i32) = (14, 54, 26, 24);
@@ -75,6 +77,7 @@ fn mix(a: u32, b: u32, t: f32) -> u32 {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hit {
+    Pin,
     Log,
     Close,
     Update,
@@ -94,9 +97,13 @@ pub enum Info {
     RunRow,
     Boss,
     Result,
-    DealtStats,
+    Dealt(u8),
+    DealtBar,
     LastKill,
-    TakenStats,
+    TakenTitle,
+    Taken(u8),
+    TakenMore(u8),
+    TakenBar,
     LastHit,
     Attackers,
     TopAttacks,
@@ -107,15 +114,25 @@ pub enum Info {
     Version,
 }
 
-pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 16] = [
+pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
     (Info::Status, (14, 26, 332, 20)),
     (Info::Progress, (14, 46, 332, 8)),
     (Info::RunRow, (44, 54, 272, 24)),
     (Info::Boss, (74, 84, 160, 26)),
     (Info::Result, (26, 126, 308, 40)),
-    (Info::DealtStats, (14, 186, 332, 52)),
+    (Info::Dealt(0), (26, 190, 102, 40)),
+    (Info::Dealt(1), (128, 190, 102, 40)),
+    (Info::Dealt(2), (230, 190, 102, 40)),
+    (Info::DealtBar, (14, 230, 332, 10)),
     (Info::LastKill, (14, 240, 332, 30)),
-    (Info::TakenStats, (14, 306, 332, 96)),
+    (Info::TakenTitle, (14, 288, 332, 20)),
+    (Info::Taken(0), (26, 310, 102, 40)),
+    (Info::Taken(1), (128, 310, 102, 40)),
+    (Info::Taken(2), (230, 310, 102, 40)),
+    (Info::TakenMore(0), (26, 354, 102, 36)),
+    (Info::TakenMore(1), (128, 354, 102, 36)),
+    (Info::TakenMore(2), (230, 354, 102, 36)),
+    (Info::TakenBar, (14, 392, 332, 10)),
     (Info::LastHit, (14, 402, 332, 24)),
     (Info::Attackers, (14, 428, 332, 48)),
     (Info::TopAttacks, (14, 478, 332, 82)),
@@ -136,7 +153,16 @@ pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 16] = [
 
 impl Info {
     pub fn live_only(self) -> bool {
-        matches!(self, Info::LastHit | Info::Attackers | Info::TopAttacks)
+        matches!(
+            self,
+            Info::LastHit
+                | Info::Attackers
+                | Info::TopAttacks
+                | Info::DealtBar
+                | Info::TakenBar
+                | Info::TakenMore(1)
+                | Info::TakenMore(2)
+        )
     }
 
     pub fn history_only(self) -> bool {
@@ -153,28 +179,66 @@ impl Info {
             .map_or((0, 0, 0, 0), |(_, r)| *r)
     }
 
-    fn tip(self) -> &'static str {
-        match self {
-            Info::Status => "Current stage, how far the run has progressed, and your class",
-            Info::Progress => "Run progress through the current stage",
-            Info::RunRow => "The run you are viewing; deaths are counted for the whole run",
-            Info::Boss => "The boss of this fight; (P2) marks a later phase",
-            Info::Result => "How this fight ended, deaths during it, and how long it took",
-            Info::DealtStats => "Your damage: last 10 seconds, then the whole boss fight",
-            Info::LastKill => "What the game credited you with on the last boss kill",
-            Info::TakenStats => "Damage you took: last 10 seconds, then the whole boss fight",
-            Info::LastHit => "The most recent hit on you: amount, attacker, attack",
-            Info::Attackers | Info::HistAttackers => {
-                "Who hurt you this fight, as a share of the total"
+    fn tip(self, live: bool) -> &'static str {
+        match (self, live) {
+            (Info::Status, _) => "Stage you are in, how far the run is, and your class",
+            (Info::Progress, _) => "How far the run has progressed through this stage",
+            (Info::RunRow, true) => "Run number and the stage counter of the live run",
+            (Info::RunRow, false) => {
+                "Run number, start time, stage and deaths; LOST means a boss survived"
             }
-            Info::TopAttacks | Info::HistTopAttacks => {
-                "The attacks that hurt most this fight, with hit counts"
+            (Info::Boss, true) => "The boss you are fighting; (P2) means a later phase",
+            (Info::Boss, false) => "The boss of this fight; (P2) means a later phase",
+            (Info::Result, _) => {
+                "killed, lost (run ended with it alive) or unfinished, plus fight time"
             }
-            Info::Vr => "SteamVR wrist overlay: green when attached, red when failing",
-            Info::LogDot => "VRChat output log: green when found, amber when missing",
-            Info::Version => "Running version; a new release shows here when available",
+            (Info::Dealt(0), true) => "Damage you dealt in the last 10 seconds, per second",
+            (Info::Dealt(0), false) => "All damage you dealt in this fight, across phases",
+            (Info::Dealt(1), true) => "Your fight damage divided by the fight time so far",
+            (Info::Dealt(1), false) => "Your fight damage divided by the fight time",
+            (Info::Dealt(2), true) => "All damage you dealt this fight, across phases",
+            (Info::Dealt(2), false) => "How long the fight lasted",
+            (Info::Dealt(_), _) => "",
+            (Info::DealtBar, _) => "Your DPS right now against your best 10 seconds this fight",
+            (Info::LastKill, true) => "What the game credited you with on your last boss kill",
+            (Info::LastKill, false) => "What the game credited you with when this boss died",
+            (Info::TakenTitle, true) => "Damage you took; the right side counts deaths in this run",
+            (Info::TakenTitle, false) => "Damage you took in this fight",
+            (Info::Taken(0), true) => "Damage you took in the last 10 seconds, per second",
+            (Info::Taken(0), false) => "All damage you took in this fight",
+            (Info::Taken(1), true) => "All damage you took this fight, across phases",
+            (Info::Taken(1), false) => "How many times you were hit in this fight",
+            (Info::Taken(2), true) => "How many times you were hit this fight",
+            (Info::Taken(2), false) => "Damage taken divided by the fight time",
+            (Info::Taken(_), _) => "",
+            (Info::TakenMore(0), true) => "The largest single hit on you this fight",
+            (Info::TakenMore(0), false) => "Damage taken divided by the number of hits",
+            (Info::TakenMore(1), _) => "Damage taken divided by the number of hits",
+            (Info::TakenMore(2), _) => "Damage taken divided by the fight time so far",
+            (Info::TakenMore(_), _) => "",
+            (Info::TakenBar, _) => {
+                "Incoming damage right now against the worst 10 seconds this fight"
+            }
+            (Info::LastHit, _) => "The most recent hit on you: amount, attacker, attack",
+            (Info::Attackers | Info::HistAttackers, _) => {
+                "Who hurt you this fight, as a share of all damage taken"
+            }
+            (Info::TopAttacks | Info::HistTopAttacks, _) => {
+                "The attacks that hurt most this fight, with how often they hit"
+            }
+            (Info::Vr, _) => "SteamVR wrist overlay: green when attached, red when failing",
+            (Info::LogDot, _) => "VRChat output log: green when found, amber when missing",
+            (Info::Version, _) => "Running version; a new release shows here when available",
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct TipCtx {
+    pub live: bool,
+    pub topmost: bool,
+    pub sound_on: bool,
+    pub log_open: bool,
 }
 
 impl Hit {
@@ -182,23 +246,28 @@ impl Hit {
         !matches!(self, Hit::Info(_))
     }
 
-    pub fn tip(self) -> &'static str {
+    pub fn tip(self, c: TipCtx) -> &'static str {
         match self {
-            Hit::Log => "Open or close the event log window",
+            Hit::Pin if c.topmost => "Kept above other windows; click to let them cover it",
+            Hit::Pin => "Other windows can cover the HUD; click to keep it on top",
+            Hit::Log if c.log_open => "Close the event log window",
+            Hit::Log => "Open the event log window",
             Hit::Close => "Close the HUD (Esc)",
             Hit::Update => "Install this update and restart",
-            Hit::Target => "Click to mute or unmute the aggro sound",
-            Hit::RunPrev => "Earlier run",
-            Hit::RunNext => "Later run, back to live at the end",
-            Hit::FightPrev => "Earlier boss fight in this run",
-            Hit::FightNext => "Later boss fight in this run",
-            Hit::Phase => "Cycle through the phases of this fight",
-            Hit::Info(i) => i.tip(),
+            Hit::Target if c.sound_on => "Who the boss is after; click to mute the aggro sound",
+            Hit::Target => "Who the boss is after; click to unmute the aggro sound",
+            Hit::RunPrev => "Show the previous run",
+            Hit::RunNext => "Show the next run; past the newest returns to live",
+            Hit::FightPrev => "Show the previous boss fight of this run",
+            Hit::FightNext => "Show the next boss fight of this run",
+            Hit::Phase => "Switch between the phases of this fight and the total",
+            Hit::Info(i) => i.tip(c.live),
         }
     }
 
     fn rect(self) -> (i32, i32, i32, i32) {
         match self {
+            Hit::Pin => PIN_BTN,
             Hit::Log => LOG_BTN,
             Hit::Close => CLOSE_BTN,
             Hit::Update => UPDATE_RECT,
@@ -278,6 +347,7 @@ pub struct Frame {
     pub vr: VrStatus,
     pub log_ok: bool,
     pub log_open: bool,
+    pub topmost: bool,
     pub progress_shown: f32,
     pub dps_frac_shown: f32,
     pub taken_frac_shown: f32,
@@ -345,6 +415,8 @@ const GLYPH_MUTE: &str = "\u{E74F}";
 const GLYPH_PREV: &str = "\u{E76B}";
 const GLYPH_NEXT: &str = "\u{E76C}";
 const GLYPH_LOG: &str = "\u{E81C}";
+const GLYPH_PIN: &str = "\u{E718}";
+const GLYPH_UNPIN: &str = "\u{E77A}";
 
 const SEG_COLORS: [u32; 4] = [DANGER, AMBER, ACCENT, DIM];
 
@@ -574,6 +646,13 @@ impl Renderer {
             DT_LEFT | DT_VCENTER,
             "ECLIPTICA HUD",
         );
+        self.glyph_button(
+            PIN_BTN,
+            hov(Hit::Pin),
+            prs(Hit::Pin),
+            f.topmost,
+            if f.topmost { GLYPH_PIN } else { GLYPH_UNPIN },
+        );
         self.glyph_button(LOG_BTN, hov(Hit::Log), prs(Hit::Log), f.log_open, GLYPH_LOG);
         self.glyph_button(
             CLOSE_BTN,
@@ -641,8 +720,10 @@ impl Renderer {
             }
             Some(i) => {
                 let r = &gs.runs[i];
+                let lost = r.lost_fight().is_some();
                 let mut s = format!(
-                    "RUN {}/{}   {}   {}",
+                    "{} {}/{}   {}   {}",
+                    if lost { "LOST" } else { "RUN" },
                     i + 1,
                     gs.runs.len(),
                     &fmt_clock(r.start_ts)[..5],
@@ -654,7 +735,7 @@ impl Renderer {
                 if r.deaths > 0 {
                     s.push_str(&format!("   {}", fmt_run_deaths(r.deaths)));
                 }
-                (s, TEXT)
+                (s, if lost { DANGER } else { TEXT })
             }
         };
         self.text_rect(
@@ -769,6 +850,15 @@ impl Renderer {
                 }
                 (None, _) => {
                     self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss active");
+                    let lost = gs.runs.last().and_then(|r| r.lost_fight().map(|f| (r, f)));
+                    if let Some((r, fight)) = lost {
+                        let mut line =
+                            format!("last run lost to {}", boss_name(base_name(&fight.name)));
+                        if r.deaths > 0 {
+                            line.push_str(&format!("   {}", fmt_run_deaths(r.deaths)));
+                        }
+                        self.text(M + 12, 140, W - 24, F_BODY, DANGER, DT_LEFT, &line);
+                    }
                 }
             }
         } else {
@@ -806,8 +896,12 @@ impl Renderer {
                             &chip,
                         );
                     }
+                    let lost = viewed_run
+                        .and_then(|r| r.lost_fight())
+                        .is_some_and(|f| f.start_ts == h.last.start_ts && f.name == h.last.name);
                     let (res, color) = match (h.last.kill, h.last.end_ts) {
                         (Some(_), _) => ("killed", GOOD),
+                        (None, Some(_)) if lost => ("lost", DANGER),
                         (None, Some(_)) => ("unfinished", DIM),
                         (None, None) => ("in progress", AMBER),
                     };
@@ -1079,7 +1173,13 @@ impl Renderer {
         };
         self.text(M, fy, W, F_TINY, ucolor, DT_RIGHT, &utext);
         if let Some(hit) = f.tip {
-            self.tooltip(hit.rect(), hit.tip(), LOGICAL_W, LOGICAL_H);
+            let ctx = TipCtx {
+                live: f.live(),
+                topmost: f.topmost,
+                sound_on: f.sound_on,
+                log_open: f.log_open,
+            };
+            self.tooltip(hit.rect(), hit.tip(ctx), LOGICAL_W, LOGICAL_H);
         }
         unsafe { GdiFlush() };
     }
@@ -1407,6 +1507,31 @@ impl Renderer {
                     boss_name(base_name(&t.boss)),
                 );
             }
+            Row::Death { ts, .. } => {
+                self.rround(x, y + 5, 3, log::ROW_H - 10, 1, DANGER);
+                let vc = DT_LEFT | DT_VCENTER;
+                self.text_rect(x + 12, y, 62, log::ROW_H, F_TINY, DIM, vc, &fmt_clock(*ts));
+                self.text_rect(
+                    x + 76,
+                    y,
+                    44,
+                    log::ROW_H,
+                    F_TINY,
+                    DANGER,
+                    DT_RIGHT | DT_VCENTER,
+                    "death",
+                );
+                self.text_rect(
+                    x + 130,
+                    y,
+                    w - 130,
+                    log::ROW_H,
+                    F_BODY,
+                    DANGER,
+                    vc,
+                    "you died",
+                );
+            }
         }
     }
 
@@ -1426,6 +1551,9 @@ impl Renderer {
             }
             if x >= self.px(LOG_HIT.0) && x < self.px(CLOSE_HIT.0) && ok(Hit::Log) {
                 return Some(Hit::Log);
+            }
+            if x >= self.px(PIN_HIT.0) && x < self.px(LOG_HIT.0) && ok(Hit::Pin) {
+                return Some(Hit::Pin);
             }
         }
         if x >= self.px(UPDATE_HIT.0) && y >= self.px(UPDATE_HIT.1) && ok(Hit::Update) {
@@ -1560,6 +1688,7 @@ mod tests {
             vr: VrStatus::Off,
             log_ok: true,
             log_open: false,
+            topmost: true,
             progress_shown: 0.5,
             dps_frac_shown: 0.5,
             taken_frac_shown: 0.5,
@@ -1628,7 +1757,13 @@ mod tests {
         assert_eq!(r.hit_test(324, 35), Some(Hit::Close));
         assert_eq!(r.hit_test(323, 35), Some(Hit::Log));
         assert_eq!(r.hit_test(292, 0), Some(Hit::Log));
-        assert_eq!(r.hit_test(291, 0), None);
+        assert_eq!(r.hit_test(291, 0), Some(Hit::Pin));
+        assert_eq!(r.hit_test(260, 35), Some(Hit::Pin));
+        assert_eq!(r.hit_test(259, 0), None);
+        let (px_, py_, pw_, ph_) = PIN_BTN;
+        let (hx_, hy_, hw_, hh_) = PIN_HIT;
+        assert!(px_ >= hx_ && py_ >= hy_ && px_ + pw_ <= hx_ + hw_ && py_ + ph_ <= hy_ + hh_);
+        assert_eq!(hx_ + hw_, LOG_HIT.0);
         assert_eq!(r.hit_test(323, 36), Some(Hit::Info(Info::Status)));
         assert_eq!(r.hit_test(210, LOGICAL_H - 32), Some(Hit::Update));
         assert_eq!(r.hit_test(209, LOGICAL_H - 1), None);
@@ -1781,11 +1916,46 @@ mod tests {
                 "{info:?}"
             );
             assert!(!hit.clickable());
-            assert!(!info.tip().is_empty());
+            for live in [true, false] {
+                let tip = info.tip(live);
+                let unused = (info.live_only() && !live) || (info.history_only() && live);
+                assert!(unused || !tip.is_empty(), "{info:?} live={live}");
+                assert!(tip.chars().count() <= 70, "{info:?} live={live}");
+            }
+        }
+        for (a, b) in INFO_REGIONS
+            .iter()
+            .flat_map(|a| INFO_REGIONS.iter().map(move |b| (a, b)))
+        {
+            if a.0 == b.0 {
+                continue;
+            }
+            let both_live = !a.0.history_only() && !b.0.history_only();
+            let both_hist = !a.0.live_only() && !b.0.live_only();
+            let (ax, ay, aw, ah) = a.1;
+            let (bx, by, bw, bh) = b.1;
+            let overlap = ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+            assert!(
+                !(overlap && (both_live || both_hist)),
+                "{:?} overlaps {:?}",
+                a.0,
+                b.0
+            );
         }
         assert!(Hit::Log.clickable());
         assert_eq!(r.hit_test(200, 30), Some(Hit::Info(Info::Status)));
         assert_eq!(r.hit_test(200, 250), Some(Hit::Info(Info::LastKill)));
+        assert_eq!(r.hit_test(30, 200), Some(Hit::Info(Info::Dealt(0))));
+        assert_eq!(r.hit_test(300, 370), Some(Hit::Info(Info::TakenMore(2))));
+        let ctx = TipCtx {
+            live: true,
+            topmost: false,
+            sound_on: false,
+            log_open: true,
+        };
+        assert!(Hit::Pin.tip(ctx).contains("keep it on top"));
+        assert!(Hit::Target.tip(ctx).contains("unmute"));
+        assert!(Hit::Log.tip(ctx).starts_with("Close"));
         assert_eq!(
             r.hit_test_where(340, LOGICAL_H - 20, |h| h != Hit::Update),
             Some(Hit::Info(Info::Version))

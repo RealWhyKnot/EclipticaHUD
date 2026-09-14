@@ -92,6 +92,13 @@ pub struct Run {
 }
 
 impl Run {
+    pub fn lost_fight(&self) -> Option<&BossFight> {
+        let end = self.end_ts?;
+        self.fights
+            .last()
+            .filter(|f| f.kill.is_none() && f.end_ts == Some(end))
+    }
+
     pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
         let mut out: Vec<std::ops::Range<usize>> = Vec::new();
         for (i, f) in self.fights.iter().enumerate() {
@@ -192,6 +199,7 @@ pub struct GameState {
     pub history: VecDeque<TargetEntry>,
     pub targets_total: u64,
     pub taken: VecDeque<TakenEntry>,
+    pub deaths_log: VecDeque<(u64, u64)>,
     pub fight_taken: u64,
     pub fight_hits: u32,
     pub fight_max_hit: u64,
@@ -256,6 +264,7 @@ impl GameState {
         self.pending_tokens.clear();
         self.taken.clear();
         self.history.clear();
+        self.deaths_log.clear();
         self.fight_attacks.clear();
         self.changed = true;
     }
@@ -467,6 +476,10 @@ impl GameState {
                     if let Some(f) = self.open_fight() {
                         f.deaths += 1;
                     }
+                    self.deaths_log.push_back((ts, seq));
+                    if self.deaths_log.len() > 500 {
+                        self.deaths_log.pop_front();
+                    }
                 }
                 self.dead_until = ts + DEATH_HOLD;
             }
@@ -614,6 +627,7 @@ mod tests {
         feed_at(&mut gs, "08:20:49", "ECLIPTICA - now in lobby");
         let run = &gs.runs[0];
         assert!(run.end_ts.is_some());
+        assert!(run.lost_fight().is_none());
         assert_eq!(run.stage, "Hall of Beginnings");
         assert_eq!(run.class, "Spellhammer");
         assert_eq!(run.fights.len(), 1);
@@ -1133,5 +1147,15 @@ mod tests {
         assert!(!gs.is_dead(last + 3));
         feed_at(&mut gs, "08:25:55", "Local controller dead, switching off.");
         assert_eq!(gs.runs[0].deaths, 2);
+        assert_eq!(gs.deaths_log.len(), 2);
+        assert!(gs.deaths_log[0].1 < gs.deaths_log[1].1);
+        assert!(gs.runs[0].lost_fight().is_none());
+        feed_at(&mut gs, "08:26:00", "ECLIPTICA - now in lobby");
+        assert_eq!(
+            gs.runs[0].lost_fight().map(|f| f.name.as_str()),
+            Some("Yuki")
+        );
+        gs.log_rotated();
+        assert!(gs.deaths_log.is_empty());
     }
 }

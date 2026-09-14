@@ -23,7 +23,9 @@ Grab a release or build it, then run `ecliptica-hud.exe`. The panel appears bott
 
 Click the target name to mute or unmute the target-change sound. A small muted icon shows on the boss card while it's off, and the choice is remembered.
 
-Hover over anything for a short hint of what it shows or does.
+Hover over anything for a short hint of what it shows or does. The pin button in the header toggles whether the HUD stays above other windows; it starts pinned and remembers your choice.
+
+A run that ends while a boss is still alive is shown as LOST in red when you page back to it, the fight itself reads "lost", and the boss card names it after you're back in the lobby. Your deaths show up in the event log too.
 
 The clock button in the header opens the event log: a second window listing hits and aggro switches newest first, with a filter for either kind. Scroll with the wheel or drag the bar, close it with Escape or the x. It stays on the desktop (the wrist overlay only mirrors the main panel), and its position and whether it was open are remembered.
 

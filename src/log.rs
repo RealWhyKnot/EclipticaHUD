@@ -15,6 +15,7 @@ pub enum Row<'a> {
     Hit(&'a TakenEntry),
     Target(&'a TargetEntry),
     Fight(&'a BossFight),
+    Death { ts: u64, seq: u64 },
 }
 
 impl Row<'_> {
@@ -23,6 +24,7 @@ impl Row<'_> {
             Row::Hit(h) => (h.ts, h.seq),
             Row::Target(t) => (t.ts, t.seq),
             Row::Fight(f) => (f.start_ts, 0),
+            Row::Death { ts, seq } => (*ts, *seq),
         }
     }
 }
@@ -30,6 +32,7 @@ impl Row<'_> {
 pub fn timeline(gs: &GameState, filter: Filter) -> Vec<Row<'_>> {
     let mut hits = gs.taken.iter().rev().peekable();
     let mut targets = gs.history.iter().rev().peekable();
+    let mut deaths = gs.deaths_log.iter().rev().peekable();
     let mut fights = gs
         .runs
         .iter()
@@ -45,7 +48,14 @@ pub fn timeline(gs: &GameState, filter: Filter) -> Vec<Row<'_>> {
             .then(|| targets.peek().map(|e| Row::Target(e)))
             .flatten();
         let f = fights.peek().map(|e| Row::Fight(e));
-        let pick = [h, t, f].into_iter().flatten().max_by_key(|r| r.key());
+        let d = (filter != Filter::Targets)
+            .then(|| {
+                deaths
+                    .peek()
+                    .map(|(ts, seq)| Row::Death { ts: *ts, seq: *seq })
+            })
+            .flatten();
+        let pick = [h, t, f, d].into_iter().flatten().max_by_key(|r| r.key());
         let Some(row) = pick else { break };
         match row {
             Row::Hit(_) => {
@@ -56,6 +66,9 @@ pub fn timeline(gs: &GameState, filter: Filter) -> Vec<Row<'_>> {
             }
             Row::Fight(_) => {
                 fights.next();
+            }
+            Row::Death { .. } => {
+                deaths.next();
             }
         }
         out.push(row);
@@ -129,6 +142,7 @@ mod tests {
             "damage has been taken: 7, from source: (Yuki) frostBeam",
         );
         feed(&mut gs, "10:00:09", "ownership of Yuki transferred to Bob");
+        feed(&mut gs, "10:00:12", "Local controller dead, switching off.");
         feed(
             &mut gs,
             "10:00:20",
@@ -150,6 +164,7 @@ mod tests {
                 Row::Hit(h) => format!("h{}", h.amount),
                 Row::Target(t) => format!("t{}", t.player),
                 Row::Fight(f) => format!("f{}", f.name),
+                Row::Death { .. } => "d".to_string(),
             })
             .collect::<Vec<_>>()
             .join(" ")
@@ -160,14 +175,14 @@ mod tests {
         let gs = built();
         assert_eq!(
             shape(&timeline(&gs, Filter::All)),
-            "tBob h7 tAlice fYuki h1"
+            "d tBob h7 tAlice fYuki h1"
         );
     }
 
     #[test]
     fn timeline_filters() {
         let gs = built();
-        assert_eq!(shape(&timeline(&gs, Filter::Damage)), "h7 fYuki h1");
+        assert_eq!(shape(&timeline(&gs, Filter::Damage)), "d h7 fYuki h1");
         assert_eq!(shape(&timeline(&gs, Filter::Targets)), "tBob tAlice fYuki");
     }
 
