@@ -210,8 +210,8 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
     let mut large_text = "Ecliptica".to_string();
     let mut since = run.map(|r| r.start_ts);
     let details = match gs.mode {
-        Mode::Idle => return None,
-        Mode::Lobby => {
+        Mode::Idle if !gs.in_ecliptica() => return None,
+        Mode::Idle | Mode::Lobby => {
             since = None;
             "In the lobby".to_string()
         }
@@ -329,9 +329,12 @@ fn join_secret(body: &str) -> Option<String> {
     json_str(body, "secret")
 }
 
+const DIAG_CLIP: usize = 600;
+
 struct Conn {
     pipe: File,
     nonce: u64,
+    last_reply: String,
 }
 
 impl Conn {
@@ -344,7 +347,11 @@ impl Conn {
             else {
                 continue;
             };
-            let mut conn = Conn { pipe, nonce: 0 };
+            let mut conn = Conn {
+                pipe,
+                nonce: 0,
+                last_reply: String::new(),
+            };
             match conn.handshake() {
                 Ok(()) => {
                     diag(&format!("connected on discord-ipc-{i}"));
@@ -439,6 +446,11 @@ impl Conn {
                         }
                         set_link(Link::Rejected);
                     } else if json_str(&body, "cmd").as_deref() == Some("SET_ACTIVITY") {
+                        let shown: String = body.chars().take(DIAG_CLIP).collect();
+                        if shown != self.last_reply {
+                            diag(&format!("reply {shown}"));
+                            self.last_reply = shown;
+                        }
                         set_link(Link::Connected);
                     }
                 }
@@ -559,6 +571,12 @@ fn worker(rx: Receiver<Msg>) {
             if sent.as_ref() != Some(activity) && Instant::now() >= next_send {
                 let pid = std::process::id();
                 c.command(|n| set_activity_cmd(pid, n, activity.as_deref()))?;
+                diag(&format!(
+                    "set_activity {}",
+                    activity
+                        .as_deref()
+                        .map_or_else(|| "clear".to_string(), |a| a.chars().take(DIAG_CLIP).collect())
+                ));
                 sent = Some(activity.clone());
                 next_send = Instant::now() + SEND_GAP;
             }
@@ -784,6 +802,21 @@ mod tests {
     fn idle_clears_presence() {
         let gs = GameState::default();
         assert_eq!(activity(&gs, 0, 1_000), None);
+    }
+
+    #[test]
+    fn joining_the_world_shows_the_lobby() {
+        let mut gs = GameState::default();
+        feed(&mut gs, "03:59:35", "[Behaviour] Entering Room: Sky Dream");
+        assert_eq!(activity(&gs, 0, 1_000), None);
+        let now = feed(
+            &mut gs,
+            "04:00:00",
+            "[Behaviour] Entering Room: Ecliptica - Demo Playtest",
+        );
+        let a = activity(&gs, now, 1_000).unwrap();
+        assert!(a.contains("\"details\":\"In the lobby\""), "{a}");
+        assert!(!a.contains("timestamps"), "{a}");
     }
 
     #[test]
