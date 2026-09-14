@@ -1,4 +1,4 @@
-use crate::state::{BossFight, GameState, Run, TakenEntry, TargetEntry};
+use crate::state::{continues, BossFight, GameState, Run, TakenEntry, TargetEntry};
 use std::collections::VecDeque;
 
 pub const ROW_H: i32 = 24;
@@ -63,7 +63,14 @@ pub fn timeline(src: Option<Source<'_>>, filter: Filter) -> Vec<Row<'_>> {
     let mut hits = src.hits.iter().rev().peekable();
     let mut targets = src.targets.iter().rev().peekable();
     let mut deaths = src.deaths.iter().rev().peekable();
-    let mut fights = src.fights.iter().rev().peekable();
+    let starts: Vec<&BossFight> = src
+        .fights
+        .iter()
+        .enumerate()
+        .filter(|(i, f)| *i == 0 || !continues(&src.fights[i - 1], &f.name, f.start_ts))
+        .map(|(_, f)| f)
+        .collect();
+    let mut fights = starts.iter().rev().copied().peekable();
     let mut out = Vec::with_capacity(src.hits.len() + src.targets.len() + 8);
     loop {
         let h = (filter != Filter::Targets)

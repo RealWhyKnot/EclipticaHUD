@@ -1,5 +1,5 @@
 use crate::names::{boss_name, phase_name, stage_name};
-use crate::state::{base_name, phase_num, GameState, Mode};
+use crate::state::{base_name, GameState, Mode};
 use crate::update::{json_str, REPO};
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -250,10 +250,7 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
                 since = Some(gs.fight_start);
                 state.push(format!("{} DPS", short(gs.fight_dps(now))));
                 state.push(format!("{} damage", short(gs.fight_dmg)));
-                match phase_num(boss) {
-                    1 => format!("Fighting {name}"),
-                    p => format!("Fighting {name} (P{p})"),
-                }
+                format!("Fighting {name}")
             }
             None => {
                 large_text = stage_name(&gs.stage).to_string();
@@ -999,10 +996,7 @@ mod tests {
         feed(&mut gs, "04:10:53", "Dealing 21059 STRIKE damage");
         let now = feed(&mut gs, "04:10:53", "Local controller dead, switching off.");
         let a = activity(&gs, now, 1_800_000_000).unwrap();
-        assert!(
-            a.contains("\"details\":\"Fighting Jim C. Bringer (P2)\""),
-            "{a}"
-        );
+        assert!(a.contains("\"details\":\"Fighting Jim C. Bringer\""), "{a}");
         assert!(
             a.contains("\"state\":\"Dead | 10.5k DPS | 21.1k damage | 1 death\""),
             "{a}"

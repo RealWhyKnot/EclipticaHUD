@@ -99,12 +99,13 @@ fn scan(path: Option<String>) {
     }
     for (i, r) in gs.runs.iter().enumerate() {
         println!(
-            "run {:>2}  {}  {}  {:>2} fights  {}",
+            "run {:>2}  {}  {}  {:>2} bosses  {:>2} phases  {}",
             i + 1,
             fmt_clock(r.start_ts),
             if r.lost { "LOST" } else { "run " },
+            r.groups().len(),
             r.fights.len(),
-            r.fights.last().map_or("", |f| f.name.as_str())
+            r.fights.last().map_or("", |f| state::base_name(&f.name))
         );
     }
     println!("boss targets recorded: {}", gs.targets_total);

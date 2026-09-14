@@ -159,11 +159,7 @@ impl Run {
     pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
         let mut out: Vec<std::ops::Range<usize>> = Vec::new();
         for (i, f) in self.fights.iter().enumerate() {
-            let chained = out.last().is_some_and(|g| {
-                let prev = &self.fights[g.end - 1];
-                base_name(&prev.name) == base_name(&f.name)
-                    && phase_num(&f.name) > phase_num(&prev.name)
-            });
+            let chained = i > 0 && continues(&self.fights[i - 1], &f.name, f.start_ts);
             match out.last_mut() {
                 Some(g) if chained => g.end = i + 1,
                 _ => out.push(i..i + 1),
@@ -171,6 +167,14 @@ impl Run {
         }
         out
     }
+}
+
+pub fn continues(prev: &BossFight, name: &str, start_ts: u64) -> bool {
+    base_name(&prev.name) == base_name(name)
+        && phase_num(name) > phase_num(&prev.name)
+        && prev
+            .end_ts
+            .is_none_or(|e| start_ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
 }
 
 pub fn base_name(name: &str) -> &str {
@@ -494,23 +498,21 @@ impl GameState {
                     return;
                 }
                 self.bosses.insert(name.clone());
-                let just_ended = self.runs.last().is_some_and(|r| {
-                    r.fights.iter().rev().any(|f| {
-                        f.name == name
-                            && f.kill.is_some()
-                            && f.end_ts
-                                .is_some_and(|e| ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
-                    })
+                let last = self
+                    .runs
+                    .last()
+                    .filter(|r| r.end_ts.is_none())
+                    .and_then(|r| r.fights.last());
+                let echo = last.is_some_and(|f| {
+                    base_name(&f.name) == base_name(&name)
+                        && phase_num(&name) <= phase_num(&f.name)
+                        && match f.end_ts {
+                            None => true,
+                            Some(e) => f.kill.is_some() && ts.saturating_sub(e) <= KILL_DEDUPE_SECS,
+                        }
                 });
-                let open_run = self.runs.last().filter(|r| r.end_ts.is_none());
-                let transition = open_run.and_then(|r| r.fights.last()).is_some_and(|prev| {
-                    base_name(&prev.name) == base_name(&name)
-                        && phase_num(&name) > phase_num(&prev.name)
-                        && prev
-                            .end_ts
-                            .is_none_or(|e| ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
-                });
-                if self.boss.as_deref() != Some(&name) && !just_ended {
+                let transition = last.is_some_and(|f| continues(f, &name, ts));
+                if self.boss.as_deref() != Some(&name) && !echo {
                     self.close_stage(ts);
                     self.boss = Some(name.clone());
                     if !self.stage_boss_seen {

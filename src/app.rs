@@ -76,7 +76,6 @@ pub struct App {
     link: Link,
     pub sel_run: Option<usize>,
     pub sel_group: Option<usize>,
-    pub sel_phase: Option<usize>,
     pub vrc_running: bool,
     vrc_checked: Option<Instant>,
     last_env: Option<Env>,
@@ -208,7 +207,6 @@ impl App {
             link: Link::Off,
             sel_run: None,
             sel_group: None,
-            sel_phase: None,
             vrc_running: true,
             vrc_checked: None,
             last_env: None,
@@ -371,16 +369,35 @@ impl App {
         self.log.rows = self.log_rows();
     }
 
+    pub fn group_pages(&self) -> usize {
+        let n = self.viewed_run().map_or(0, |(_, r)| r.groups().len());
+        n + usize::from(self.sel_run.is_none() && self.gs.boss.is_none())
+    }
+
+    fn live_group_index(&self) -> Option<usize> {
+        self.group_pages().checked_sub(1)
+    }
+
+    fn cur_group(&self) -> Option<usize> {
+        match self.viewed_group() {
+            Some((i, _)) => Some(i),
+            None => self.live_group_index(),
+        }
+    }
+
     pub fn viewed_group(&self) -> Option<(usize, std::ops::Range<usize>)> {
         let (_, run) = self.viewed_run()?;
         let groups = run.groups();
-        let n = groups.len();
-        let i = self.sel_group.unwrap_or(n.checked_sub(1)?).min(n - 1);
+        let last = groups.len().checked_sub(1)?;
+        let i = match self.sel_group {
+            Some(i) => i.min(last),
+            None => self.live_group_index().filter(|i| *i <= last)?,
+        };
         Some((i, groups[i].clone()))
     }
 
     pub fn is_live(&self) -> bool {
-        self.sel_run.is_none() && self.sel_group.is_none() && self.sel_phase.is_none()
+        self.sel_run.is_none() && self.sel_group.is_none()
     }
 
     pub fn hit_enabled(&self, hit: Hit) -> bool {
@@ -394,9 +411,7 @@ impl App {
             Hit::WindowUp => {
                 self.settings_open && self.gs.win() < WINDOW_STEPS[WINDOW_STEPS.len() - 1]
             }
-            Hit::Target | Hit::FightPrev | Hit::FightNext | Hit::Phase if self.settings_open => {
-                false
-            }
+            Hit::Target | Hit::FightPrev | Hit::FightNext if self.settings_open => false,
             Hit::Info(
                 Info::Boss | Info::Result | Info::Dealt(_) | Info::DealtBar | Info::LastKill,
             ) if self.settings_open => false,
@@ -408,9 +423,8 @@ impl App {
             Hit::Target => self.is_live() && self.gs.boss.is_some() && self.gs.target.is_some(),
             Hit::RunPrev => self.viewed_page() > 0,
             Hit::RunNext => self.sel_run.is_some(),
-            Hit::FightPrev => self.viewed_group().is_some_and(|(i, _)| i > 0),
+            Hit::FightPrev => self.cur_group().is_some_and(|i| i > 0),
             Hit::FightNext => self.sel_group.is_some(),
-            Hit::Phase => !self.is_live() && self.viewed_group().is_some_and(|(_, g)| g.len() > 1),
         }
     }
 
@@ -425,7 +439,6 @@ impl App {
         }
         self.sel_run = Some(p - 1);
         self.sel_group = None;
-        self.sel_phase = None;
         self.log_reset();
         true
     }
@@ -435,7 +448,6 @@ impl App {
             Some(i) => {
                 self.sel_run = (i + 1 < self.live_page()).then_some(i + 1);
                 self.sel_group = None;
-                self.sel_phase = None;
                 self.log_reset();
                 true
             }
@@ -444,10 +456,9 @@ impl App {
     }
 
     pub fn group_prev(&mut self) -> bool {
-        match self.viewed_group() {
-            Some((i, _)) if i > 0 => {
+        match self.cur_group() {
+            Some(i) if i > 0 => {
                 self.sel_group = Some(i - 1);
-                self.sel_phase = None;
                 true
             }
             _ => false,
@@ -457,31 +468,12 @@ impl App {
     pub fn group_next(&mut self) -> bool {
         match self.sel_group {
             Some(i) => {
-                let n = self.viewed_run().map_or(0, |(_, r)| r.groups().len());
-                self.sel_group = (i + 2 < n).then_some(i + 1);
-                self.sel_phase = None;
+                let live = self.live_group_index().unwrap_or(0);
+                self.sel_group = (i + 1 < live).then_some(i + 1);
                 true
             }
             None => false,
         }
-    }
-
-    pub fn phase_cycle(&mut self) -> bool {
-        if self.is_live() {
-            return false;
-        }
-        let Some((_, g)) = self.viewed_group() else {
-            return false;
-        };
-        if g.len() < 2 {
-            return false;
-        }
-        self.sel_phase = match self.sel_phase {
-            None => Some(0),
-            Some(i) if i + 1 < g.len() => Some(i + 1),
-            Some(_) => None,
-        };
-        true
     }
 
     pub fn activate(&mut self, hit: Hit) -> bool {
@@ -494,7 +486,6 @@ impl App {
             Hit::RunNext => self.run_next(),
             Hit::FightPrev => self.group_prev(),
             Hit::FightNext => self.group_next(),
-            Hit::Phase => self.phase_cycle(),
             Hit::Log => {
                 self.log_toggle();
                 true
@@ -725,7 +716,7 @@ impl App {
             discord_on: self.discord_on,
             view_run: self.shown_run().map(|(i, _)| i),
             view_group: self.viewed_group().map(|(i, _)| i),
-            view_phase: self.sel_phase,
+            group_pages: self.group_pages(),
             run_sel: self.sel_run.is_some(),
             group_sel: self.sel_group.is_some(),
         };
@@ -1198,7 +1189,6 @@ mod tests {
         assert!(app.is_live());
         assert!(!app.run_next());
         assert!(!app.group_next());
-        assert!(!app.phase_cycle());
         assert!(!app.hit_enabled(Hit::RunNext));
         assert!(app.hit_enabled(Hit::RunPrev));
         assert!(app.run_prev());
@@ -1209,15 +1199,8 @@ mod tests {
         let (gi, g) = app.viewed_group().unwrap();
         assert_eq!((gi, g.len()), (0, 2));
         assert!(!app.group_prev());
-        assert!(app.hit_enabled(Hit::Phase));
-        assert!(app.phase_cycle());
-        assert_eq!(app.sel_phase, Some(0));
-        assert!(app.phase_cycle());
-        assert_eq!(app.sel_phase, Some(1));
-        assert!(app.phase_cycle());
-        assert_eq!(app.sel_phase, None);
         assert!(app.group_next());
-        assert_eq!((app.sel_group, app.sel_phase), (None, None));
+        assert_eq!(app.sel_group, None);
         assert!(app.run_next());
         assert!(app.is_live());
         assert!(!app.hit_enabled(Hit::Target));

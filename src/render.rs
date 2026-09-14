@@ -36,7 +36,6 @@ pub const RUN_PREV_HIT: (i32, i32, i32, i32) = (14, 54, 26, 24);
 pub const RUN_NEXT_HIT: (i32, i32, i32, i32) = (320, 54, 26, 24);
 pub const FIGHT_PREV_HIT: (i32, i32, i32, i32) = (240, 86, 26, 20);
 pub const FIGHT_NEXT_HIT: (i32, i32, i32, i32) = (308, 86, 26, 20);
-pub const PHASE_HIT: (i32, i32, i32, i32) = (220, 110, 114, 20);
 const UPDATE_RECT: (i32, i32, i32, i32) =
     (UPDATE_HIT.0, UPDATE_HIT.1, LOGICAL_W - UPDATE_HIT.0, 32);
 const TIP_DELAY_MS: u128 = 450;
@@ -110,7 +109,6 @@ pub enum Hit {
     RunNext,
     FightPrev,
     FightNext,
-    Phase,
     Info(Info),
 }
 
@@ -212,7 +210,7 @@ impl Info {
                 "Run number, start time, stage and deaths; LOST means a boss survived"
             }
             (Info::Boss, true) => "The boss you are fighting, or the stage you are clearing",
-            (Info::Boss, false) => "The boss of this fight; (P2) means a later phase",
+            (Info::Boss, false) => "The boss of this fight, all of its phases together",
             (Info::Result, _) => {
                 "killed, lost (run ended with it alive) or unfinished, plus fight time"
             }
@@ -296,7 +294,6 @@ impl Hit {
             Hit::RunNext => "Show the next run; past the newest returns to live",
             Hit::FightPrev => "Show the previous boss fight of this run",
             Hit::FightNext => "Show the next boss fight of this run",
-            Hit::Phase => "Switch between the phases of this fight and the total",
             Hit::Info(i) => i.tip(c.live),
         }
     }
@@ -320,7 +317,6 @@ impl Hit {
             Hit::RunNext => RUN_NEXT_HIT,
             Hit::FightPrev => FIGHT_PREV_HIT,
             Hit::FightNext => FIGHT_NEXT_HIT,
-            Hit::Phase => PHASE_HIT,
             Hit::Info(i) => i.rect(),
         }
     }
@@ -419,14 +415,14 @@ pub struct Frame {
     pub discord_on: bool,
     pub view_run: Option<usize>,
     pub view_group: Option<usize>,
-    pub view_phase: Option<usize>,
+    pub group_pages: usize,
     pub run_sel: bool,
     pub group_sel: bool,
 }
 
 impl Frame {
     fn live(&self) -> bool {
-        !self.run_sel && !self.group_sel && self.view_phase.is_none()
+        !self.run_sel && !self.group_sel
     }
 
     fn empty(&self) -> bool {
@@ -836,7 +832,7 @@ impl Renderer {
                 if r.deaths > 0 {
                     s.push_str(&format!("   {}", fmt_run_deaths(r.deaths)));
                 }
-                (s, if lost { DANGER } else { TEXT })
+                (s, color)
             }
         };
         self.text_rect(
@@ -858,34 +854,21 @@ impl Renderer {
                 .and_then(|i| groups.get(i))
                 .map(|g| &r.fights[g.clone()])
         });
-        let hist = viewed_group.map(|fights| match f.view_phase.and_then(|i| fights.get(i)) {
-            Some(ph) => HistView {
-                fights: std::slice::from_ref(ph),
-                name: ph.name.as_str(),
-                start: ph.start_ts,
-                dmg: ph.dmg,
-                taken: ph.taken,
-                hits: ph.hits,
-                kill: ph.kill,
-                last: ph,
+        let hist = viewed_group.map(|fights| {
+            let last = &fights[fights.len() - 1];
+            HistView {
+                fights,
+                name: base_name(&last.name),
+                start: fights[0].start_ts,
+                dmg: fights.iter().map(|p| p.dmg).sum(),
+                taken: fights.iter().map(|p| p.taken).sum(),
+                hits: fights.iter().map(|p| p.hits).sum(),
+                kill: fights
+                    .iter()
+                    .filter_map(|p| p.kill)
+                    .reduce(|a, b| (a.0 + b.0, a.1 + b.1)),
+                last,
                 n_phases: fights.len(),
-            },
-            None => {
-                let last = &fights[fights.len() - 1];
-                HistView {
-                    fights,
-                    name: base_name(&last.name),
-                    start: fights[0].start_ts,
-                    dmg: fights.iter().map(|p| p.dmg).sum(),
-                    taken: fights.iter().map(|p| p.taken).sum(),
-                    hits: fights.iter().map(|p| p.hits).sum(),
-                    kill: fights
-                        .iter()
-                        .filter_map(|p| p.kill)
-                        .reduce(|a, b| (a.0 + b.0, a.1 + b.1)),
-                    last,
-                    n_phases: fights.len(),
-                }
             }
         });
         let card_label = if f.live() && !f.empty() && gs.pre_boss() {
@@ -899,7 +882,7 @@ impl Renderer {
         if !groups.is_empty() {
             self.arrow(
                 FIGHT_PREV_HIT,
-                f.view_group.is_some_and(|i| i > 0),
+                f.view_group.map_or(f.group_pages > 1, |i| i > 0),
                 hov(Hit::FightPrev),
                 prs(Hit::FightPrev),
                 GLYPH_PREV,
@@ -913,8 +896,8 @@ impl Renderer {
             );
             let idx = format!(
                 "{}/{}",
-                f.view_group.map_or(groups.len(), |i| i + 1),
-                groups.len()
+                f.view_group.map_or(f.group_pages, |i| i + 1),
+                f.group_pages
             );
             self.text_rect(266, 86, 42, 20, F_TINY, DIM, DT_CENTER | DT_VCENTER, &idx);
         }
@@ -922,16 +905,18 @@ impl Renderer {
         if f.live() {
             match (gs.boss.as_ref().filter(|_| !f.empty()), &gs.target) {
                 (Some(boss), target) => {
-                    let pn = phase_num(boss);
-                    let shown = if pn > 1 {
-                        format!("{} (P{pn})", boss_name(base_name(boss)))
-                    } else {
-                        boss_name(boss).to_string()
-                    };
-                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, &shown);
+                    let shown = boss_name(base_name(boss));
+                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, shown);
                     self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "TARGET");
+                    let mut right = W - 24;
                     if !f.sound_on {
-                        self.text(M + 12, 114, W - 24, F_GLYPH, DIM, DT_RIGHT, GLYPH_MUTE);
+                        self.text(M + 12, 114, right, F_GLYPH, DIM, DT_RIGHT, GLYPH_MUTE);
+                        right -= 20;
+                    }
+                    let pn = phase_num(boss);
+                    if pn > 1 {
+                        let hint = format!("phase {pn}");
+                        self.text(M + 12, 114, right, F_TINY, DIM, DT_RIGHT, &hint);
                     }
                     let color = mix(ACCENT, TEXT, ease_out_cubic(f.flash_t));
                     match target {
@@ -1029,26 +1014,8 @@ impl Renderer {
                     );
                     self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "RESULT");
                     if h.n_phases > 1 {
-                        let chip = match f.view_phase {
-                            Some(i) => format!("phase {}/{}", i + 1, h.n_phases),
-                            None => format!("{} phases", h.n_phases),
-                        };
-                        let (cx, cy, cw, ch) = PHASE_HIT;
-                        if hov(Hit::Phase) || prs(Hit::Phase) {
-                            let tint = if prs(Hit::Phase) { ACCENT } else { CARD_HI };
-                            self.rround(cx + 40, cy, cw - 40, ch, 5, tint);
-                        }
-                        let cc = if prs(Hit::Phase) { BG } else { DIM };
-                        self.text_rect(
-                            cx,
-                            cy,
-                            cw - 4,
-                            ch,
-                            F_TINY,
-                            cc,
-                            DT_RIGHT | DT_VCENTER,
-                            &chip,
-                        );
+                        let hint = format!("{} phases", h.n_phases);
+                        self.text(M + 12, 114, W - 24, F_TINY, DIM, DT_RIGHT, &hint);
                     }
                     let (res, color) = match (h.last.kill, h.last.end_ts) {
                         _ if h.last.lost => ("lost", DANGER),
@@ -1692,12 +1659,7 @@ impl Renderer {
         match row {
             Row::Fight(f) => {
                 self.fill(x, y + 12, w, 1, CARD_HI);
-                let pn = phase_num(&f.name);
-                let name = if pn > 1 {
-                    format!("{} (P{pn})", boss_name(base_name(&f.name)))
-                } else {
-                    boss_name(&f.name).to_string()
-                };
+                let name = boss_name(base_name(&f.name));
                 let label = format!("{name}  {}", &fmt_clock(f.start_ts)[..5]);
                 let tw = label.chars().count() as i32 * 7 + 16;
                 self.fill(x, y, tw, log::ROW_H, BG);
@@ -1825,7 +1787,6 @@ impl Renderer {
             (RUN_NEXT_HIT, Hit::RunNext),
             (FIGHT_PREV_HIT, Hit::FightPrev),
             (FIGHT_NEXT_HIT, Hit::FightNext),
-            (PHASE_HIT, Hit::Phase),
         ];
         regions
             .into_iter()
@@ -1969,7 +1930,7 @@ mod tests {
             discord_on: false,
             view_run: Some(0),
             view_group: Some(0),
-            view_phase: None,
+            group_pages: 1,
             run_sel: false,
             group_sel: false,
         }
@@ -2096,7 +2057,6 @@ mod tests {
             (RUN_NEXT_HIT, Hit::RunNext),
             (FIGHT_PREV_HIT, Hit::FightPrev),
             (FIGHT_NEXT_HIT, Hit::FightNext),
-            (PHASE_HIT, Hit::Phase),
         ] {
             let (x, y, w, h) = rect;
             assert_eq!(r.hit_test_where(x, y, |h| h == hit), Some(hit));
@@ -2106,14 +2066,6 @@ mod tests {
             );
             assert_ne!(r.hit_test(x + w, y + h), Some(hit));
         }
-        let (x, y, w, h) = PHASE_HIT;
-        assert!(x >= 14 && x + w <= 346);
-        assert!(y >= 82 && y + h <= 178);
-        assert_eq!(r.hit_test(x + w - 1, y + h - 1), Some(Hit::Target));
-        assert_eq!(
-            r.hit_test_where(x + w - 1, y + h - 1, |h| h != Hit::Target),
-            Some(Hit::Phase)
-        );
     }
 
     #[test]
@@ -2259,22 +2211,13 @@ mod tests {
         assert_ne!(pix(&r, 20, 300), CARD);
         assert_eq!(pix(&r, 304, 11), CARD_HI);
 
-        let hist = Frame {
-            run_sel: true,
-            group_sel: true,
-            view_phase: Some(0),
-            ..frame()
-        };
-        r.draw_main(&mut gs, &hist);
-        assert_eq!(pix(&r, 300, 397), CARD);
-        assert_eq!(pix(&r, 30, 419), CARD);
         let group = Frame {
             run_sel: true,
             group_sel: true,
-            view_phase: None,
             ..frame()
         };
         r.draw_main(&mut gs, &group);
+        assert_eq!(pix(&r, 300, 397), CARD);
         assert_eq!(pix(&r, 30, 419), DANGER);
 
         let tipped = Frame {
