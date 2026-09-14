@@ -4,11 +4,11 @@ mod app;
 mod discord;
 mod log;
 mod logwatch;
-mod names;
-mod parse;
+
+mod game;
 mod render;
 mod scan;
-mod state;
+
 mod ui;
 mod update;
 mod vr;

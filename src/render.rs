@@ -1,10 +1,10 @@
 use crate::discord::Link;
-use crate::log::{self, Filter, Row};
-use crate::names::{boss_name, phase_name, stage_name};
-use crate::state::{
+use crate::game::names::{boss_name, phase_name, stage_name};
+use crate::game::state::{
     base_name, describe_source, fmt_clock, generic_attacker, merge_tallies, phase_num, BossFight,
     GameState, Mode, Tally,
 };
+use crate::log::{self, Filter, Row};
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Foundation::RECT;

@@ -1,11 +1,11 @@
 use crate::discord::{self, Link, Presence};
+use crate::game::state::{base_name, GameState, Run};
 use crate::log::{self, Filter};
 use crate::logwatch::{self, LogWatch};
 use crate::render::{
     tip_ready, Env, Frame, Hit, Info, LogHit, LogView, Renderer, LOGICAL_H, LOGICAL_W, LOG_H,
     LOG_W, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE,
 };
-use crate::state::{base_name, GameState, Run};
 use crate::update::{self, Badge};
 use crate::vr::VrOverlay;
 use std::io::BufRead;

@@ -1,4 +1,4 @@
-use crate::parse::{parse_msg, split_line, Event};
+use crate::game::event::{parse_msg, split_line, Event};
 use std::collections::{HashSet, VecDeque};
 
 #[derive(Debug, Clone)]

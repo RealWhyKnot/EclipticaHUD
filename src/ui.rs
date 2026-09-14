@@ -85,7 +85,7 @@ fn save_scale(scale: f32) {
 fn window_from(text: &str) -> u64 {
     text.trim()
         .parse::<u64>()
-        .map_or(crate::state::DEFAULT_WINDOW, |w| {
+        .map_or(crate::game::state::DEFAULT_WINDOW, |w| {
             w.clamp(WINDOW_STEPS[0], WINDOW_STEPS[WINDOW_STEPS.len() - 1])
         })
 }
@@ -761,7 +761,7 @@ pub fn run() {
         app.set_scale(load_text("scale.txt").map_or(1.0, |t| scale_from(&t)));
         app.set_alpha(load_text("alpha.txt").map_or(MAX_ALPHA, |t| alpha_from(&t)));
         app.set_window(
-            load_text("window.txt").map_or(crate::state::DEFAULT_WINDOW, |t| window_from(&t)),
+            load_text("window.txt").map_or(crate::game::state::DEFAULT_WINDOW, |t| window_from(&t)),
         );
         app.backfill_history();
         if load_discord() {

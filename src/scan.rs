@@ -1,5 +1,6 @@
-use crate::state::{self, fmt_clock, GameState};
-use crate::{logwatch, parse};
+use crate::game::event as parse;
+use crate::game::state::{self, fmt_clock, GameState};
+use crate::logwatch;
 
 pub fn scan(path: Option<String>) {
     let path = path.map(std::path::PathBuf::from).or_else(|| {
