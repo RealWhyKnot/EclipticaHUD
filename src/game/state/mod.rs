@@ -97,11 +97,11 @@ impl GameState {
     }
 
     pub fn stage_dps(&self, now: u64) -> u64 {
-        self.stage_stats.dmg / now.saturating_sub(self.stage_stats.start_ts).max(1)
+        per_sec(self.stage_stats.dmg, self.stage_stats.start_ts, now)
     }
 
     pub fn stage_taken_rate(&self, now: u64) -> u64 {
-        self.stage_stats.taken / now.saturating_sub(self.stage_stats.start_ts).max(1)
+        per_sec(self.stage_stats.taken, self.stage_stats.start_ts, now)
     }
 
     pub fn wave_idle(&self, now: u64) -> bool {
@@ -175,7 +175,7 @@ impl GameState {
         if self.boss.is_none() {
             return 0;
         }
-        self.fight_dmg / now.saturating_sub(self.fight_start).max(1)
+        per_sec(self.fight_dmg, self.fight_start, now)
     }
 
     pub fn rolling_taken(&mut self, now: u64) -> u64 {
@@ -187,8 +187,12 @@ impl GameState {
         if self.boss.is_none() {
             return 0;
         }
-        self.fight_taken / now.saturating_sub(self.fight_start).max(1)
+        per_sec(self.fight_taken, self.fight_start, now)
     }
+}
+
+fn per_sec(total: u64, start: u64, now: u64) -> u64 {
+    total / now.saturating_sub(start).max(1)
 }
 
 #[cfg(test)]
