@@ -2,19 +2,17 @@ use crate::game::event::{self as parse, fmt_clock};
 use crate::game::run::base_name;
 use crate::game::source::describe_source;
 use crate::game::state::GameState;
-use crate::logwatch;
+use crate::vrchat::log::{log_dir, newest_log, open_shared};
 
 pub fn scan(path: Option<String>) {
-    let path = path.map(std::path::PathBuf::from).or_else(|| {
-        logwatch::log_dir()
-            .as_deref()
-            .and_then(logwatch::newest_log)
-    });
+    let path = path
+        .map(std::path::PathBuf::from)
+        .or_else(|| log_dir().as_deref().and_then(newest_log));
     let Some(path) = path else {
         eprintln!("no VRChat log found");
         std::process::exit(1);
     };
-    let Ok(file) = logwatch::open_shared(&path) else {
+    let Ok(file) = open_shared(&path) else {
         eprintln!("cannot open {}", path.display());
         std::process::exit(1);
     };

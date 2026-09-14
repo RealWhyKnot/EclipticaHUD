@@ -4,7 +4,7 @@ use crate::game::names::{boss_name, phase_name, stage_name};
 use crate::game::run::{base_name, merge_tallies, phase_num, BossFight, Tally};
 use crate::game::source::{describe_source, generic_attacker};
 use crate::game::state::{GameState, Mode};
-use crate::log::{self, Filter, Row};
+use crate::hud::timeline::{self, Filter, Row};
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Foundation::RECT;
@@ -1568,9 +1568,9 @@ impl Renderer {
         }
     }
 
-    pub fn draw_log(&mut self, src: Option<log::Source<'_>>, lv: &LogView) {
+    pub fn draw_log(&mut self, src: Option<timeline::Source<'_>>, lv: &LogView) {
         self.fill(0, 0, LOG_W, LOG_H, BG);
-        let rows = log::timeline(src, lv.filter);
+        let rows = timeline::timeline(src, lv.filter);
         self.text_rect(
             14,
             LOG_TAB_Y,
@@ -1650,18 +1650,18 @@ impl Renderer {
                 self.px(bx + bw),
                 self.px(by + bh),
             );
-            let first = (lv.scroll / log::ROW_H as f32).floor().max(0.0) as usize;
-            let mut y = by + (first as i32 * log::ROW_H) - lv.scroll as i32 + lv.slide as i32;
+            let first = (lv.scroll / timeline::ROW_H as f32).floor().max(0.0) as usize;
+            let mut y = by + (first as i32 * timeline::ROW_H) - lv.scroll as i32 + lv.slide as i32;
             for row in rows.iter().skip(first) {
                 if y > by + bh {
                     break;
                 }
                 self.draw_log_row(bx, y, bw, row);
-                y += log::ROW_H;
+                y += timeline::ROW_H;
             }
             RestoreDC(self.dc, saved);
         }
-        if let Some((ty, th)) = log::thumb(rows.len(), bh, lv.scroll) {
+        if let Some((ty, th)) = timeline::thumb(rows.len(), bh, lv.scroll) {
             let (tx, tyy, tw, thh) = LOG_TRACK;
             self.rround(tx, tyy, tw, thh, 3, CARD);
             let lit = lv.dragging || lv.hover == Some(LogHit::Thumb);
@@ -1685,12 +1685,12 @@ impl Renderer {
                 let name = boss_name(base_name(&f.name));
                 let label = format!("{name}  {}", &fmt_clock(f.start_ts)[..5]);
                 let tw = label.chars().count() as i32 * 7 + 16;
-                self.fill(x, y, tw, log::ROW_H, BG);
+                self.fill(x, y, tw, timeline::ROW_H, BG);
                 self.text_rect(
                     x + 4,
                     y,
                     tw,
-                    log::ROW_H,
+                    timeline::ROW_H,
                     F_LABEL,
                     DIM,
                     DT_LEFT | DT_VCENTER,
@@ -1698,14 +1698,23 @@ impl Renderer {
                 );
             }
             Row::Hit(h) => {
-                self.rround(x, y + 5, 3, log::ROW_H - 10, 1, DANGER);
+                self.rround(x, y + 5, 3, timeline::ROW_H - 10, 1, DANGER);
                 let vc = DT_LEFT | DT_VCENTER;
-                self.text_rect(x + 12, y, 62, log::ROW_H, F_TINY, DIM, vc, &fmt_clock(h.ts));
+                self.text_rect(
+                    x + 12,
+                    y,
+                    62,
+                    timeline::ROW_H,
+                    F_TINY,
+                    DIM,
+                    vc,
+                    &fmt_clock(h.ts),
+                );
                 self.text_rect(
                     x + 76,
                     y,
                     44,
-                    log::ROW_H,
+                    timeline::ROW_H,
                     F_BODY,
                     DANGER,
                     DT_RIGHT | DT_VCENTER,
@@ -1713,29 +1722,65 @@ impl Renderer {
                 );
                 let (who, attack) = describe_source(&h.source, h.amount);
                 let who_color = if generic_attacker(&who) { DIM } else { TEXT };
-                self.text_rect(x + 130, y, 120, log::ROW_H, F_BODY, who_color, vc, &who);
-                self.text_rect(x + 254, y, w - 254, log::ROW_H, F_BODY, DIM, vc, &attack);
+                self.text_rect(
+                    x + 130,
+                    y,
+                    120,
+                    timeline::ROW_H,
+                    F_BODY,
+                    who_color,
+                    vc,
+                    &who,
+                );
+                self.text_rect(
+                    x + 254,
+                    y,
+                    w - 254,
+                    timeline::ROW_H,
+                    F_BODY,
+                    DIM,
+                    vc,
+                    &attack,
+                );
             }
             Row::Target(t) => {
-                self.rround(x, y + 5, 3, log::ROW_H - 10, 1, ACCENT);
+                self.rround(x, y + 5, 3, timeline::ROW_H - 10, 1, ACCENT);
                 let vc = DT_LEFT | DT_VCENTER;
-                self.text_rect(x + 12, y, 62, log::ROW_H, F_TINY, DIM, vc, &fmt_clock(t.ts));
+                self.text_rect(
+                    x + 12,
+                    y,
+                    62,
+                    timeline::ROW_H,
+                    F_TINY,
+                    DIM,
+                    vc,
+                    &fmt_clock(t.ts),
+                );
                 self.text_rect(
                     x + 76,
                     y,
                     44,
-                    log::ROW_H,
+                    timeline::ROW_H,
                     F_TINY,
                     ACCENT,
                     DT_RIGHT | DT_VCENTER,
                     "aggro",
                 );
-                self.text_rect(x + 130, y, 120, log::ROW_H, F_BODY, TEXT, vc, &t.player);
+                self.text_rect(
+                    x + 130,
+                    y,
+                    120,
+                    timeline::ROW_H,
+                    F_BODY,
+                    TEXT,
+                    vc,
+                    &t.player,
+                );
                 self.text_rect(
                     x + 254,
                     y,
                     w - 254,
-                    log::ROW_H,
+                    timeline::ROW_H,
                     F_BODY,
                     DIM,
                     vc,
@@ -1743,14 +1788,23 @@ impl Renderer {
                 );
             }
             Row::Death { ts, .. } => {
-                self.rround(x, y + 5, 3, log::ROW_H - 10, 1, DANGER);
+                self.rround(x, y + 5, 3, timeline::ROW_H - 10, 1, DANGER);
                 let vc = DT_LEFT | DT_VCENTER;
-                self.text_rect(x + 12, y, 62, log::ROW_H, F_TINY, DIM, vc, &fmt_clock(*ts));
+                self.text_rect(
+                    x + 12,
+                    y,
+                    62,
+                    timeline::ROW_H,
+                    F_TINY,
+                    DIM,
+                    vc,
+                    &fmt_clock(*ts),
+                );
                 self.text_rect(
                     x + 76,
                     y,
                     44,
-                    log::ROW_H,
+                    timeline::ROW_H,
                     F_TINY,
                     DANGER,
                     DT_RIGHT | DT_VCENTER,
@@ -1760,7 +1814,7 @@ impl Renderer {
                     x + 130,
                     y,
                     w - 130,
-                    log::ROW_H,
+                    timeline::ROW_H,
                     F_BODY,
                     DANGER,
                     vc,
@@ -2374,7 +2428,7 @@ mod tests {
             tip: None,
             thumb: None,
         };
-        r.draw_log(log::live(&gs), &lv);
+        r.draw_log(timeline::live(&gs), &lv);
         assert_eq!(pix(&r, 0, 0), BG);
         let (_, _, ax, aw) = LOG_TABS[0];
         assert_eq!(pix(&r, ax + aw / 2, LOG_TAB_Y + 2), ACCENT);
@@ -2389,13 +2443,13 @@ mod tests {
         gs.feed("2026.09.07 09:13:00 Debug      -  ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0");
         gs.feed("2026.09.07 09:13:01 Debug      -  ownership of Yuki transferred to Alice");
         lv.filter = Filter::Targets;
-        r.draw_log(log::live(&gs), &lv);
+        r.draw_log(timeline::live(&gs), &lv);
         assert_eq!(pix(&r, tx + 3, ty + 3), BG);
         let (bx, by, _, _) = LOG_BODY;
         assert_eq!(pix(&r, bx + 1, by + 12), ACCENT);
         lv.filter = Filter::All;
-        lv.scroll = log::max_scroll(42, r.body_h());
-        r.draw_log(log::live(&gs), &lv);
+        lv.scroll = timeline::max_scroll(42, r.body_h());
+        r.draw_log(timeline::live(&gs), &lv);
         assert_eq!(pix(&r, tx + 3, ty + 3), CARD);
         assert_eq!(pix(&r, tx + 3, LOG_H - 12), CARD_HI);
         assert_eq!(pix(&r, bx + 1, by + 12), DANGER);

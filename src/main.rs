@@ -2,8 +2,8 @@
 
 mod app;
 mod discord;
-mod log;
-mod logwatch;
+mod hud;
+mod vrchat;
 
 mod game;
 mod render;

@@ -1,14 +1,14 @@
 use crate::discord::{self, Link, Presence};
 use crate::game::run::{base_name, Run};
 use crate::game::state::GameState;
-use crate::log::{self, Filter};
-use crate::logwatch::{self, LogWatch};
+use crate::hud::timeline::{self, Filter};
 use crate::render::{
     tip_ready, Env, Frame, Hit, Info, LogHit, LogView, Renderer, LOGICAL_H, LOGICAL_W, LOG_H,
     LOG_W, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE,
 };
 use crate::update::{self, Badge};
 use crate::vr::VrOverlay;
+use crate::vrchat::log::{all_logs, log_dir, open_shared, LogWatch};
 use std::io::BufRead;
 use std::path::Path;
 use std::time::Instant;
@@ -127,12 +127,12 @@ fn play(wav: &'static [u8]) {
 }
 
 fn backfill(gs: &mut GameState, dir: &Path) {
-    let logs = logwatch::all_logs(dir);
+    let logs = all_logs(dir);
     let Some((_, old)) = logs.split_last() else {
         return;
     };
     for path in old {
-        let Ok(file) = logwatch::open_shared(path) else {
+        let Ok(file) = open_shared(path) else {
             continue;
         };
         let mut reader = std::io::BufReader::new(file);
@@ -316,7 +316,7 @@ impl App {
     }
 
     pub fn backfill_history(&mut self) {
-        if let Some(dir) = logwatch::log_dir() {
+        if let Some(dir) = log_dir() {
             backfill(&mut self.gs, &dir);
         }
     }
@@ -356,7 +356,7 @@ impl App {
         self.viewed_run()
     }
 
-    fn log_source(&self) -> Option<log::Source<'_>> {
+    fn log_source(&self) -> Option<timeline::Source<'_>> {
         Self::source(&self.gs, self.sel_run, self.viewed_page(), self.env())
     }
 
@@ -365,10 +365,10 @@ impl App {
         sel: Option<usize>,
         page: usize,
         env: Env,
-    ) -> Option<log::Source<'_>> {
+    ) -> Option<timeline::Source<'_>> {
         match sel {
-            None => log::live(gs).filter(|_| env == Env::InWorld),
-            Some(_) => gs.runs.get(page).map(log::of_run),
+            None => timeline::live(gs).filter(|_| env == Env::InWorld),
+            Some(_) => gs.runs.get(page).map(timeline::of_run),
         }
     }
 
@@ -576,11 +576,11 @@ impl App {
     }
 
     pub fn log_rows(&self) -> usize {
-        log::timeline(self.log_source(), self.log.filter).len()
+        timeline::timeline(self.log_source(), self.log.filter).len()
     }
 
     pub fn log_thumb(&self) -> Option<(i32, i32)> {
-        log::thumb(
+        timeline::thumb(
             self.log.rows,
             self.log.renderer.body_h(),
             self.log.scroll_shown,
@@ -595,7 +595,7 @@ impl App {
     }
 
     fn log_clamp(&mut self) {
-        let max = log::max_scroll(self.log.rows, self.log.renderer.body_h());
+        let max = timeline::max_scroll(self.log.rows, self.log.renderer.body_h());
         self.log.scroll = self.log.scroll.clamp(0.0, max);
         self.log.scroll_shown = self.log.scroll_shown.clamp(0.0, max);
     }
@@ -605,7 +605,7 @@ impl App {
         let steps = self.log.wheel_acc / WHEEL_DELTA;
         self.log.wheel_acc -= steps * WHEEL_DELTA;
         if steps != 0 {
-            self.log.scroll -= steps as f32 * 3.0 * log::ROW_H as f32;
+            self.log.scroll -= steps as f32 * 3.0 * timeline::ROW_H as f32;
             self.log_clamp();
             self.log.thumb_seen = Some(Instant::now());
         }
@@ -632,7 +632,8 @@ impl App {
     pub fn log_drag_to(&mut self, y: i32) {
         if let Some((y0, s0)) = self.log.drag {
             let dy = self.log.renderer.unscale(y - y0);
-            self.log.scroll = log::drag_scroll(self.log.rows, self.log.renderer.body_h(), s0, dy);
+            self.log.scroll =
+                timeline::drag_scroll(self.log.rows, self.log.renderer.body_h(), s0, dy);
             self.log.scroll_shown = self.log.scroll;
             self.log.thumb_seen = Some(Instant::now());
         }
@@ -753,7 +754,7 @@ impl App {
             thumb: self.log_thumb(),
             dragging: self.log.drag.is_some(),
             thumb_t: self.log.thumb_t,
-            slide: -(1.0 - crate::render::ease_out_cubic(slide_t)) * log::ROW_H as f32,
+            slide: -(1.0 - crate::render::ease_out_cubic(slide_t)) * timeline::ROW_H as f32,
         };
         let (sel, page, env) = (self.sel_run, self.viewed_page(), self.env());
         let src = Self::source(&self.gs, sel, page, env);
@@ -1440,13 +1441,13 @@ mod tests {
         let t = app.tick();
         assert!(t.redraw_log);
         assert_eq!(app.log.rows, 62);
-        let max = log::max_scroll(62, app.log.renderer.body_h());
+        let max = timeline::max_scroll(62, app.log.renderer.body_h());
         app.log_wheel(-WHEEL_DELTA * 100);
         assert_eq!(app.log.scroll, max);
         app.log_wheel(WHEEL_DELTA / 2);
         assert_eq!(app.log.scroll, max);
         app.log_wheel(WHEEL_DELTA / 2);
-        assert_eq!(app.log.scroll, max - 3.0 * log::ROW_H as f32);
+        assert_eq!(app.log.scroll, max - 3.0 * timeline::ROW_H as f32);
         app.log_press(LogHit::Tab(Filter::Targets), 0);
         assert_eq!(app.log.scroll, 0.0);
         assert_eq!(app.log.rows, 2);
