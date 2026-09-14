@@ -10,9 +10,10 @@ Everything comes from the log VRChat already writes, so there are no mods, no OS
 - A short blip whenever the boss switches targets, so you hear the swap without looking
 - Your DPS over the last 10 seconds, DPS for the whole fight, and total fight damage
 - Personal damage summary from your last boss kill (strike + non-strike)
-- Recent damage you took, with the enemy and attack that caused it
+- Damage taken with the same depth: taken over the last 10 seconds, fight total, hit count, biggest and average hit, who is hurting you and with which attacks
 - Current stage, run progress, and class
-- Every past run and boss fight, with damage, DPS, duration, and kill totals
+- Every past run and boss fight, with damage dealt and taken, DPS, duration, and kill totals
+- An event log window with every hit you took and every aggro switch, timestamped and scrollable
 
 The log only records your own damage, so DPS for other players isn't possible. Target names are whoever the boss aggros, which the world exposes for every player.
 
@@ -21,6 +22,10 @@ The log only records your own damage, so DPS for other players isn't possible. T
 Grab a release or build it, then run `ecliptica-hud.exe`. The panel appears bottom-right; drag it anywhere, close it with the x or Escape. Position is remembered.
 
 Click the target name to mute or unmute the target-change sound. A small muted icon shows on the boss card while it's off, and the choice is remembered.
+
+Hover over anything for a short hint of what it shows or does.
+
+The clock button in the header opens the event log: a second window listing hits and aggro switches newest first, with a filter for either kind. Scroll with the wheel or drag the bar, close it with Escape or the x. It stays on the desktop (the wrist overlay only mirrors the main panel), and its position and whether it was open are remembered.
 
 The arrows next to the run row and on the boss card step back through earlier runs and their fights; stepping forward past the newest returns to the live view. A run ends when you're back in the lobby, leave the world, or restart VRChat. On startup the HUD reads whatever logs VRChat still has on disk, so the last few days of runs are there without keeping it open.
 

@@ -1,5 +1,9 @@
+use crate::log::{self, Filter, Row};
 use crate::names::{boss_name, phase_name, stage_name};
-use crate::state::{base_name, fmt_clock, phase_num, GameState, Mode};
+use crate::state::{
+    attacker_label, base_name, fmt_clock, merge_tallies, phase_num, pretty_attack, split_source,
+    BossFight, GameState, Mode, Tally,
+};
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Foundation::RECT;
@@ -7,9 +11,13 @@ use windows_sys::Win32::Graphics::Gdi::*;
 
 pub const LOGICAL_W: i32 = 360;
 pub const LOGICAL_H: i32 = 600;
+pub const LOG_W: i32 = 420;
+pub const LOG_H: i32 = 560;
 
 pub const CLOSE_HIT: (i32, i32, i32, i32) = (324, 0, 36, 36);
 pub const CLOSE_BTN: (i32, i32, i32, i32) = (328, 8, 24, 24);
+pub const LOG_HIT: (i32, i32, i32, i32) = (292, 0, 32, 36);
+pub const LOG_BTN: (i32, i32, i32, i32) = (296, 8, 24, 24);
 pub const UPDATE_HIT: (i32, i32) = (210, LOGICAL_H - 32);
 pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 126, 308, 40);
 pub const RUN_PREV_HIT: (i32, i32, i32, i32) = (14, 54, 26, 24);
@@ -17,9 +25,25 @@ pub const RUN_NEXT_HIT: (i32, i32, i32, i32) = (320, 54, 26, 24);
 pub const FIGHT_PREV_HIT: (i32, i32, i32, i32) = (240, 86, 26, 20);
 pub const FIGHT_NEXT_HIT: (i32, i32, i32, i32) = (308, 86, 26, 20);
 pub const PHASE_HIT: (i32, i32, i32, i32) = (220, 110, 114, 20);
+const UPDATE_RECT: (i32, i32, i32, i32) =
+    (UPDATE_HIT.0, UPDATE_HIT.1, LOGICAL_W - UPDATE_HIT.0, 32);
+const TIP_DELAY_MS: u128 = 450;
+
+pub const LOG_CLOSE_HIT: (i32, i32, i32, i32) = (380, 0, 40, 36);
+pub const LOG_CLOSE_BTN: (i32, i32, i32, i32) = (388, 8, 24, 24);
+pub const LOG_TABS: [(Filter, &str, i32, i32); 3] = [
+    (Filter::All, "All", 166, 40),
+    (Filter::Damage, "Damage", 210, 66),
+    (Filter::Targets, "Targets", 280, 66),
+];
+pub const LOG_TAB_Y: i32 = 8;
+pub const LOG_TAB_H: i32 = 24;
+pub const LOG_BODY: (i32, i32, i32, i32) = (14, 44, LOG_W - 40, LOG_H - 54);
+pub const LOG_TRACK: (i32, i32, i32, i32) = (LOG_W - 20, 44, 6, LOG_H - 54);
 
 const BG: u32 = rgb(0x14, 0x14, 0x1c);
 const CARD: u32 = rgb(0x1d, 0x1d, 0x29);
+const CARD_HI: u32 = rgb(0x2a, 0x2a, 0x3c);
 const TEXT: u32 = rgb(0xe9, 0xe9, 0xf2);
 const DIM: u32 = rgb(0x94, 0x94, 0xac);
 const ACCENT: u32 = rgb(0x8a, 0x6c, 0xff);
@@ -49,15 +73,218 @@ fn mix(a: u32, b: u32, t: f32) -> u32 {
     ch(0) | ch(8) | ch(16)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hit {
+    Log,
+    Close,
+    Update,
+    Target,
+    RunPrev,
+    RunNext,
+    FightPrev,
+    FightNext,
+    Phase,
+    Info(Info),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Info {
+    Status,
+    Progress,
+    RunRow,
+    Boss,
+    Result,
+    DealtStats,
+    LastKill,
+    TakenStats,
+    LastHit,
+    Attackers,
+    TopAttacks,
+    HistAttackers,
+    HistTopAttacks,
+    Vr,
+    LogDot,
+    Version,
+}
+
+pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 16] = [
+    (Info::Status, (14, 26, 332, 20)),
+    (Info::Progress, (14, 46, 332, 8)),
+    (Info::RunRow, (44, 54, 272, 24)),
+    (Info::Boss, (74, 84, 160, 26)),
+    (Info::Result, (26, 126, 308, 40)),
+    (Info::DealtStats, (14, 186, 332, 52)),
+    (Info::LastKill, (14, 240, 332, 30)),
+    (Info::TakenStats, (14, 306, 332, 96)),
+    (Info::LastHit, (14, 402, 332, 24)),
+    (Info::Attackers, (14, 428, 332, 48)),
+    (Info::TopAttacks, (14, 478, 332, 82)),
+    (Info::HistAttackers, (14, 398, 332, 48)),
+    (Info::HistTopAttacks, (14, 448, 332, 82)),
+    (Info::Vr, (14, LOGICAL_H - 30, 84, 24)),
+    (Info::LogDot, (104, LOGICAL_H - 30, 80, 24)),
+    (
+        Info::Version,
+        (
+            UPDATE_HIT.0,
+            UPDATE_HIT.1,
+            LOGICAL_W - 14 - UPDATE_HIT.0,
+            32,
+        ),
+    ),
+];
+
+impl Info {
+    pub fn live_only(self) -> bool {
+        matches!(self, Info::LastHit | Info::Attackers | Info::TopAttacks)
+    }
+
+    pub fn history_only(self) -> bool {
+        matches!(
+            self,
+            Info::Result | Info::HistAttackers | Info::HistTopAttacks
+        )
+    }
+
+    fn rect(self) -> (i32, i32, i32, i32) {
+        INFO_REGIONS
+            .iter()
+            .find(|(i, _)| *i == self)
+            .map_or((0, 0, 0, 0), |(_, r)| *r)
+    }
+
+    fn tip(self) -> &'static str {
+        match self {
+            Info::Status => "Current stage, how far the run has progressed, and your class",
+            Info::Progress => "Run progress through the current stage",
+            Info::RunRow => "The run you are viewing; deaths are counted for the whole run",
+            Info::Boss => "The boss of this fight; (P2) marks a later phase",
+            Info::Result => "How this fight ended, deaths during it, and how long it took",
+            Info::DealtStats => "Your damage: last 10 seconds, then the whole boss fight",
+            Info::LastKill => "What the game credited you with on the last boss kill",
+            Info::TakenStats => "Damage you took: last 10 seconds, then the whole boss fight",
+            Info::LastHit => "The most recent hit on you: amount, attacker, attack",
+            Info::Attackers | Info::HistAttackers => {
+                "Who hurt you this fight, as a share of the total"
+            }
+            Info::TopAttacks | Info::HistTopAttacks => {
+                "The attacks that hurt most this fight, with hit counts"
+            }
+            Info::Vr => "SteamVR wrist overlay: green when attached, red when failing",
+            Info::LogDot => "VRChat output log: green when found, amber when missing",
+            Info::Version => "Running version; a new release shows here when available",
+        }
+    }
+}
+
+impl Hit {
+    pub fn clickable(self) -> bool {
+        !matches!(self, Hit::Info(_))
+    }
+
+    pub fn tip(self) -> &'static str {
+        match self {
+            Hit::Log => "Open or close the event log window",
+            Hit::Close => "Close the HUD (Esc)",
+            Hit::Update => "Install this update and restart",
+            Hit::Target => "Click to mute or unmute the aggro sound",
+            Hit::RunPrev => "Earlier run",
+            Hit::RunNext => "Later run, back to live at the end",
+            Hit::FightPrev => "Earlier boss fight in this run",
+            Hit::FightNext => "Later boss fight in this run",
+            Hit::Phase => "Cycle through the phases of this fight",
+            Hit::Info(i) => i.tip(),
+        }
+    }
+
+    fn rect(self) -> (i32, i32, i32, i32) {
+        match self {
+            Hit::Log => LOG_BTN,
+            Hit::Close => CLOSE_BTN,
+            Hit::Update => UPDATE_RECT,
+            Hit::Target => TARGET_HIT,
+            Hit::RunPrev => RUN_PREV_HIT,
+            Hit::RunNext => RUN_NEXT_HIT,
+            Hit::FightPrev => FIGHT_PREV_HIT,
+            Hit::FightNext => FIGHT_NEXT_HIT,
+            Hit::Phase => PHASE_HIT,
+            Hit::Info(i) => i.rect(),
+        }
+    }
+}
+
+pub fn tip_ready(since: Option<std::time::Instant>) -> bool {
+    since.is_some_and(|t| t.elapsed().as_millis() >= TIP_DELAY_MS)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LogHit {
+    Close,
+    Tab(Filter),
+    Thumb,
+    Track,
+    Title,
+    Count,
+}
+
+pub const LOG_TITLE: (i32, i32, i32, i32) = (14, LOG_TAB_Y, 74, LOG_TAB_H);
+pub const LOG_COUNT: (i32, i32, i32, i32) = (88, LOG_TAB_Y, 76, LOG_TAB_H);
+
+impl LogHit {
+    pub fn clickable(self) -> bool {
+        !matches!(self, LogHit::Title | LogHit::Count)
+    }
+
+    pub fn tip(self) -> &'static str {
+        match self {
+            LogHit::Title => "Every hit you took and every aggro switch, newest first",
+            LogHit::Count => "Events in the current filter; a grey line marks a boss fight start",
+            LogHit::Close => "Close the log (Esc)",
+            LogHit::Tab(Filter::All) => "Show hits and aggro switches",
+            LogHit::Tab(Filter::Damage) => "Show only damage you took",
+            LogHit::Tab(Filter::Targets) => "Show only aggro switches",
+            LogHit::Thumb => "Drag to scroll, or use the wheel",
+            LogHit::Track => "Click to jump a page",
+        }
+    }
+
+    fn rect(self, thumb: Option<(i32, i32)>) -> (i32, i32, i32, i32) {
+        match self {
+            LogHit::Close => LOG_CLOSE_BTN,
+            LogHit::Tab(f) => LOG_TABS
+                .iter()
+                .find(|t| t.0 == f)
+                .map_or(LOG_CLOSE_BTN, |t| (t.2, LOG_TAB_Y, t.3, LOG_TAB_H)),
+            LogHit::Thumb => {
+                let (x, y, w, _) = LOG_TRACK;
+                let (ty, th) = thumb.unwrap_or((0, 24));
+                (x, y + ty, w, th)
+            }
+            LogHit::Track => LOG_TRACK,
+            LogHit::Title => LOG_TITLE,
+            LogHit::Count => LOG_COUNT,
+        }
+    }
+}
+
 pub struct Frame {
     pub now: u64,
     pub flash_t: f32,
-    pub hover_close: bool,
-    pub pressed_close: bool,
+    pub taken_flash_t: f32,
+    pub dead_pulse: f32,
+    pub hover: Option<Hit>,
+    pub pressed: Option<Hit>,
+    pub tip: Option<Hit>,
     pub vr: VrStatus,
     pub log_ok: bool,
+    pub log_open: bool,
     pub progress_shown: f32,
     pub dps_frac_shown: f32,
+    pub taken_frac_shown: f32,
+    pub dps_shown: f32,
+    pub fight_dps_shown: f32,
+    pub taken_shown: f32,
+    pub taken_rate_shown: f32,
     pub update: Badge,
     pub sound_on: bool,
     pub view_run: Option<usize>,
@@ -71,6 +298,29 @@ impl Frame {
     fn live(&self) -> bool {
         !self.run_sel && !self.group_sel && self.view_phase.is_none()
     }
+}
+
+pub struct LogView {
+    pub scroll: f32,
+    pub filter: Filter,
+    pub hover: Option<LogHit>,
+    pub dragging: bool,
+    pub thumb_t: f32,
+    pub slide: f32,
+    pub tip: Option<LogHit>,
+    pub thumb: Option<(i32, i32)>,
+}
+
+struct HistView<'a> {
+    fights: &'a [BossFight],
+    name: &'a str,
+    start: u64,
+    dmg: u64,
+    taken: u64,
+    hits: u32,
+    kill: Option<(u64, u64)>,
+    last: &'a BossFight,
+    n_phases: usize,
 }
 
 pub struct Renderer {
@@ -94,16 +344,19 @@ const GLYPH_CLOSE: &str = "\u{E8BB}";
 const GLYPH_MUTE: &str = "\u{E74F}";
 const GLYPH_PREV: &str = "\u{E76B}";
 const GLYPH_NEXT: &str = "\u{E76C}";
+const GLYPH_LOG: &str = "\u{E81C}";
+
+const SEG_COLORS: [u32; 4] = [DANGER, AMBER, ACCENT, DIM];
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
 impl Renderer {
-    pub fn new(dpi: u32) -> Self {
+    pub fn new(dpi: u32, logical_w: i32, logical_h: i32) -> Self {
         let scale = dpi as f32 / 96.0;
-        let width = (LOGICAL_W as f32 * scale) as i32;
-        let height = (LOGICAL_H as f32 * scale) as i32;
+        let width = (logical_w as f32 * scale) as i32;
+        let height = (logical_h as f32 * scale) as i32;
         unsafe {
             let dc = CreateCompatibleDC(std::ptr::null_mut());
             let mut info: BITMAPINFO = std::mem::zeroed();
@@ -202,7 +455,12 @@ impl Renderer {
     }
 
     fn bar(&self, x: i32, y: i32, w: i32, h: i32, frac: f32, color: u32) {
-        self.rround(x, y, w, h, h / 2, CARD);
+        self.bar_on(x, y, w, h, frac, color, CARD);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bar_on(&self, x: i32, y: i32, w: i32, h: i32, frac: f32, color: u32, track: u32) {
+        self.rround(x, y, w, h, h / 2, track);
         let fw = (w as f32 * frac.clamp(0.0, 1.0)) as i32;
         if fw >= h {
             self.rround(x, y, fw, h, h / 2, color);
@@ -250,20 +508,23 @@ impl Renderer {
         }
     }
 
-    pub fn draw(&mut self, gs: &mut GameState, f: &Frame) {
-        const M: i32 = 14;
-        const W: i32 = LOGICAL_W - 2 * M;
-        let now = f.now;
-        self.fill(0, 0, LOGICAL_W, LOGICAL_H, BG);
-
-        self.text(M, 10, W, F_LABEL, ACCENT, DT_LEFT, "ECLIPTICA HUD");
-        let (bx, by, bw, bh) = CLOSE_BTN;
-        let glyph_color = if f.pressed_close {
+    fn glyph_button(
+        &self,
+        btn: (i32, i32, i32, i32),
+        hover: bool,
+        pressed: bool,
+        lit: bool,
+        glyph: &str,
+    ) {
+        let (bx, by, bw, bh) = btn;
+        let color = if pressed {
             self.rround(bx, by, bw, bh, 6, ACCENT);
             BG
-        } else if f.hover_close {
-            self.rround(bx, by, bw, bh, 6, CARD);
+        } else if hover {
+            self.rround(bx, by, bw, bh, 6, CARD_HI);
             TEXT
+        } else if lit {
+            ACCENT
         } else {
             DIM
         };
@@ -273,8 +534,52 @@ impl Renderer {
             bw,
             bh,
             F_GLYPH,
-            glyph_color,
+            color,
             DT_CENTER | DT_VCENTER,
+            glyph,
+        );
+    }
+
+    fn arrow(&self, hit: (i32, i32, i32, i32), on: bool, hover: bool, pressed: bool, glyph: &str) {
+        let (x, y, w, h) = hit;
+        let color = if !on {
+            CARD
+        } else if pressed {
+            self.rround(x + 2, y + 2, w - 4, h - 4, 5, ACCENT);
+            BG
+        } else if hover {
+            self.rround(x + 2, y + 2, w - 4, h - 4, 5, CARD_HI);
+            TEXT
+        } else {
+            TEXT
+        };
+        self.text_rect(x, y, w, h, F_GLYPH, color, DT_CENTER | DT_VCENTER, glyph);
+    }
+
+    pub fn draw_main(&mut self, gs: &mut GameState, f: &Frame) {
+        const M: i32 = 14;
+        const W: i32 = LOGICAL_W - 2 * M;
+        let now = f.now;
+        let hov = |h: Hit| f.hover == Some(h);
+        let prs = |h: Hit| f.pressed == Some(h);
+        self.fill(0, 0, LOGICAL_W, LOGICAL_H, BG);
+
+        self.text_rect(
+            M,
+            8,
+            W,
+            24,
+            F_LABEL,
+            ACCENT,
+            DT_LEFT | DT_VCENTER,
+            "ECLIPTICA HUD",
+        );
+        self.glyph_button(LOG_BTN, hov(Hit::Log), prs(Hit::Log), f.log_open, GLYPH_LOG);
+        self.glyph_button(
+            CLOSE_BTN,
+            hov(Hit::Close),
+            prs(Hit::Close),
+            false,
             GLYPH_CLOSE,
         );
 
@@ -294,7 +599,8 @@ impl Renderer {
         };
         self.text(M, 28, W, F_BODY, status_color, DT_LEFT, &status);
         if gs.is_dead(now) {
-            self.text(M, 28, W, F_BODY, DANGER, DT_RIGHT, "DEAD");
+            let color = mix(mix(BG, DANGER, 0.45), DANGER, f.dead_pulse);
+            self.text(M, 28, W, F_BODY, color, DT_RIGHT, "DEAD");
         } else if gs.mode == Mode::Stage && !gs.level_tokens.is_empty() {
             let rune = gs.level_tokens.iter().any(|t| t.0);
             let txt = format!(
@@ -304,24 +610,26 @@ impl Renderer {
                 if rune { " +rune" } else { "" }
             );
             let color = if rune { AMBER } else { DIM };
-            self.text(M, 28, W, F_TINY, color, DT_RIGHT, &txt);
+            self.text_rect(M, 28, W, 18, F_TINY, color, DT_RIGHT | DT_VCENTER, &txt);
         }
         if gs.mode == Mode::Stage {
             self.bar(M, 47, W, 4, f.progress_shown, GOOD);
         }
 
-        let arrow = |r: &Renderer, hit: (i32, i32, i32, i32), on: bool, glyph: &str| {
-            let (x, y, w, h) = hit;
-            let color = if on { TEXT } else { CARD };
-            r.text_rect(x, y, w, h, F_GLYPH, color, DT_CENTER | DT_VCENTER, glyph);
-        };
-        arrow(
-            self,
+        self.arrow(
             RUN_PREV_HIT,
             f.view_run.is_some_and(|i| i > 0),
+            hov(Hit::RunPrev),
+            prs(Hit::RunPrev),
             GLYPH_PREV,
         );
-        arrow(self, RUN_NEXT_HIT, f.run_sel, GLYPH_NEXT);
+        self.arrow(
+            RUN_NEXT_HIT,
+            f.run_sel,
+            hov(Hit::RunNext),
+            prs(Hit::RunNext),
+            GLYPH_NEXT,
+        );
         let (run_label, run_color) = match f.view_run {
             None => ("no runs yet".to_string(), DIM),
             Some(i) if f.live() => {
@@ -344,7 +652,7 @@ impl Renderer {
                     s.push_str(&format!("   stage {n}"));
                 }
                 if r.deaths > 0 {
-                    s.push_str(&format!("   {}", fmt_deaths(r.deaths)));
+                    s.push_str(&format!("   {}", fmt_run_deaths(r.deaths)));
                 }
                 (s, TEXT)
             }
@@ -369,38 +677,51 @@ impl Renderer {
                 .map(|g| &r.fights[g.clone()])
         });
         let hist = viewed_group.map(|fights| match f.view_phase.and_then(|i| fights.get(i)) {
-            Some(ph) => (
-                ph.name.as_str(),
-                ph.start_ts,
-                ph.dmg,
-                ph.kill,
-                ph,
-                fights.len(),
-            ),
+            Some(ph) => HistView {
+                fights: std::slice::from_ref(ph),
+                name: ph.name.as_str(),
+                start: ph.start_ts,
+                dmg: ph.dmg,
+                taken: ph.taken,
+                hits: ph.hits,
+                kill: ph.kill,
+                last: ph,
+                n_phases: fights.len(),
+            },
             None => {
                 let last = &fights[fights.len() - 1];
-                (
-                    base_name(&last.name),
-                    fights[0].start_ts,
-                    fights.iter().map(|p| p.dmg).sum(),
-                    fights
+                HistView {
+                    fights,
+                    name: base_name(&last.name),
+                    start: fights[0].start_ts,
+                    dmg: fights.iter().map(|p| p.dmg).sum(),
+                    taken: fights.iter().map(|p| p.taken).sum(),
+                    hits: fights.iter().map(|p| p.hits).sum(),
+                    kill: fights
                         .iter()
                         .filter_map(|p| p.kill)
                         .reduce(|a, b| (a.0 + b.0, a.1 + b.1)),
                     last,
-                    fights.len(),
-                )
+                    n_phases: fights.len(),
+                }
             }
         });
         self.text(M + 12, 88, W - 24, F_LABEL, DIM, DT_LEFT, "BOSS");
         if !groups.is_empty() {
-            arrow(
-                self,
+            self.arrow(
                 FIGHT_PREV_HIT,
                 f.view_group.is_some_and(|i| i > 0),
+                hov(Hit::FightPrev),
+                prs(Hit::FightPrev),
                 GLYPH_PREV,
             );
-            arrow(self, FIGHT_NEXT_HIT, f.group_sel, GLYPH_NEXT);
+            self.arrow(
+                FIGHT_NEXT_HIT,
+                f.group_sel,
+                hov(Hit::FightNext),
+                prs(Hit::FightNext),
+                GLYPH_NEXT,
+            );
             let idx = format!(
                 "{}/{}",
                 f.view_group.map_or(groups.len(), |i| i + 1),
@@ -425,15 +746,21 @@ impl Renderer {
                     let color = mix(ACCENT, TEXT, ease_out_cubic(f.flash_t));
                     match target {
                         Some(t) => {
+                            if hov(Hit::Target) || prs(Hit::Target) {
+                                let (tx, ty, tw, th) = TARGET_HIT;
+                                let tint = if prs(Hit::Target) { ACCENT } else { CARD_HI };
+                                self.rround(tx - 6, ty - 2, tw + 6, th, 6, tint);
+                            }
                             self.text(M + 12, 128, W - 24, F_BIG, color, DT_LEFT, t);
                             let held = now.saturating_sub(gs.target_since);
-                            self.text(
+                            self.text_rect(
                                 M + 12,
                                 128,
                                 W - 24,
+                                34,
                                 F_TINY,
                                 DIM,
-                                DT_RIGHT,
+                                DT_RIGHT | DT_VCENTER,
                                 &format!("{held}s"),
                             );
                         }
@@ -445,8 +772,8 @@ impl Renderer {
                 }
             }
         } else {
-            match hist {
-                Some((name, start, _, _, last, n_phases)) => {
+            match &hist {
+                Some(h) => {
                     self.text(
                         M + 60,
                         88,
@@ -454,32 +781,52 @@ impl Renderer {
                         F_BOSS,
                         TEXT,
                         DT_LEFT,
-                        boss_name(base_name(name)),
+                        boss_name(base_name(h.name)),
                     );
                     self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "RESULT");
-                    if n_phases > 1 {
+                    if h.n_phases > 1 {
                         let chip = match f.view_phase {
-                            Some(i) => format!("phase {}/{n_phases}", i + 1),
-                            None => format!("{n_phases} phases"),
+                            Some(i) => format!("phase {}/{}", i + 1, h.n_phases),
+                            None => format!("{} phases", h.n_phases),
                         };
                         let (cx, cy, cw, ch) = PHASE_HIT;
-                        self.text_rect(cx, cy, cw, ch, F_TINY, DIM, DT_RIGHT | DT_VCENTER, &chip);
+                        if hov(Hit::Phase) || prs(Hit::Phase) {
+                            let tint = if prs(Hit::Phase) { ACCENT } else { CARD_HI };
+                            self.rround(cx + 40, cy, cw - 40, ch, 5, tint);
+                        }
+                        let cc = if prs(Hit::Phase) { BG } else { DIM };
+                        self.text_rect(
+                            cx,
+                            cy,
+                            cw - 4,
+                            ch,
+                            F_TINY,
+                            cc,
+                            DT_RIGHT | DT_VCENTER,
+                            &chip,
+                        );
                     }
-                    let (res, color) = match (last.kill, last.end_ts) {
+                    let (res, color) = match (h.last.kill, h.last.end_ts) {
                         (Some(_), _) => ("killed", GOOD),
                         (None, Some(_)) => ("unfinished", DIM),
                         (None, None) => ("in progress", AMBER),
                     };
                     self.text(M + 12, 128, W - 24, F_BOSS, color, DT_LEFT, res);
-                    let end = last.end_ts.unwrap_or(now);
-                    self.text(
+                    let end = h.last.end_ts.unwrap_or(now);
+                    let deaths: u32 = h.fights.iter().map(|p| p.deaths).sum();
+                    let mut right = fmt_dur(end.saturating_sub(h.start));
+                    if deaths > 0 {
+                        right = format!("died {deaths}x   {right}");
+                    }
+                    self.text_rect(
                         M + 12,
                         128,
                         W - 24,
+                        22,
                         F_TINY,
                         DIM,
-                        DT_RIGHT,
-                        &fmt_dur(end.saturating_sub(start)),
+                        DT_RIGHT | DT_VCENTER,
+                        &right,
                     );
                 }
                 None => self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss fights"),
@@ -488,15 +835,29 @@ impl Renderer {
 
         self.rround(M, 186, W, 92, 8, CARD);
         let col = (W - 24) / 3;
-        let stat = |r: &Renderer, i: i32, label: &str, value: String| {
+        let stat = |r: &Renderer, y: i32, i: i32, label: &str, value: &str, color: u32| {
             let x = M + 12 + i * col;
-            r.text(x, 192, col, F_LABEL, DIM, DT_LEFT, label);
-            r.text(x, 208, col, F_BOSS, AMBER, DT_LEFT, &value);
+            r.text(x, y, col, F_LABEL, DIM, DT_LEFT, label);
+            r.text(x, y + 16, col, F_BOSS, color, DT_LEFT, value);
         };
         if f.live() {
-            stat(self, 0, "DPS 10s", gs.rolling_dps(now).to_string());
-            stat(self, 1, "FIGHT DPS", gs.fight_dps(now).to_string());
-            stat(self, 2, "FIGHT DMG", group_digits(gs.fight_dmg));
+            stat(self, 192, 0, "DPS 10s", &fmt_anim(f.dps_shown), AMBER);
+            stat(
+                self,
+                192,
+                1,
+                "FIGHT DPS",
+                &fmt_anim(f.fight_dps_shown),
+                AMBER,
+            );
+            stat(
+                self,
+                192,
+                2,
+                "FIGHT DMG",
+                &group_digits(gs.fight_dmg),
+                AMBER,
+            );
             if gs.boss.is_some() {
                 self.bar(M + 12, 233, W - 24, 3, f.dps_frac_shown, ACCENT);
             }
@@ -512,13 +873,20 @@ impl Renderer {
                 }
                 None => self.text(M + 12, 242, W - 24, F_BODY, DIM, DT_LEFT, "no kills yet"),
             }
-        } else if let Some((_, start, dmg, kill, last, _)) = hist {
-            let end = last.end_ts.unwrap_or(now);
-            let dur = end.saturating_sub(start);
-            stat(self, 0, "DMG", group_digits(dmg));
-            stat(self, 1, "DPS", (dmg / dur.max(1)).to_string());
-            stat(self, 2, "TIME", fmt_dur(dur));
-            match kill {
+        } else if let Some(h) = &hist {
+            let end = h.last.end_ts.unwrap_or(now);
+            let dur = end.saturating_sub(h.start);
+            stat(self, 192, 0, "DMG", &group_digits(h.dmg), AMBER);
+            stat(
+                self,
+                192,
+                1,
+                "DPS",
+                &(h.dmg / dur.max(1)).to_string(),
+                AMBER,
+            );
+            stat(self, 192, 2, "TIME", &fmt_dur(dur), AMBER);
+            match h.kill {
                 Some((s, ns)) => {
                     let line = format!(
                         "kill  {} strike + {} other",
@@ -543,52 +911,148 @@ impl Renderer {
             self.text(M + 12, 208, W - 24, F_BODY, DIM, DT_LEFT, "no data");
         }
 
-        self.text(M, 286, W, F_LABEL, DIM, DT_LEFT, "DAMAGE TAKEN");
+        let card = mix(CARD, DANGER, 0.22 * (1.0 - ease_out_cubic(f.taken_flash_t)));
+        self.rround(M, 286, W, 276, 8, card);
+        self.text(M + 12, 292, W - 24, F_LABEL, DIM, DT_LEFT, "DAMAGE TAKEN");
         let live_deaths = gs
             .runs
             .last()
             .filter(|r| r.end_ts.is_none())
             .map_or(0, |r| r.deaths);
-        if live_deaths > 0 {
-            self.text(M, 286, W, F_TINY, DIM, DT_RIGHT, &fmt_deaths(live_deaths));
-        }
-        let mut y = 302;
-        for hit in gs.taken.iter().rev().take(3) {
-            let src = if hit.source.is_empty() {
-                "environment"
-            } else {
-                &hit.source
-            };
-            self.text(M, y, 40, F_BODY, DANGER, DT_LEFT, &hit.amount.to_string());
-            self.text(M + 44, y, W - 110, F_BODY, TEXT, DT_LEFT, src);
-            self.text(M, y, W, F_TINY, DIM, DT_RIGHT, &fmt_clock(hit.ts));
-            y += 20;
-        }
-        if gs.taken.is_empty() {
-            self.text(M, y, W, F_BODY, DIM, DT_LEFT, "none");
-        }
-
-        self.text(M, 368, W, F_LABEL, DIM, DT_LEFT, "TARGET HISTORY");
-        let mut y = 384;
-        for entry in gs.history.iter().rev() {
-            if y > LOGICAL_H - 52 {
-                break;
-            }
-            self.text(M, y, 58, F_BODY, DIM, DT_LEFT, &fmt_clock(entry.ts));
-            self.text(M + 62, y, 150, F_BODY, TEXT, DT_LEFT, &entry.player);
+        if f.live() && live_deaths > 0 {
             self.text(
-                M + 216,
-                y,
-                W - 216,
-                F_BODY,
+                M + 12,
+                292,
+                W - 24,
+                F_TINY,
                 DIM,
-                DT_LEFT,
-                boss_name(base_name(&entry.boss)),
+                DT_RIGHT,
+                &fmt_run_deaths(live_deaths),
             );
-            y += 20;
         }
-        if gs.history.is_empty() {
-            self.text(M, y, W, F_BODY, DIM, DT_LEFT, "none yet");
+        let small = |r: &Renderer, y: i32, i: i32, label: &str, value: &str| {
+            let x = M + 12 + i * col;
+            r.text(x, y, col, F_LABEL, DIM, DT_LEFT, label);
+            r.text(x, y + 15, col, F_BODY, TEXT, DT_LEFT, value);
+        };
+        let dash = "-".to_string();
+        if f.live() {
+            let in_fight = gs.boss.is_some();
+            let or_dash = |s: String| if in_fight { s } else { dash.clone() };
+            stat(self, 312, 0, "TAKEN 10s", &fmt_anim(f.taken_shown), DANGER);
+            stat(
+                self,
+                308,
+                1,
+                "FIGHT TAKEN",
+                &or_dash(group_digits(gs.fight_taken)),
+                DANGER,
+            );
+            stat(
+                self,
+                308,
+                2,
+                "HITS",
+                &or_dash(gs.fight_hits.to_string()),
+                DANGER,
+            );
+            let avg = if gs.fight_hits > 0 {
+                gs.fight_taken / gs.fight_hits as u64
+            } else {
+                0
+            };
+            small(
+                self,
+                350,
+                0,
+                "BIGGEST HIT",
+                &or_dash(gs.fight_max_hit.to_string()),
+            );
+            small(self, 356, 1, "AVG HIT", &or_dash(avg.to_string()));
+            small(
+                self,
+                350,
+                2,
+                "TAKEN/S",
+                &or_dash(fmt_anim(f.taken_rate_shown)),
+            );
+            if in_fight {
+                self.bar_on(M + 12, 396, W - 24, 3, f.taken_frac_shown, DANGER, BG);
+            }
+            match gs.taken.back() {
+                Some(hit) => {
+                    let (_, attack) = split_source(&hit.source);
+                    let line = format!(
+                        "last hit  {}   {}   {}",
+                        hit.amount,
+                        attacker_label(&hit.source),
+                        pretty_attack(attack)
+                    );
+                    self.text_rect(
+                        M + 12,
+                        402,
+                        W - 80,
+                        20,
+                        F_BODY,
+                        TEXT,
+                        DT_LEFT | DT_VCENTER,
+                        &line,
+                    );
+                    self.text_rect(
+                        M + 12,
+                        402,
+                        W - 24,
+                        20,
+                        F_TINY,
+                        DIM,
+                        DT_RIGHT | DT_VCENTER,
+                        &fmt_ago(now, hit.ts),
+                    );
+                }
+                None => self.text(M + 12, 404, W - 24, F_BODY, DIM, DT_LEFT, "no hits yet"),
+            }
+            if !in_fight {
+                self.text_rect(
+                    M + 12,
+                    430,
+                    W - 24,
+                    120,
+                    F_BODY,
+                    DIM,
+                    DT_CENTER | DT_VCENTER,
+                    "attack breakdown starts with the next boss",
+                );
+            } else {
+                self.breakdown(430, &gs.fight_attacks, gs.fight_taken);
+            }
+        } else if let Some(h) = &hist {
+            let end = h.last.end_ts.unwrap_or(now);
+            let dur = end.saturating_sub(h.start);
+            stat(self, 312, 0, "TAKEN", &group_digits(h.taken), DANGER);
+            stat(self, 312, 1, "HITS", &h.hits.to_string(), DANGER);
+            stat(
+                self,
+                312,
+                2,
+                "TAKEN/S",
+                &(h.taken / dur.max(1)).to_string(),
+                DANGER,
+            );
+            let avg = if h.hits > 0 {
+                h.taken / h.hits as u64
+            } else {
+                0
+            };
+            let big = if h.taken > 0 {
+                avg.to_string()
+            } else {
+                dash.clone()
+            };
+            small(self, 356, 0, "AVG HIT", &big);
+            let attacks = merge_tallies(h.fights.iter().map(|f| f.attacks.as_slice()));
+            self.breakdown(400, &attacks, h.taken);
+        } else {
+            self.text(M + 12, 324, W - 24, F_BODY, DIM, DT_LEFT, "no data");
         }
 
         let fy = LOGICAL_H - 26;
@@ -608,44 +1072,412 @@ impl Renderer {
             Badge::Installing => ("updating".to_string(), AMBER),
             Badge::Failed => ("update failed".to_string(), DANGER),
         };
+        let ucolor = if hov(Hit::Update) && matches!(f.update, Badge::Ready(_)) {
+            TEXT
+        } else {
+            ucolor
+        };
         self.text(M, fy, W, F_TINY, ucolor, DT_RIGHT, &utext);
+        if let Some(hit) = f.tip {
+            self.tooltip(hit.rect(), hit.tip(), LOGICAL_W, LOGICAL_H);
+        }
         unsafe { GdiFlush() };
     }
 
-    pub fn close_hit(&self, x: i32, y: i32) -> bool {
-        x >= self.px(CLOSE_HIT.0) && y < self.px(CLOSE_HIT.1 + CLOSE_HIT.3)
+    fn tooltip(&self, near: (i32, i32, i32, i32), text: &str, win_w: i32, win_h: i32) {
+        let w = (text.chars().count() as i32 * 6 + 20).min(win_w - 16);
+        let x = near.0.clamp(8, win_w - 8 - w);
+        let below = near.1 + near.3 + 6;
+        let y = if below + 24 <= win_h - 8 {
+            below
+        } else {
+            near.1 - 30
+        };
+        self.rround(x, y, w, 24, 6, ACCENT);
+        self.rround(x + 1, y + 1, w - 2, 22, 5, CARD_HI);
+        self.text_rect(x, y, w, 24, F_TINY, TEXT, DT_CENTER | DT_VCENTER, text);
     }
 
-    pub fn update_hit(&self, x: i32, y: i32) -> bool {
-        x >= self.px(UPDATE_HIT.0) && y >= self.px(UPDATE_HIT.1)
+    fn breakdown(&self, y0: i32, tallies: &[Tally], total: u64) {
+        const M: i32 = 14;
+        const W: i32 = LOGICAL_W - 2 * M;
+        if tallies.is_empty() {
+            self.text_rect(
+                M + 12,
+                y0,
+                W - 24,
+                120,
+                F_BODY,
+                DIM,
+                DT_CENTER | DT_VCENTER,
+                "untouched so far",
+            );
+            return;
+        }
+        self.text(M + 12, y0, W - 24, F_LABEL, DIM, DT_LEFT, "BY ATTACKER");
+        self.text(
+            M + 12,
+            y0 + 50,
+            W - 24,
+            F_LABEL,
+            DIM,
+            DT_LEFT,
+            "TOP ATTACKS",
+        );
+        let mut attackers: Vec<(&str, u64)> = Vec::new();
+        for t in tallies {
+            match attackers.iter_mut().find(|a| a.0 == t.who) {
+                Some(a) => a.1 += t.total,
+                None => attackers.push((&t.who, t.total)),
+            }
+        }
+        attackers.sort_by_key(|a| std::cmp::Reverse(a.1));
+        let total = total.max(1) as f32;
+        let bw = W - 24;
+        let by = y0 + 16;
+        self.rround(M + 12, by, bw, 8, 4, BG);
+        let mut x = 0;
+        let mut legend = String::new();
+        let mut other = 0;
+        for (i, (name, amt)) in attackers.iter().enumerate() {
+            if i >= 3 {
+                other += amt;
+                continue;
+            }
+            let w = ((bw as f32) * (*amt as f32 / total)) as i32;
+            if w >= 4 {
+                self.rround(M + 12 + x, by, w, 8, 4, SEG_COLORS[i]);
+            }
+            x += w;
+            if !legend.is_empty() {
+                legend.push_str("   ");
+            }
+            legend.push_str(&format!(
+                "{name} {}%",
+                (*amt as f32 / total * 100.0).round() as u32
+            ));
+        }
+        if other > 0 {
+            let w = ((bw as f32) * (other as f32 / total)) as i32;
+            if w >= 4 {
+                self.rround(M + 12 + x, by, w, 8, 4, SEG_COLORS[3]);
+            }
+            legend.push_str(&format!(
+                "   other {}%",
+                (other as f32 / total * 100.0).round() as u32
+            ));
+        }
+        self.text(M + 12, y0 + 28, W - 24, F_TINY, DIM, DT_LEFT, &legend);
+        let mut attacks: Vec<&Tally> = tallies.iter().collect();
+        attacks.sort_by_key(|a| std::cmp::Reverse(a.total));
+        let top = attacks.first().map_or(1, |a| a.total).max(1) as f32;
+        for (i, t) in attacks.iter().take(3).enumerate() {
+            let y = y0 + 66 + i as i32 * 20;
+            let label = if t.who == "environment" {
+                t.attack.clone()
+            } else {
+                format!("{}  {}", t.who, t.attack)
+            };
+            self.text_rect(
+                M + 12,
+                y,
+                W - 110,
+                17,
+                F_BODY,
+                TEXT,
+                DT_LEFT | DT_VCENTER,
+                &label,
+            );
+            let right = format!("{}  x{}", group_digits(t.total), t.hits);
+            self.text_rect(
+                M + 12,
+                y,
+                W - 24,
+                17,
+                F_TINY,
+                DIM,
+                DT_RIGHT | DT_VCENTER,
+                &right,
+            );
+            self.bar_on(
+                M + 12,
+                y + 17,
+                W - 24,
+                2,
+                t.total as f32 / top,
+                mix(CARD, DANGER, 0.6),
+                BG,
+            );
+        }
+    }
+
+    pub fn draw_log(&mut self, gs: &GameState, lv: &LogView) {
+        self.fill(0, 0, LOG_W, LOG_H, BG);
+        let rows = log::timeline(gs, lv.filter);
+        self.text_rect(
+            14,
+            LOG_TAB_Y,
+            74,
+            LOG_TAB_H,
+            F_LABEL,
+            ACCENT,
+            DT_LEFT | DT_VCENTER,
+            "EVENT LOG",
+        );
+        let count = match rows.iter().filter(|r| !matches!(r, Row::Fight(_))).count() {
+            0 => "nothing yet".to_string(),
+            1 => "1 event".to_string(),
+            n => format!("{n} events"),
+        };
+        self.text_rect(
+            88,
+            LOG_TAB_Y,
+            76,
+            LOG_TAB_H,
+            F_TINY,
+            DIM,
+            DT_LEFT | DT_VCENTER,
+            &count,
+        );
+        for (filter, label, x, w) in LOG_TABS {
+            let active = lv.filter == filter;
+            let hover = lv.hover == Some(LogHit::Tab(filter));
+            let (bg, fg) = if active {
+                (ACCENT, BG)
+            } else if hover {
+                (CARD_HI, TEXT)
+            } else {
+                (CARD, DIM)
+            };
+            self.rround(x, LOG_TAB_Y, w, LOG_TAB_H, 6, bg);
+            self.text_rect(
+                x,
+                LOG_TAB_Y,
+                w,
+                LOG_TAB_H,
+                F_LABEL,
+                fg,
+                DT_CENTER | DT_VCENTER,
+                label,
+            );
+        }
+        self.glyph_button(
+            LOG_CLOSE_BTN,
+            lv.hover == Some(LogHit::Close),
+            false,
+            false,
+            GLYPH_CLOSE,
+        );
+
+        let (bx, by, bw, bh) = LOG_BODY;
+        if rows.is_empty() {
+            self.text_rect(
+                bx,
+                by,
+                bw,
+                bh,
+                F_BODY,
+                DIM,
+                DT_CENTER | DT_VCENTER,
+                "nothing logged yet",
+            );
+            unsafe { GdiFlush() };
+            return;
+        }
+        unsafe {
+            let saved = SaveDC(self.dc);
+            IntersectClipRect(
+                self.dc,
+                self.px(bx),
+                self.px(by),
+                self.px(bx + bw),
+                self.px(by + bh),
+            );
+            let first = (lv.scroll / log::ROW_H as f32).floor().max(0.0) as usize;
+            let mut y = by + (first as i32 * log::ROW_H) - lv.scroll as i32 + lv.slide as i32;
+            for row in rows.iter().skip(first) {
+                if y > by + bh {
+                    break;
+                }
+                self.draw_log_row(bx, y, bw, row);
+                y += log::ROW_H;
+            }
+            RestoreDC(self.dc, saved);
+        }
+        if let Some((ty, th)) = log::thumb(rows.len(), bh, lv.scroll) {
+            let (tx, tyy, tw, thh) = LOG_TRACK;
+            self.rround(tx, tyy, tw, thh, 3, CARD);
+            let lit = lv.dragging || lv.hover == Some(LogHit::Thumb);
+            let color = if lit {
+                ACCENT
+            } else {
+                mix(CARD_HI, DIM, lv.thumb_t)
+            };
+            self.rround(tx, tyy + ty, tw, th, 3, color);
+        }
+        if let Some(hit) = lv.tip {
+            self.tooltip(hit.rect(lv.thumb), hit.tip(), LOG_W, LOG_H);
+        }
+        unsafe { GdiFlush() };
+    }
+
+    fn draw_log_row(&self, x: i32, y: i32, w: i32, row: &Row) {
+        match row {
+            Row::Fight(f) => {
+                self.fill(x, y + 12, w, 1, CARD_HI);
+                let pn = phase_num(&f.name);
+                let name = if pn > 1 {
+                    format!("{} (P{pn})", boss_name(base_name(&f.name)))
+                } else {
+                    boss_name(&f.name).to_string()
+                };
+                let label = format!("{name}  {}", &fmt_clock(f.start_ts)[..5]);
+                let tw = label.chars().count() as i32 * 7 + 16;
+                self.fill(x, y, tw, log::ROW_H, BG);
+                self.text_rect(
+                    x + 4,
+                    y,
+                    tw,
+                    log::ROW_H,
+                    F_LABEL,
+                    DIM,
+                    DT_LEFT | DT_VCENTER,
+                    &label,
+                );
+            }
+            Row::Hit(h) => {
+                self.rround(x, y + 5, 3, log::ROW_H - 10, 1, DANGER);
+                let vc = DT_LEFT | DT_VCENTER;
+                self.text_rect(x + 12, y, 62, log::ROW_H, F_TINY, DIM, vc, &fmt_clock(h.ts));
+                self.text_rect(
+                    x + 76,
+                    y,
+                    44,
+                    log::ROW_H,
+                    F_BODY,
+                    DANGER,
+                    DT_RIGHT | DT_VCENTER,
+                    &h.amount.to_string(),
+                );
+                let (_, attack) = split_source(&h.source);
+                self.text_rect(
+                    x + 130,
+                    y,
+                    120,
+                    log::ROW_H,
+                    F_BODY,
+                    TEXT,
+                    vc,
+                    attacker_label(&h.source),
+                );
+                self.text_rect(
+                    x + 254,
+                    y,
+                    w - 254,
+                    log::ROW_H,
+                    F_BODY,
+                    DIM,
+                    vc,
+                    &pretty_attack(attack),
+                );
+            }
+            Row::Target(t) => {
+                self.rround(x, y + 5, 3, log::ROW_H - 10, 1, ACCENT);
+                let vc = DT_LEFT | DT_VCENTER;
+                self.text_rect(x + 12, y, 62, log::ROW_H, F_TINY, DIM, vc, &fmt_clock(t.ts));
+                self.text_rect(
+                    x + 76,
+                    y,
+                    44,
+                    log::ROW_H,
+                    F_TINY,
+                    ACCENT,
+                    DT_RIGHT | DT_VCENTER,
+                    "aggro",
+                );
+                self.text_rect(x + 130, y, 120, log::ROW_H, F_BODY, TEXT, vc, &t.player);
+                self.text_rect(
+                    x + 254,
+                    y,
+                    w - 254,
+                    log::ROW_H,
+                    F_BODY,
+                    DIM,
+                    vc,
+                    boss_name(base_name(&t.boss)),
+                );
+            }
+        }
     }
 
     fn in_rect(&self, r: (i32, i32, i32, i32), x: i32, y: i32) -> bool {
         x >= self.px(r.0) && x < self.px(r.0 + r.2) && y >= self.px(r.1) && y < self.px(r.1 + r.3)
     }
 
-    pub fn target_hit(&self, x: i32, y: i32) -> bool {
-        self.in_rect(TARGET_HIT, x, y)
+    #[cfg(test)]
+    pub fn hit_test(&self, x: i32, y: i32) -> Option<Hit> {
+        self.hit_test_where(x, y, |_| true)
     }
 
-    pub fn run_prev_hit(&self, x: i32, y: i32) -> bool {
-        self.in_rect(RUN_PREV_HIT, x, y)
+    pub fn hit_test_where(&self, x: i32, y: i32, ok: impl Fn(Hit) -> bool) -> Option<Hit> {
+        if y < self.px(CLOSE_HIT.1 + CLOSE_HIT.3) {
+            if x >= self.px(CLOSE_HIT.0) && ok(Hit::Close) {
+                return Some(Hit::Close);
+            }
+            if x >= self.px(LOG_HIT.0) && x < self.px(CLOSE_HIT.0) && ok(Hit::Log) {
+                return Some(Hit::Log);
+            }
+        }
+        if x >= self.px(UPDATE_HIT.0) && y >= self.px(UPDATE_HIT.1) && ok(Hit::Update) {
+            return Some(Hit::Update);
+        }
+        let regions = [
+            (TARGET_HIT, Hit::Target),
+            (RUN_PREV_HIT, Hit::RunPrev),
+            (RUN_NEXT_HIT, Hit::RunNext),
+            (FIGHT_PREV_HIT, Hit::FightPrev),
+            (FIGHT_NEXT_HIT, Hit::FightNext),
+            (PHASE_HIT, Hit::Phase),
+        ];
+        regions
+            .into_iter()
+            .chain(INFO_REGIONS.iter().map(|(i, r)| (*r, Hit::Info(*i))))
+            .find(|(r, h)| ok(*h) && self.in_rect(*r, x, y))
+            .map(|(_, h)| h)
     }
 
-    pub fn run_next_hit(&self, x: i32, y: i32) -> bool {
-        self.in_rect(RUN_NEXT_HIT, x, y)
+    pub fn log_hit_test(&self, x: i32, y: i32, thumb: Option<(i32, i32)>) -> Option<LogHit> {
+        if y < self.px(LOG_CLOSE_HIT.1 + LOG_CLOSE_HIT.3) && x >= self.px(LOG_CLOSE_HIT.0) {
+            return Some(LogHit::Close);
+        }
+        for (filter, _, tx, tw) in LOG_TABS {
+            if self.in_rect((tx, LOG_TAB_Y, tw, LOG_TAB_H), x, y) {
+                return Some(LogHit::Tab(filter));
+            }
+        }
+        for (rect, hit) in [(LOG_TITLE, LogHit::Title), (LOG_COUNT, LogHit::Count)] {
+            if self.in_rect(rect, x, y) {
+                return Some(hit);
+            }
+        }
+        let (tx, ty, tw, th) = LOG_TRACK;
+        if let Some((oy, oh)) = thumb {
+            if self.in_rect((tx - 6, ty, tw + 12, th), x, y) {
+                if self.in_rect((tx - 6, ty + oy, tw + 12, oh), x, y) {
+                    return Some(LogHit::Thumb);
+                }
+                return Some(LogHit::Track);
+            }
+        }
+        None
     }
 
-    pub fn fight_prev_hit(&self, x: i32, y: i32) -> bool {
-        self.in_rect(FIGHT_PREV_HIT, x, y)
+    pub fn body_h(&self) -> i32 {
+        LOG_BODY.3
     }
 
-    pub fn fight_next_hit(&self, x: i32, y: i32) -> bool {
-        self.in_rect(FIGHT_NEXT_HIT, x, y)
-    }
-
-    pub fn phase_hit(&self, x: i32, y: i32) -> bool {
-        self.in_rect(PHASE_HIT, x, y)
+    pub fn unscale(&self, v: i32) -> i32 {
+        (v as f32 / self.scale) as i32
     }
 
     pub fn rgba(&self, out: &mut Vec<u8>) {
@@ -675,8 +1507,21 @@ impl Drop for Renderer {
     }
 }
 
-fn fmt_deaths(n: u32) -> String {
-    format!("{n} death{}", if n == 1 { "" } else { "s" })
+fn fmt_anim(v: f32) -> String {
+    (v.max(0.0).round() as u64).to_string()
+}
+
+fn fmt_ago(now: u64, ts: u64) -> String {
+    let d = now.saturating_sub(ts);
+    if d < 60 {
+        format!("{d}s ago")
+    } else {
+        fmt_clock(ts)
+    }
+}
+
+fn fmt_run_deaths(n: u32) -> String {
+    format!("{n} run death{}", if n == 1 { "" } else { "s" })
 }
 
 fn fmt_dur(secs: u64) -> String {
@@ -703,6 +1548,41 @@ fn group_digits(n: u64) -> String {
 mod tests {
     use super::*;
 
+    fn frame() -> Frame {
+        Frame {
+            now: 0,
+            flash_t: 1.0,
+            taken_flash_t: 1.0,
+            dead_pulse: 0.0,
+            hover: Some(Hit::Close),
+            pressed: None,
+            tip: None,
+            vr: VrStatus::Off,
+            log_ok: true,
+            log_open: false,
+            progress_shown: 0.5,
+            dps_frac_shown: 0.5,
+            taken_frac_shown: 0.5,
+            dps_shown: 0.0,
+            fight_dps_shown: 0.0,
+            taken_shown: 0.0,
+            taken_rate_shown: 0.0,
+            update: Badge::None,
+            sound_on: true,
+            view_run: Some(0),
+            view_group: Some(0),
+            view_phase: None,
+            run_sel: false,
+            group_sel: false,
+        }
+    }
+
+    fn pix(r: &Renderer, x: i32, y: i32) -> u32 {
+        let s = unsafe { std::slice::from_raw_parts(r.bits, (r.width * r.height * 4) as usize) };
+        let i = ((y * r.width + x) * 4) as usize;
+        rgb(s[i + 2] as u32, s[i + 1] as u32, s[i] as u32)
+    }
+
     #[test]
     fn close_btn_inside_hit() {
         let (hx, hy, hw, hh) = CLOSE_HIT;
@@ -713,6 +1593,10 @@ mod tests {
         assert!(bx + bw <= hx + hw && by + bh <= hy + hh);
         assert!(by >= 8);
         assert!(LOGICAL_W - (bx + bw) >= 8);
+        let (lx, ly, lw, lh) = LOG_HIT;
+        let (bx, by, bw, bh) = LOG_BTN;
+        assert_eq!(lx + lw, hx);
+        assert!(bx >= lx && by >= ly && bx + bw <= lx + lw && by + bh <= ly + lh);
     }
 
     #[test]
@@ -730,17 +1614,85 @@ mod tests {
     }
 
     #[test]
-    fn target_hit_geometry() {
+    fn hit_test_regions() {
+        let r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
         let (tx, ty, tw, th) = TARGET_HIT;
         assert!(tx >= 14 && tx + tw <= LOGICAL_W - 14);
         assert!(ty >= 82 && ty + th <= 178);
-        assert!(ty > CLOSE_HIT.1 + CLOSE_HIT.3);
-        let r = Renderer::new(96);
-        assert!(r.target_hit(tx, ty));
-        assert!(r.target_hit(tx + tw - 1, ty + th - 1));
-        assert!(!r.target_hit(tx - 1, ty));
-        assert!(!r.target_hit(tx, ty + th));
-        assert!(!r.target_hit(tx + tw, ty));
+        assert_eq!(r.hit_test(tx, ty), Some(Hit::Target));
+        assert_eq!(r.hit_test(tx + tw - 1, ty + th - 1), Some(Hit::Target));
+        assert_eq!(r.hit_test(tx - 1, ty), None);
+        assert_eq!(r.hit_test(tx, ty + th), None);
+        assert_eq!(r.hit_test(tx + tw, ty), None);
+        assert_eq!(r.hit_test(LOGICAL_W - 1, 0), Some(Hit::Close));
+        assert_eq!(r.hit_test(324, 35), Some(Hit::Close));
+        assert_eq!(r.hit_test(323, 35), Some(Hit::Log));
+        assert_eq!(r.hit_test(292, 0), Some(Hit::Log));
+        assert_eq!(r.hit_test(291, 0), None);
+        assert_eq!(r.hit_test(323, 36), Some(Hit::Info(Info::Status)));
+        assert_eq!(r.hit_test(210, LOGICAL_H - 32), Some(Hit::Update));
+        assert_eq!(r.hit_test(209, LOGICAL_H - 1), None);
+        for (rect, hit) in [
+            (RUN_PREV_HIT, Hit::RunPrev),
+            (RUN_NEXT_HIT, Hit::RunNext),
+            (FIGHT_PREV_HIT, Hit::FightPrev),
+            (FIGHT_NEXT_HIT, Hit::FightNext),
+            (PHASE_HIT, Hit::Phase),
+        ] {
+            let (x, y, w, h) = rect;
+            assert_eq!(r.hit_test_where(x, y, |h| h == hit), Some(hit));
+            assert_eq!(
+                r.hit_test_where(x + w - 1, y + h - 1, |h| h == hit),
+                Some(hit)
+            );
+            assert_ne!(r.hit_test(x + w, y + h), Some(hit));
+        }
+        let (x, y, w, h) = PHASE_HIT;
+        assert!(x >= 14 && x + w <= 346);
+        assert!(y >= 82 && y + h <= 178);
+        assert_eq!(r.hit_test(x + w - 1, y + h - 1), Some(Hit::Target));
+        assert_eq!(
+            r.hit_test_where(x + w - 1, y + h - 1, |h| h != Hit::Target),
+            Some(Hit::Phase)
+        );
+    }
+
+    #[test]
+    fn log_hit_test_regions() {
+        let r = Renderer::new(96, LOG_W, LOG_H);
+        assert_eq!(r.log_hit_test(LOG_W - 1, 0, None), Some(LogHit::Close));
+        assert_eq!(r.log_hit_test(379, 10, None), None);
+        for (filter, _, x, w) in LOG_TABS {
+            assert_eq!(
+                r.log_hit_test(x, LOG_TAB_Y, None),
+                Some(LogHit::Tab(filter))
+            );
+            assert_eq!(
+                r.log_hit_test(x + w - 1, LOG_TAB_Y + LOG_TAB_H - 1, None),
+                Some(LogHit::Tab(filter))
+            );
+        }
+        assert_eq!(r.log_hit_test(20, LOG_TAB_Y + 2, None), Some(LogHit::Title));
+        assert_eq!(
+            r.log_hit_test(100, LOG_TAB_Y + 2, None),
+            Some(LogHit::Count)
+        );
+        assert!(!LogHit::Count.clickable());
+        assert!(LogHit::Close.clickable());
+        let (tx, ty, _, th) = LOG_TRACK;
+        assert_eq!(r.log_hit_test(tx, ty, None), None);
+        assert_eq!(
+            r.log_hit_test(tx, ty + 10, Some((0, 40))),
+            Some(LogHit::Thumb)
+        );
+        assert_eq!(
+            r.log_hit_test(tx, ty + 40, Some((0, 40))),
+            Some(LogHit::Track)
+        );
+        assert_eq!(r.log_hit_test(tx, ty + th, Some((0, 40))), None);
+        let (bx, by, bw, bh) = LOG_BODY;
+        assert!(bx + bw <= tx);
+        assert_eq!(by + bh, LOG_H - 10);
     }
 
     #[test]
@@ -762,56 +1714,122 @@ mod tests {
         gs.feed(&format!(
             "{P}ECLIPTICA - now fighting boss: KakarotPhase2(Clone) on phase: 0.5"
         ));
+        gs.feed(&format!(
+            "{P}damage has been taken: 12, from source: (Kakarot) attack_Kick"
+        ));
+        gs.feed(&format!("{P}damage has been taken: 3, from source: "));
         gs.feed(&format!("{P}Local controller dead, switching off."));
-        let mut r = Renderer::new(96);
-        let f = Frame {
-            now: 0,
-            flash_t: 1.0,
-            hover_close: true,
-            pressed_close: false,
-            vr: VrStatus::Off,
-            log_ok: true,
-            progress_shown: 0.5,
-            dps_frac_shown: 0.5,
-            update: Badge::None,
-            sound_on: true,
-            view_run: Some(0),
-            view_group: Some(0),
-            view_phase: None,
-            run_sel: false,
-            group_sel: false,
-        };
-        r.draw(&mut gs, &f);
-        let pix = |r: &Renderer, x: i32, y: i32| -> u32 {
-            let s =
-                unsafe { std::slice::from_raw_parts(r.bits, (r.width * r.height * 4) as usize) };
-            let i = ((y * r.width + x) * 4) as usize;
-            rgb(s[i + 2] as u32, s[i + 1] as u32, s[i] as u32)
-        };
+        let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+        let f = frame();
+        r.draw_main(&mut gs, &f);
         assert_eq!(pix(&r, 0, 0), BG);
         assert_eq!(pix(&r, 100, 49), GOOD);
         assert_eq!(pix(&r, 300, 49), CARD);
         assert_eq!(pix(&r, 100, 234), ACCENT);
         assert_eq!(pix(&r, 20, 90), CARD);
-        assert_eq!(pix(&r, 336, 11), CARD);
+        assert_eq!(pix(&r, 336, 11), CARD_HI);
+        assert_eq!(pix(&r, 20, 300), CARD);
+        assert_eq!(pix(&r, 100, 397), DANGER);
+        assert_eq!(pix(&r, 300, 397), BG);
+        assert_eq!(pix(&r, 30, 449), DANGER);
+
+        let flashing = Frame {
+            taken_flash_t: 0.0,
+            hover: Some(Hit::Log),
+            pressed: Some(Hit::RunPrev),
+            ..frame()
+        };
+        r.draw_main(&mut gs, &flashing);
+        assert_ne!(pix(&r, 20, 300), CARD);
+        assert_eq!(pix(&r, 304, 11), CARD_HI);
 
         let hist = Frame {
             run_sel: true,
             group_sel: true,
             view_phase: Some(0),
-            ..f
+            ..frame()
         };
-        r.draw(&mut gs, &hist);
+        r.draw_main(&mut gs, &hist);
+        assert_eq!(pix(&r, 300, 397), CARD);
+        assert_eq!(pix(&r, 30, 419), CARD);
+        let group = Frame {
+            run_sel: true,
+            group_sel: true,
+            view_phase: None,
+            ..frame()
+        };
+        r.draw_main(&mut gs, &group);
+        assert_eq!(pix(&r, 30, 419), DANGER);
+
+        let tipped = Frame {
+            tip: Some(Hit::Log),
+            ..frame()
+        };
+        r.draw_main(&mut gs, &tipped);
+        assert_eq!(pix(&r, 300, 45), CARD_HI);
+        assert!(!tip_ready(None));
+        assert!(!tip_ready(Some(std::time::Instant::now())));
+        for (info, (x, y, w, h)) in INFO_REGIONS {
+            let hit = Hit::Info(info);
+            assert!(x >= 14 && x + w <= LOGICAL_W - 14, "{info:?}");
+            assert!(y + h <= LOGICAL_H, "{info:?}");
+            let only = |h: Hit| h == hit;
+            assert_eq!(r.hit_test_where(x, y, only), Some(hit), "{info:?}");
+            assert_eq!(
+                r.hit_test_where(x + w - 1, y + h - 1, only),
+                Some(hit),
+                "{info:?}"
+            );
+            assert!(!hit.clickable());
+            assert!(!info.tip().is_empty());
+        }
+        assert!(Hit::Log.clickable());
+        assert_eq!(r.hit_test(200, 30), Some(Hit::Info(Info::Status)));
+        assert_eq!(r.hit_test(200, 250), Some(Hit::Info(Info::LastKill)));
+        assert_eq!(
+            r.hit_test_where(340, LOGICAL_H - 20, |h| h != Hit::Update),
+            Some(Hit::Info(Info::Version))
+        );
     }
 
     #[test]
-    fn phase_hit_geometry() {
-        let (x, y, w, h) = PHASE_HIT;
-        assert!(x >= 14 && x + w <= 346);
-        assert!(y >= 82 && y + h <= 178);
-        let r = Renderer::new(96);
-        assert!(r.phase_hit(x, y));
-        assert!(!r.phase_hit(x - 1, y));
-        assert!(!r.phase_hit(x, y + h));
+    fn draw_log_smoke() {
+        let mut gs = GameState::default();
+        let mut r = Renderer::new(96, LOG_W, LOG_H);
+        let mut lv = LogView {
+            scroll: 0.0,
+            filter: Filter::All,
+            hover: None,
+            dragging: false,
+            thumb_t: 0.0,
+            slide: 0.0,
+            tip: None,
+            thumb: None,
+        };
+        r.draw_log(&gs, &lv);
+        assert_eq!(pix(&r, 0, 0), BG);
+        let (_, _, ax, aw) = LOG_TABS[0];
+        assert_eq!(pix(&r, ax + aw / 2, LOG_TAB_Y + 2), ACCENT);
+        let (tx, ty, _, _) = LOG_TRACK;
+        assert_eq!(pix(&r, tx + 3, ty + 3), BG);
+        for i in 0..40 {
+            gs.feed(&format!(
+                "2026.09.07 09:12:{:02} Debug      -  damage has been taken: {i}, from source: attack_Spit",
+                i % 60
+            ));
+        }
+        gs.feed("2026.09.07 09:13:00 Debug      -  ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0");
+        gs.feed("2026.09.07 09:13:01 Debug      -  ownership of Yuki transferred to Alice");
+        lv.filter = Filter::Targets;
+        r.draw_log(&gs, &lv);
+        assert_eq!(pix(&r, tx + 3, ty + 3), BG);
+        let (bx, by, _, _) = LOG_BODY;
+        assert_eq!(pix(&r, bx + 1, by + 12), ACCENT);
+        lv.filter = Filter::All;
+        lv.scroll = log::max_scroll(42, r.body_h());
+        r.draw_log(&gs, &lv);
+        assert_eq!(pix(&r, tx + 3, ty + 3), CARD);
+        assert_eq!(pix(&r, tx + 3, LOG_H - 12), CARD_HI);
+        assert_eq!(pix(&r, bx + 1, by + 12), DANGER);
     }
 }

@@ -1,30 +1,65 @@
+use crate::log::{self, Filter};
 use crate::logwatch::{self, LogWatch};
-use crate::render::{Frame, Renderer};
+use crate::render::{
+    tip_ready, Frame, Hit, Info, LogHit, LogView, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W,
+};
 use crate::state::{base_name, GameState, Run};
 use crate::update::{self, Badge};
 use crate::vr::VrOverlay;
 use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
+use windows_sys::Win32::Foundation::HWND;
 
 const FLASH_MS: f32 = 3000.0;
+const TAKEN_FLASH_MS: f32 = 320.0;
+const FADE_MS: f32 = 200.0;
+const SLIDE_MS: f32 = 160.0;
+const THUMB_HOLD_MS: u128 = 900;
+const DEAD_PULSE_MS: f32 = 1100.0;
+const WHEEL_DELTA: i32 = 120;
+const ANIM_MS: u32 = 16;
 
 pub struct Tick {
     pub redraw: bool,
+    pub redraw_log: bool,
     pub timer_ms: Option<u32>,
     pub quit: bool,
+}
+
+pub struct LogState {
+    pub hwnd: HWND,
+    pub renderer: Renderer,
+    pub visible: bool,
+    pub filter: Filter,
+    pub scroll: f32,
+    pub scroll_shown: f32,
+    pub drag: Option<(i32, f32)>,
+    pub hover: Option<LogHit>,
+    pub hover_at: Option<Instant>,
+    pub tracking: bool,
+    pub alpha: u8,
+    pub alpha_shown: u8,
+    wheel_acc: i32,
+    opened_at: Option<Instant>,
+    thumb_t: f32,
+    thumb_seen: Option<Instant>,
+    slide_at: Option<Instant>,
+    rows: usize,
 }
 
 pub struct App {
     pub gs: GameState,
     pub watch: LogWatch,
     pub renderer: Renderer,
+    pub log: LogState,
     vr: VrOverlay,
     rgba: Vec<u8>,
     last_ts: u64,
     last_ts_at: Instant,
-    pub hover_close: bool,
-    pub pressed_close: bool,
+    pub hover: Option<Hit>,
+    pub hover_at: Option<Instant>,
+    pub pressed: Option<Hit>,
     pub tracking: bool,
     pub sound_on: bool,
     pub sel_run: Option<usize>,
@@ -36,7 +71,19 @@ pub struct App {
     dps_peak: u64,
     dps_boss: Option<String>,
     dps_frac_shown: f32,
+    taken_peak: u64,
+    taken_frac_shown: f32,
+    taken_flash_at: Option<Instant>,
+    last_taken_seq: u64,
+    primed: bool,
+    dps_shown: f32,
+    fight_dps_shown: f32,
+    taken_shown: f32,
+    taken_rate_shown: f32,
+    dead_since: Option<Instant>,
     was_dead: bool,
+    last_tip: Option<Hit>,
+    last_log_tip: Option<LogHit>,
     timer_ms: u32,
     badge: Badge,
 }
@@ -74,29 +121,61 @@ fn backfill(gs: &mut GameState, dir: &Path) {
     }
 }
 
-fn approach(cur: &mut f32, target: f32) -> bool {
+fn approach(cur: &mut f32, target: f32, eps: f32) -> bool {
+    approach_rate(cur, target, eps, 0.18)
+}
+
+fn approach_rate(cur: &mut f32, target: f32, eps: f32, rate: f32) -> bool {
     let d = target - *cur;
-    if d.abs() < 0.002 {
+    if d.abs() < eps {
         *cur = target;
         false
     } else {
-        *cur += d * 0.18;
+        *cur += d * rate;
         true
     }
 }
 
+fn timed(at: Option<Instant>, ms: f32) -> f32 {
+    match at {
+        Some(t) => (t.elapsed().as_millis() as f32 / ms).min(1.0),
+        None => 1.0,
+    }
+}
+
 impl App {
-    pub fn new(renderer: Renderer) -> Self {
+    pub fn new(dpi: u32) -> Self {
         App {
             gs: GameState::default(),
             watch: LogWatch::new(),
-            renderer,
+            renderer: Renderer::new(dpi, LOGICAL_W, LOGICAL_H),
+            log: LogState {
+                hwnd: std::ptr::null_mut(),
+                renderer: Renderer::new(dpi, LOG_W, LOG_H),
+                visible: false,
+                filter: Filter::All,
+                scroll: 0.0,
+                scroll_shown: 0.0,
+                drag: None,
+                hover: None,
+                hover_at: None,
+                tracking: false,
+                alpha: 0,
+                alpha_shown: 0,
+                wheel_acc: 0,
+                opened_at: None,
+                thumb_t: 0.0,
+                thumb_seen: None,
+                slide_at: None,
+                rows: 0,
+            },
             vr: VrOverlay::new(),
             rgba: Vec::new(),
             last_ts: 0,
             last_ts_at: Instant::now(),
-            hover_close: false,
-            pressed_close: false,
+            hover: None,
+            hover_at: None,
+            pressed: None,
             tracking: false,
             sound_on: true,
             sel_run: None,
@@ -108,7 +187,19 @@ impl App {
             dps_peak: 0,
             dps_boss: None,
             dps_frac_shown: 0.0,
+            taken_peak: 0,
+            taken_frac_shown: 0.0,
+            taken_flash_at: None,
+            last_taken_seq: 0,
+            primed: false,
+            dps_shown: 0.0,
+            fight_dps_shown: 0.0,
+            taken_shown: 0.0,
+            taken_rate_shown: 0.0,
+            dead_since: None,
             was_dead: false,
+            last_tip: None,
+            last_log_tip: None,
             timer_ms: 1000,
             badge: Badge::None,
         }
@@ -140,6 +231,27 @@ impl App {
 
     pub fn is_live(&self) -> bool {
         self.sel_run.is_none() && self.sel_group.is_none() && self.sel_phase.is_none()
+    }
+
+    pub fn hit_enabled(&self, hit: Hit) -> bool {
+        match hit {
+            Hit::Close | Hit::Log => true,
+            Hit::Info(Info::Version) => !self.update_ready(),
+            Hit::Info(i) if i.live_only() => self.is_live(),
+            Hit::Info(i) if i.history_only() => !self.is_live(),
+            Hit::Info(_) => true,
+            Hit::Update => self.update_ready(),
+            Hit::Target => self.is_live() && self.gs.boss.is_some() && self.gs.target.is_some(),
+            Hit::RunPrev => self.viewed_run().is_some_and(|(i, _)| i > 0),
+            Hit::RunNext => self.sel_run.is_some(),
+            Hit::FightPrev => self.viewed_group().is_some_and(|(i, _)| i > 0),
+            Hit::FightNext => self.sel_group.is_some(),
+            Hit::Phase => !self.is_live() && self.viewed_group().is_some_and(|(_, g)| g.len() > 1),
+        }
+    }
+
+    pub fn enabled_hit(&self, x: i32, y: i32) -> Option<Hit> {
+        self.renderer.hit_test_where(x, y, |h| self.hit_enabled(h))
     }
 
     pub fn run_prev(&mut self) -> bool {
@@ -207,27 +319,178 @@ impl App {
         true
     }
 
+    pub fn activate(&mut self, hit: Hit) -> bool {
+        match hit {
+            Hit::Target => {
+                self.sound_on = !self.sound_on;
+                true
+            }
+            Hit::RunPrev => self.run_prev(),
+            Hit::RunNext => self.run_next(),
+            Hit::FightPrev => self.group_prev(),
+            Hit::FightNext => self.group_next(),
+            Hit::Phase => self.phase_cycle(),
+            Hit::Log => {
+                self.log_toggle();
+                true
+            }
+            Hit::Close | Hit::Update | Hit::Info(_) => false,
+        }
+    }
+
+    pub fn log_toggle(&mut self) {
+        if self.log.visible {
+            self.log_close();
+        } else {
+            self.log_open();
+        }
+    }
+
+    pub fn log_open(&mut self) {
+        self.log.visible = true;
+        self.log.alpha = 0;
+        self.log.alpha_shown = 0;
+        self.log.opened_at = Some(Instant::now());
+    }
+
+    pub fn log_close(&mut self) {
+        self.log.visible = false;
+        self.log.drag = None;
+        self.log.hover = None;
+    }
+
+    pub fn log_rows(&self) -> usize {
+        log::timeline(&self.gs, self.log.filter).len()
+    }
+
+    pub fn log_thumb(&self) -> Option<(i32, i32)> {
+        log::thumb(
+            self.log.rows,
+            self.log.renderer.body_h(),
+            self.log.scroll_shown,
+        )
+    }
+
+    pub fn log_set_filter(&mut self, filter: Filter) {
+        if self.log.filter != filter {
+            self.log.filter = filter;
+            self.log.scroll = 0.0;
+            self.log.scroll_shown = 0.0;
+            self.log.rows = self.log_rows();
+        }
+    }
+
+    fn log_clamp(&mut self) {
+        let max = log::max_scroll(self.log.rows, self.log.renderer.body_h());
+        self.log.scroll = self.log.scroll.clamp(0.0, max);
+        self.log.scroll_shown = self.log.scroll_shown.clamp(0.0, max);
+    }
+
+    pub fn log_wheel(&mut self, delta: i32) {
+        self.log.wheel_acc += delta;
+        let steps = self.log.wheel_acc / WHEEL_DELTA;
+        self.log.wheel_acc -= steps * WHEEL_DELTA;
+        if steps != 0 {
+            self.log.scroll -= steps as f32 * 3.0 * log::ROW_H as f32;
+            self.log_clamp();
+            self.log.thumb_seen = Some(Instant::now());
+        }
+    }
+
+    pub fn log_press(&mut self, hit: LogHit, y: i32) {
+        match hit {
+            LogHit::Title | LogHit::Count => {}
+            LogHit::Close => self.log_close(),
+            LogHit::Tab(f) => self.log_set_filter(f),
+            LogHit::Thumb => self.log.drag = Some((y, self.log.scroll)),
+            LogHit::Track => {
+                let page = self.log.renderer.body_h() as f32;
+                let above = self
+                    .log_thumb()
+                    .is_some_and(|(ty, _)| self.log.renderer.unscale(y) < LOG_BODY_Y + ty);
+                self.log.scroll += if above { -page } else { page };
+                self.log_clamp();
+                self.log.thumb_seen = Some(Instant::now());
+            }
+        }
+    }
+
+    pub fn log_drag_to(&mut self, y: i32) {
+        if let Some((y0, s0)) = self.log.drag {
+            let dy = self.log.renderer.unscale(y - y0);
+            self.log.scroll = log::drag_scroll(self.log.rows, self.log.renderer.body_h(), s0, dy);
+            self.log.scroll_shown = self.log.scroll;
+            self.log.thumb_seen = Some(Instant::now());
+        }
+    }
+
+    pub fn set_hover(&mut self, over: Option<Hit>) -> bool {
+        if over == self.hover {
+            return false;
+        }
+        self.hover = over;
+        self.hover_at = over.map(|_| Instant::now());
+        true
+    }
+
+    pub fn log_set_hover(&mut self, over: Option<LogHit>) -> bool {
+        if over == self.log.hover {
+            return false;
+        }
+        self.log.hover = over;
+        self.log.hover_at = over.map(|_| Instant::now());
+        true
+    }
+
+    pub fn nudge_timer(&mut self) {
+        self.timer_ms = ANIM_MS;
+    }
+
+    pub fn tip(&self) -> Option<Hit> {
+        self.hover.filter(|_| tip_ready(self.hover_at))
+    }
+
+    pub fn log_tip(&self) -> Option<LogHit> {
+        self.log.hover.filter(|_| tip_ready(self.log.hover_at))
+    }
+
+    pub fn log_release(&mut self) {
+        self.log.drag = None;
+    }
+
     fn now(&self) -> u64 {
         self.last_ts + self.last_ts_at.elapsed().as_secs()
     }
 
-    fn flash_t(&self) -> f32 {
-        match self.flash_at {
-            Some(t) => (t.elapsed().as_millis() as f32 / FLASH_MS).min(1.0),
-            None => 1.0,
+    fn dead_pulse(&self) -> f32 {
+        match self.dead_since {
+            Some(t) => {
+                let ph = t.elapsed().as_millis() as f32 / DEAD_PULSE_MS * std::f32::consts::TAU;
+                ph.sin() * 0.5 + 0.5
+            }
+            None => 0.0,
         }
     }
 
     pub fn render(&mut self) {
         let frame = Frame {
             now: self.now(),
-            flash_t: self.flash_t(),
-            hover_close: self.hover_close,
-            pressed_close: self.pressed_close,
+            flash_t: timed(self.flash_at, FLASH_MS),
+            taken_flash_t: timed(self.taken_flash_at, TAKEN_FLASH_MS),
+            dead_pulse: self.dead_pulse(),
+            hover: self.hover,
+            pressed: self.pressed,
+            tip: self.tip(),
             vr: self.vr.status(),
             log_ok: self.watch.path.is_some(),
+            log_open: self.log.visible,
             progress_shown: self.progress_shown,
             dps_frac_shown: self.dps_frac_shown,
+            taken_frac_shown: self.taken_frac_shown,
+            dps_shown: self.dps_shown,
+            fight_dps_shown: self.fight_dps_shown,
+            taken_shown: self.taken_shown,
+            taken_rate_shown: self.taken_rate_shown,
             update: self.badge.clone(),
             sound_on: self.sound_on,
             view_run: self.viewed_run().map(|(i, _)| i),
@@ -236,7 +499,7 @@ impl App {
             run_sel: self.sel_run.is_some(),
             group_sel: self.sel_group.is_some(),
         };
-        self.renderer.draw(&mut self.gs, &frame);
+        self.renderer.draw_main(&mut self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
         self.vr.submit(
             &self.rgba,
@@ -244,6 +507,21 @@ impl App {
             self.renderer.height as u32,
             true,
         );
+    }
+
+    pub fn render_log(&mut self) {
+        let slide_t = timed(self.log.slide_at, SLIDE_MS);
+        let view = LogView {
+            scroll: self.log.scroll_shown,
+            filter: self.log.filter,
+            hover: self.log.hover,
+            tip: self.log_tip(),
+            thumb: self.log_thumb(),
+            dragging: self.log.drag.is_some(),
+            thumb_t: self.log.thumb_t,
+            slide: -(1.0 - crate::render::ease_out_cubic(slide_t)) * log::ROW_H as f32,
+        };
+        self.log.renderer.draw_log(&self.gs, &view);
     }
 
     pub fn tick(&mut self) -> Tick {
@@ -271,10 +549,18 @@ impl App {
                 }
             }
         }
+        let taken_seq = self.gs.taken.back().map_or(0, |e| e.seq);
+        if taken_seq != self.last_taken_seq {
+            self.last_taken_seq = taken_seq;
+            if self.primed && taken_seq != 0 {
+                self.taken_flash_at = Some(Instant::now());
+            }
+        }
         let dps_base = self.gs.boss.as_deref().map(base_name);
         if dps_base != self.dps_boss.as_deref() {
             self.dps_boss = dps_base.map(str::to_string);
             self.dps_peak = 0;
+            self.taken_peak = 0;
         }
         let rolling = self.gs.rolling_dps(now);
         self.dps_peak = self.dps_peak.max(rolling);
@@ -283,23 +569,95 @@ impl App {
         } else {
             0.0
         };
+        let rolling_taken = self.gs.rolling_taken(now);
+        self.taken_peak = self.taken_peak.max(rolling_taken);
+        let taken_target = if self.gs.boss.is_some() && self.taken_peak > 0 {
+            rolling_taken as f32 / self.taken_peak as f32
+        } else {
+            0.0
+        };
         let badge = update::badge();
         let badge_changed = badge != self.badge;
         if badge_changed {
             self.badge = badge;
         }
-        let mut anim = approach(&mut self.progress_shown, self.gs.progress);
-        anim |= approach(&mut self.dps_frac_shown, dps_target);
-        anim |= self.flash_at.is_some() && self.flash_t() < 1.0;
+        let tip_pending = self.hover.is_some() && self.tip().is_none();
+        let log_tip_pending = self.log.hover.is_some() && self.log_tip().is_none();
+        let mut anim = approach(&mut self.progress_shown, self.gs.progress, 0.002);
+        anim |= tip_pending;
+        anim |= approach(&mut self.dps_frac_shown, dps_target, 0.002);
+        anim |= approach(&mut self.taken_frac_shown, taken_target, 0.002);
+        anim |= approach(&mut self.dps_shown, rolling as f32, 0.5);
+        anim |= approach(
+            &mut self.fight_dps_shown,
+            self.gs.fight_dps(now) as f32,
+            0.5,
+        );
+        anim |= approach(&mut self.taken_shown, rolling_taken as f32, 0.5);
+        anim |= approach(
+            &mut self.taken_rate_shown,
+            self.gs.fight_taken_rate(now) as f32,
+            0.5,
+        );
+        anim |= self.flash_at.is_some() && timed(self.flash_at, FLASH_MS) < 1.0;
+        anim |= self.taken_flash_at.is_some() && timed(self.taken_flash_at, TAKEN_FLASH_MS) < 1.0;
         let dead = self.gs.is_dead(now);
-        let redraw = self.gs.changed
+        if dead && self.dead_since.is_none() {
+            self.dead_since = Some(Instant::now());
+        } else if !dead {
+            self.dead_since = None;
+        }
+        anim |= dead;
+        let tip = self.tip();
+        let tip_changed = tip != self.last_tip;
+        self.last_tip = tip;
+        let redraw = tip_changed
+            || self.gs.changed
             || anim
             || self.gs.boss.is_some()
             || badge_changed
-            || dead
             || dead != self.was_dead;
         self.was_dead = dead;
+
+        let changed = self.gs.changed;
         self.gs.changed = false;
+        let mut log_anim = false;
+        let mut redraw_log = false;
+        if self.log.visible {
+            let rows = self.log_rows();
+            if rows != self.log.rows {
+                if rows > self.log.rows && self.primed && self.log.scroll_shown < 1.0 {
+                    self.log.slide_at = Some(Instant::now());
+                }
+                self.log.rows = rows;
+                self.log_clamp();
+            }
+            log_anim |= approach_rate(&mut self.log.scroll_shown, self.log.scroll, 0.5, 0.4);
+            let thumb_lit = self.log.drag.is_some()
+                || matches!(self.log.hover, Some(LogHit::Thumb | LogHit::Track))
+                || self
+                    .log
+                    .thumb_seen
+                    .is_some_and(|t| t.elapsed().as_millis() < THUMB_HOLD_MS);
+            log_anim |= approach(
+                &mut self.log.thumb_t,
+                if thumb_lit { 1.0 } else { 0.0 },
+                0.01,
+            );
+            log_anim |= self.log.slide_at.is_some() && timed(self.log.slide_at, SLIDE_MS) < 1.0;
+            let fade = timed(self.log.opened_at, FADE_MS);
+            self.log.alpha = (crate::render::ease_out_cubic(fade) * 255.0) as u8;
+            log_anim |= fade < 1.0;
+            log_anim |= log_tip_pending;
+            let log_tip = self.log_tip();
+            let log_tip_changed = log_tip != self.last_log_tip;
+            self.last_log_tip = log_tip;
+            redraw_log = changed || log_anim || rotated || log_tip_changed;
+            if redraw_log {
+                self.render_log();
+            }
+        }
+        self.primed = true;
         if redraw {
             self.render();
         } else {
@@ -310,16 +668,19 @@ impl App {
                 false,
             );
         }
-        let want: u32 = if anim { 33 } else { 1000 };
+        let want: u32 = if anim || log_anim { ANIM_MS } else { 1000 };
         let timer_ms = (want != self.timer_ms).then_some(want);
         self.timer_ms = want;
         Tick {
             redraw,
+            redraw_log,
             timer_ms,
             quit: update::restart_pending(),
         }
     }
 }
+
+const LOG_BODY_Y: i32 = crate::render::LOG_BODY.1;
 
 #[cfg(test)]
 mod tests {
@@ -328,7 +689,7 @@ mod tests {
     const P: &str = "2026.09.07 09:12:28 Debug      -  ";
 
     fn headless() -> App {
-        let mut app = App::new(Renderer::new(96));
+        let mut app = App::new(96);
         app.watch = LogWatch::default();
         app
     }
@@ -347,7 +708,7 @@ mod tests {
             .feed(&format!("{P}ownership of Kakarot transferred to Alice"));
         let t = app.tick();
         assert!(t.redraw);
-        assert_eq!(t.timer_ms, Some(33));
+        assert_eq!(t.timer_ms, Some(ANIM_MS));
         assert!(app.flash_at.is_some());
         app.gs
             .feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
@@ -401,7 +762,7 @@ mod tests {
             format!("2026.01.01 10:00:00 Debug      -  {STAGE_A}\n"),
         )
         .unwrap();
-        let mut app = App::new(Renderer::new(96));
+        let mut app = App::new(96);
         app.watch = LogWatch::for_dir(dir.clone());
         app.tick();
         assert_eq!(app.gs.runs.len(), 1);
@@ -448,6 +809,8 @@ mod tests {
         assert!(!app.run_next());
         assert!(!app.group_next());
         assert!(!app.phase_cycle());
+        assert!(!app.hit_enabled(Hit::RunNext));
+        assert!(app.hit_enabled(Hit::RunPrev));
         assert!(app.run_prev());
         assert_eq!(app.sel_run, Some(0));
         let (gi, g) = app.viewed_group().unwrap();
@@ -456,6 +819,7 @@ mod tests {
         let (gi, g) = app.viewed_group().unwrap();
         assert_eq!((gi, g.len()), (0, 2));
         assert!(!app.group_prev());
+        assert!(app.hit_enabled(Hit::Phase));
         assert!(app.phase_cycle());
         assert_eq!(app.sel_phase, Some(0));
         assert!(app.phase_cycle());
@@ -466,6 +830,13 @@ mod tests {
         assert_eq!((app.sel_group, app.sel_phase), (None, None));
         assert!(app.run_next());
         assert!(app.is_live());
+        assert!(!app.hit_enabled(Hit::Target));
+        assert!(app.hit_enabled(Hit::Log));
+        assert!(app.hit_enabled(Hit::Info(Info::LastHit)));
+        assert!(!app.hit_enabled(Hit::Info(Info::Result)));
+        assert!(app.run_prev());
+        assert!(!app.hit_enabled(Hit::Info(Info::LastHit)));
+        assert!(app.hit_enabled(Hit::Info(Info::Result)));
     }
 
     #[test]
@@ -475,15 +846,19 @@ mod tests {
             "{P}ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0"
         ));
         app.gs.feed(&format!("{P}Dealing 100 STRIKE damage"));
+        app.gs
+            .feed(&format!("{P}damage has been taken: 40, from source: "));
         app.tick();
         let peak = app.dps_peak;
         assert!(peak > 0);
+        assert_eq!(app.taken_peak, 4);
         assert_eq!(app.dps_boss.as_deref(), Some("Yuki"));
         app.gs.feed(&format!(
             "{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0"
         ));
         app.tick();
         assert_eq!(app.dps_peak, peak);
+        assert_eq!(app.taken_peak, 4);
         assert_eq!(app.dps_boss.as_deref(), Some("Yuki"));
         app.gs.feed(&format!(
             "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0"
@@ -500,7 +875,7 @@ mod tests {
         ));
         let t = app.tick();
         assert!(t.redraw);
-        assert_eq!(t.timer_ms, Some(33));
+        assert_eq!(t.timer_ms, Some(ANIM_MS));
         for _ in 0..200 {
             if app.tick().timer_ms == Some(1000) {
                 assert_eq!(app.progress_shown, 0.5);
@@ -508,5 +883,98 @@ mod tests {
             }
         }
         panic!("animation never settled");
+    }
+
+    #[test]
+    fn tooltip_after_hover_delay() {
+        let mut app = headless();
+        app.tick();
+        assert!(app.set_hover(Some(Hit::Log)));
+        assert!(!app.set_hover(Some(Hit::Log)));
+        assert_eq!(app.tip(), None);
+        let t = app.tick();
+        assert_eq!(t.timer_ms, Some(ANIM_MS));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let t = app.tick();
+        assert_eq!(app.tip(), Some(Hit::Log));
+        assert!(t.redraw);
+        assert_eq!(t.timer_ms, Some(1000));
+        assert!(!app.tick().redraw);
+        assert!(app.set_hover(None));
+        assert_eq!(app.tip(), None);
+        app.log_open();
+        assert!(app.log_set_hover(Some(LogHit::Close)));
+        assert_eq!(app.log_tip(), None);
+        app.tick();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(app.tick().redraw_log);
+        assert_eq!(app.log_tip(), Some(LogHit::Close));
+        assert!(!app.tick().redraw_log);
+    }
+
+    #[test]
+    fn taken_pulse_only_after_first_tick() {
+        let mut app = headless();
+        app.gs
+            .feed(&format!("{P}damage has been taken: 5, from source: "));
+        app.tick();
+        assert!(app.taken_flash_at.is_none());
+        app.gs
+            .feed(&format!("{P}damage has been taken: 5, from source: "));
+        let t = app.tick();
+        assert!(app.taken_flash_at.is_some());
+        assert_eq!(t.timer_ms, Some(ANIM_MS));
+        assert!(app.taken_shown > 0.0);
+    }
+
+    #[test]
+    fn log_scroll_filter_and_fade() {
+        let mut app = headless();
+        for i in 0..60 {
+            app.gs.feed(&format!(
+                "2026.09.07 09:12:{:02} Debug      -  damage has been taken: 1, from source: ",
+                i % 60
+            ));
+        }
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0"
+        ));
+        app.gs
+            .feed(&format!("{P}ownership of Yuki transferred to Alice"));
+        let t = app.tick();
+        assert!(!t.redraw_log);
+        assert!(app.activate(Hit::Log));
+        assert!(app.log.visible);
+        assert_eq!(app.log.alpha, 0);
+        let t = app.tick();
+        assert!(t.redraw_log);
+        assert_eq!(app.log.rows, 62);
+        let max = log::max_scroll(62, app.log.renderer.body_h());
+        app.log_wheel(-WHEEL_DELTA * 100);
+        assert_eq!(app.log.scroll, max);
+        app.log_wheel(WHEEL_DELTA / 2);
+        assert_eq!(app.log.scroll, max);
+        app.log_wheel(WHEEL_DELTA / 2);
+        assert_eq!(app.log.scroll, max - 3.0 * log::ROW_H as f32);
+        app.log_press(LogHit::Tab(Filter::Targets), 0);
+        assert_eq!(app.log.scroll, 0.0);
+        assert_eq!(app.log.rows, 2);
+        app.log_press(LogHit::Tab(Filter::All), 0);
+        app.log_wheel(-WHEEL_DELTA * 100);
+        app.log.scroll_shown = app.log.scroll;
+        app.log_press(LogHit::Thumb, 100);
+        app.log_drag_to(-5000);
+        assert_eq!(app.log.scroll, 0.0);
+        app.log_release();
+        assert!(app.log.drag.is_none());
+        app.gs.log_rotated();
+        app.tick();
+        assert_eq!(app.log.rows, 0);
+        assert_eq!(app.log.scroll, 0.0);
+        std::thread::sleep(std::time::Duration::from_millis(220));
+        app.tick();
+        assert_eq!(app.log.alpha, 255);
+        app.log_press(LogHit::Close, 0);
+        assert!(!app.log.visible);
     }
 }

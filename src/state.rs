@@ -4,6 +4,7 @@ use std::collections::{HashSet, VecDeque};
 #[derive(Debug, Clone)]
 pub struct TargetEntry {
     pub ts: u64,
+    pub seq: u64,
     pub player: String,
     pub boss: String,
 }
@@ -11,6 +12,7 @@ pub struct TargetEntry {
 #[derive(Debug, Clone)]
 pub struct TakenEntry {
     pub ts: u64,
+    pub seq: u64,
     pub amount: u64,
     pub source: String,
 }
@@ -23,12 +25,58 @@ pub struct KillSummary {
     pub non_strike: u64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tally {
+    pub who: String,
+    pub attack: String,
+    pub total: u64,
+    pub hits: u32,
+}
+
+pub fn tally(list: &mut Vec<Tally>, who: &str, attack: &str, amount: u64) {
+    match list.iter_mut().find(|t| t.who == who && t.attack == attack) {
+        Some(t) => {
+            t.total += amount;
+            t.hits += 1;
+        }
+        None => list.push(Tally {
+            who: who.to_string(),
+            attack: attack.to_string(),
+            total: amount,
+            hits: 1,
+        }),
+    }
+}
+
+pub fn merge_tallies<'a>(groups: impl Iterator<Item = &'a [Tally]>) -> Vec<Tally> {
+    let mut out: Vec<Tally> = Vec::new();
+    for g in groups {
+        for t in g {
+            match out
+                .iter_mut()
+                .find(|o| o.who == t.who && o.attack == t.attack)
+            {
+                Some(o) => {
+                    o.total += t.total;
+                    o.hits += t.hits;
+                }
+                None => out.push(t.clone()),
+            }
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone)]
 pub struct BossFight {
     pub name: String,
     pub start_ts: u64,
     pub end_ts: Option<u64>,
     pub dmg: u64,
+    pub taken: u64,
+    pub hits: u32,
+    pub attacks: Vec<Tally>,
+    pub deaths: u32,
     pub kill: Option<(u64, u64)>,
 }
 
@@ -81,6 +129,40 @@ pub fn phase_num(name: &str) -> u32 {
     name[pos + 5..].parse().unwrap_or(1)
 }
 
+pub fn split_source(source: &str) -> (&str, &str) {
+    let s = source.trim();
+    if let Some(rest) = s.strip_prefix('(') {
+        if let Some((who, attack)) = rest.split_once(')') {
+            return (who.trim(), attack.trim());
+        }
+    }
+    ("", s)
+}
+
+pub fn pretty_attack(attack: &str) -> String {
+    let mut s = attack.trim();
+    if let Some(open) = s.rfind(" (") {
+        if s.ends_with(')') && s[open + 2..s.len() - 1].bytes().all(|b| b.is_ascii_digit()) {
+            s = &s[..open];
+        }
+    }
+    let s = s.strip_prefix("attack_").unwrap_or(s);
+    if s.is_empty() {
+        "unknown".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+pub fn attacker_label(source: &str) -> &str {
+    let (who, _) = split_source(source);
+    if who.is_empty() {
+        "environment"
+    } else {
+        who
+    }
+}
+
 #[derive(Default, Debug, Clone, PartialEq)]
 pub enum Mode {
     #[default]
@@ -110,6 +192,11 @@ pub struct GameState {
     pub history: VecDeque<TargetEntry>,
     pub targets_total: u64,
     pub taken: VecDeque<TakenEntry>,
+    pub fight_taken: u64,
+    pub fight_hits: u32,
+    pub fight_max_hit: u64,
+    pub fight_attacks: Vec<Tally>,
+    taken_hits: VecDeque<(u64, u64)>,
     pub last_kill: Option<KillSummary>,
     pub runs: Vec<Run>,
     pub level_tokens: Vec<(bool, u32)>,
@@ -119,6 +206,7 @@ pub struct GameState {
     dead_seen: Option<(String, u64)>,
     dead_until: u64,
     last_ts: u64,
+    seq: u64,
     pub changed: bool,
 }
 
@@ -168,6 +256,7 @@ impl GameState {
         self.pending_tokens.clear();
         self.taken.clear();
         self.history.clear();
+        self.fight_attacks.clear();
         self.changed = true;
     }
 
@@ -176,6 +265,8 @@ impl GameState {
     }
     pub fn apply(&mut self, ts: u64, ev: Event) {
         self.changed = true;
+        self.seq += 1;
+        let seq = self.seq;
         match ev {
             Event::BossFight { name } => {
                 self.bosses.insert(name.clone());
@@ -199,6 +290,10 @@ impl GameState {
                     if !transition {
                         self.fight_start = ts;
                         self.fight_dmg = 0;
+                        self.fight_taken = 0;
+                        self.fight_hits = 0;
+                        self.fight_max_hit = 0;
+                        self.fight_attacks.clear();
                     }
                     if let Some(f) = self.open_fight() {
                         f.end_ts = Some(ts);
@@ -208,6 +303,10 @@ impl GameState {
                         start_ts: ts,
                         end_ts: None,
                         dmg: 0,
+                        taken: 0,
+                        hits: 0,
+                        attacks: Vec::new(),
+                        deaths: 0,
                         kill: None,
                     });
                 }
@@ -267,8 +366,28 @@ impl GameState {
                 }
             }
             Event::DamageTaken { amount, source } => {
-                self.taken.push_back(TakenEntry { ts, amount, source });
-                if self.taken.len() > 20 {
+                self.taken_hits.push_back((ts, amount));
+                if self.boss.is_some() {
+                    self.fight_taken += amount;
+                    self.fight_hits += 1;
+                    self.fight_max_hit = self.fight_max_hit.max(amount);
+                    let (_, attack) = split_source(&source);
+                    let who = attacker_label(&source);
+                    let attack = pretty_attack(attack);
+                    tally(&mut self.fight_attacks, who, &attack, amount);
+                    if let Some(f) = self.open_fight() {
+                        f.taken += amount;
+                        f.hits += 1;
+                        tally(&mut f.attacks, who, &attack, amount);
+                    }
+                }
+                self.taken.push_back(TakenEntry {
+                    ts,
+                    seq,
+                    amount,
+                    source,
+                });
+                if self.taken.len() > 500 {
                     self.taken.pop_front();
                 }
             }
@@ -279,10 +398,11 @@ impl GameState {
                     self.targets_total += 1;
                     self.history.push_back(TargetEntry {
                         ts,
+                        seq,
                         player,
                         boss: object,
                     });
-                    if self.history.len() > 100 {
+                    if self.history.len() > 500 {
                         self.history.pop_front();
                     }
                 }
@@ -344,6 +464,9 @@ impl GameState {
                     if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
                         r.deaths += 1;
                     }
+                    if let Some(f) = self.open_fight() {
+                        f.deaths += 1;
+                    }
                 }
                 self.dead_until = ts + DEATH_HOLD;
             }
@@ -371,6 +494,24 @@ impl GameState {
             return 0;
         }
         self.fight_dmg / now.saturating_sub(self.fight_start).max(1)
+    }
+
+    pub fn rolling_taken(&mut self, now: u64) -> u64 {
+        while self
+            .taken_hits
+            .front()
+            .is_some_and(|h| h.0 + DPS_WINDOW < now)
+        {
+            self.taken_hits.pop_front();
+        }
+        self.taken_hits.iter().map(|h| h.1).sum::<u64>() / DPS_WINDOW
+    }
+
+    pub fn fight_taken_rate(&self, now: u64) -> u64 {
+        if self.boss.is_none() {
+            return 0;
+        }
+        self.fight_taken / now.saturating_sub(self.fight_start).max(1)
     }
 }
 
@@ -557,6 +698,10 @@ mod tests {
             start_ts: 0,
             end_ts: None,
             dmg: 0,
+            taken: 0,
+            hits: 0,
+            attacks: Vec::new(),
+            deaths: 0,
             kill: None,
         };
         let run = Run {
@@ -817,6 +962,154 @@ mod tests {
     }
 
     #[test]
+    fn source_shapes() {
+        assert_eq!(
+            split_source("(Khepri) attack_Claws2"),
+            ("Khepri", "attack_Claws2")
+        );
+        assert_eq!(split_source("attack_Spit (2)"), ("", "attack_Spit (2)"));
+        assert_eq!(
+            split_source("machinegunShooter2"),
+            ("", "machinegunShooter2")
+        );
+        assert_eq!(split_source(""), ("", ""));
+        assert_eq!(
+            split_source("([Missing Key \"e_VirtueBeam\"]) damageTick"),
+            ("[Missing Key \"e_VirtueBeam\"]", "damageTick")
+        );
+        assert_eq!(pretty_attack("attack_Spit (2)"), "Spit");
+        assert_eq!(pretty_attack("attack_Claws2"), "Claws2");
+        assert_eq!(pretty_attack("machinegunShooter2"), "machinegunShooter2");
+        assert_eq!(pretty_attack("Frost Shots (1)"), "Frost Shots");
+        assert_eq!(pretty_attack(""), "unknown");
+        assert_eq!(attacker_label(""), "environment");
+        assert_eq!(attacker_label("(Yuki) frostBeam"), "Yuki");
+    }
+
+    #[test]
+    fn taken_aggregates_current_fight() {
+        let mut gs = GameState::default();
+        let t0 = feed_at(
+            &mut gs,
+            "12:00:00",
+            "damage has been taken: 5, from source: attack_Spit",
+        );
+        assert_eq!(gs.rolling_taken(t0), 0);
+        assert_eq!(gs.fight_taken, 0);
+        assert_eq!(gs.fight_hits, 0);
+        feed_at(
+            &mut gs,
+            "12:00:10",
+            "ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0",
+        );
+        feed_at(
+            &mut gs,
+            "12:00:11",
+            "damage has been taken: 12, from source: (Yuki) frostBeam",
+        );
+        feed_at(
+            &mut gs,
+            "12:00:12",
+            "damage has been taken: 8, from source: (Yuki) frostBeam",
+        );
+        feed_at(
+            &mut gs,
+            "12:00:13",
+            "damage has been taken: 30, from source: attack_Spit (1)",
+        );
+        let t = feed_at(
+            &mut gs,
+            "12:00:14",
+            "damage has been taken: 10, from source: attack_Spit (2)",
+        );
+        assert_eq!(gs.rolling_taken(t), 6);
+        assert_eq!(gs.fight_taken, 60);
+        assert_eq!(gs.fight_hits, 4);
+        assert_eq!(gs.fight_max_hit, 30);
+        assert_eq!(gs.fight_taken_rate(t + 6), 6);
+        let tl = |who: &str, attack: &str, total: u64, hits: u32| Tally {
+            who: who.into(),
+            attack: attack.into(),
+            total,
+            hits,
+        };
+        let expected = vec![
+            tl("Yuki", "frostBeam", 20, 2),
+            tl("environment", "Spit", 40, 2),
+        ];
+        assert_eq!(gs.fight_attacks, expected);
+        assert_eq!(gs.runs[0].fights[0].taken, 60);
+        assert_eq!(gs.runs[0].fights[0].hits, 4);
+        assert_eq!(gs.runs[0].fights[0].attacks, expected);
+        feed_at(
+            &mut gs,
+            "12:01:00",
+            "ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0",
+        );
+        feed_at(
+            &mut gs,
+            "12:01:01",
+            "damage has been taken: 1, from source: (Yuki) frostBeam",
+        );
+        assert_eq!(gs.fight_taken, 61);
+        assert_eq!(gs.fight_hits, 5);
+        assert_eq!(gs.runs[0].fights[1].taken, 1);
+        assert_eq!(
+            gs.runs[0].fights[1].attacks,
+            vec![tl("Yuki", "frostBeam", 1, 1)]
+        );
+        let merged = merge_tallies(gs.runs[0].fights.iter().map(|f| f.attacks.as_slice()));
+        assert_eq!(
+            merged,
+            vec![
+                tl("Yuki", "frostBeam", 21, 3),
+                tl("environment", "Spit", 40, 2)
+            ]
+        );
+        feed_at(
+            &mut gs,
+            "12:05:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0",
+        );
+        assert_eq!(gs.fight_taken, 0);
+        assert_eq!(gs.fight_hits, 0);
+        assert_eq!(gs.fight_max_hit, 0);
+        assert!(gs.fight_attacks.is_empty());
+        assert_eq!(gs.fight_taken_rate(t + 6), 0);
+        assert_eq!(gs.taken.len(), 6);
+        let seqs: Vec<u64> = gs.taken.iter().map(|e| e.seq).collect();
+        assert!(seqs.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn taken_and_history_cap() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "12:00:00",
+            "ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0",
+        );
+        for _ in 0..600 {
+            feed_at(
+                &mut gs,
+                "12:00:01",
+                "damage has been taken: 1, from source: ",
+            );
+            feed_at(
+                &mut gs,
+                "12:00:01",
+                "ownership of Yuki transferred to Alice",
+            );
+        }
+        assert_eq!(gs.taken.len(), 500);
+        assert_eq!(gs.history.len(), 500);
+        assert_eq!(gs.fight_hits, 600);
+        gs.log_rotated();
+        assert!(gs.taken.is_empty());
+        assert!(gs.fight_attacks.is_empty());
+    }
+
+    #[test]
     fn death_clusters_count_once() {
         let mut gs = GameState::default();
         feed_at(
@@ -824,11 +1117,17 @@ mod tests {
             "08:18:01",
             "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer",
         );
+        feed_at(
+            &mut gs,
+            "08:19:00",
+            "ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0",
+        );
         for t in ["08:20:42", "08:20:42", "08:20:43", "08:20:44", "08:20:46"] {
             feed_at(&mut gs, t, "Local controller dead, switching off.");
         }
         let last = feed_at(&mut gs, "08:20:48", "Local controller dead, switching off.");
         assert_eq!(gs.runs[0].deaths, 1);
+        assert_eq!(gs.runs[0].fights[0].deaths, 1);
         assert!(gs.is_dead(last));
         assert!(gs.is_dead(last + 2));
         assert!(!gs.is_dead(last + 3));
