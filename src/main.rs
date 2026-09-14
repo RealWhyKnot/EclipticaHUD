@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod app;
+mod discord;
 mod log;
 mod logwatch;
 mod names;
@@ -24,6 +25,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("--scan") => scan(args.next()),
+        Some("--discord-join") => discord::join_listener(),
         _ => ui::run(),
     }
 }

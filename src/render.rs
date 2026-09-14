@@ -4,6 +4,7 @@ use crate::state::{
     base_name, describe_source, fmt_clock, generic_attacker, merge_tallies, phase_num, BossFight,
     GameState, Mode, Tally,
 };
+use crate::discord::Link;
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Foundation::RECT;
@@ -20,7 +21,8 @@ pub const LOG_HIT: (i32, i32, i32, i32) = (292, 0, 32, 36);
 pub const LOG_BTN: (i32, i32, i32, i32) = (296, 8, 24, 24);
 pub const PIN_HIT: (i32, i32, i32, i32) = (260, 0, 32, 36);
 pub const PIN_BTN: (i32, i32, i32, i32) = (264, 8, 24, 24);
-pub const UPDATE_HIT: (i32, i32) = (210, LOGICAL_H - 32);
+pub const UPDATE_HIT: (i32, i32) = (230, LOGICAL_H - 32);
+pub const DISCORD_HIT: (i32, i32, i32, i32) = (156, LOGICAL_H - 30, 72, 24);
 pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 126, 308, 40);
 pub const RUN_PREV_HIT: (i32, i32, i32, i32) = (14, 54, 26, 24);
 pub const RUN_NEXT_HIT: (i32, i32, i32, i32) = (320, 54, 26, 24);
@@ -78,6 +80,7 @@ fn mix(a: u32, b: u32, t: f32) -> u32 {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hit {
     Pin,
+    Discord,
     Log,
     Close,
     Update,
@@ -139,7 +142,7 @@ pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
     (Info::HistAttackers, (14, 398, 332, 48)),
     (Info::HistTopAttacks, (14, 448, 332, 82)),
     (Info::Vr, (14, LOGICAL_H - 30, 84, 24)),
-    (Info::LogDot, (104, LOGICAL_H - 30, 80, 24)),
+    (Info::LogDot, (104, LOGICAL_H - 30, 48, 24)),
     (
         Info::Version,
         (
@@ -239,6 +242,7 @@ pub struct TipCtx {
     pub topmost: bool,
     pub sound_on: bool,
     pub log_open: bool,
+    pub discord_on: bool,
 }
 
 impl Hit {
@@ -250,6 +254,8 @@ impl Hit {
         match self {
             Hit::Pin if c.topmost => "Kept above other windows; click to let them cover it",
             Hit::Pin => "Other windows can cover the HUD; click to keep it on top",
+            Hit::Discord if c.discord_on => "Showing this run as your Discord status; click to stop",
+            Hit::Discord => "Click to show your run as your Discord status, with a join link",
             Hit::Log if c.log_open => "Close the event log window",
             Hit::Log => "Open the event log window",
             Hit::Close => "Close the HUD (Esc)",
@@ -268,6 +274,7 @@ impl Hit {
     fn rect(self) -> (i32, i32, i32, i32) {
         match self {
             Hit::Pin => PIN_BTN,
+            Hit::Discord => DISCORD_HIT,
             Hit::Log => LOG_BTN,
             Hit::Close => CLOSE_BTN,
             Hit::Update => UPDATE_RECT,
@@ -357,6 +364,8 @@ pub struct Frame {
     pub taken_rate_shown: f32,
     pub update: Badge,
     pub sound_on: bool,
+    pub discord: Link,
+    pub discord_on: bool,
     pub view_run: Option<usize>,
     pub view_group: Option<usize>,
     pub view_phase: Option<usize>,
@@ -1160,6 +1169,16 @@ impl Renderer {
         let log_color = if f.log_ok { GOOD } else { AMBER };
         self.dot(M + 96, fy + 4, 8, log_color);
         self.text(M + 110, fy, 80, F_TINY, DIM, DT_LEFT, "LOG");
+        let discord_color = match (f.discord_on, f.discord) {
+            (false, _) | (true, Link::Off) => DIM,
+            (true, Link::Waiting) => AMBER,
+            (true, Link::Connected) => GOOD,
+            (true, Link::Rejected) => DANGER,
+        };
+        let (dx, _, _, _) = DISCORD_HIT;
+        self.dot(dx + 4, fy + 4, 8, discord_color);
+        let label = if hov(Hit::Discord) { TEXT } else { DIM };
+        self.text(dx + 18, fy, 60, F_TINY, label, DT_LEFT, "DISCORD");
         let (utext, ucolor) = match &f.update {
             Badge::None => (VERSION.to_string(), DIM),
             Badge::Ready(tag) => (format!("update {tag}"), ACCENT),
@@ -1178,6 +1197,7 @@ impl Renderer {
                 topmost: f.topmost,
                 sound_on: f.sound_on,
                 log_open: f.log_open,
+                discord_on: f.discord_on,
             };
             self.tooltip(hit.rect(), hit.tip(ctx), LOGICAL_W, LOGICAL_H);
         }
@@ -1543,6 +1563,7 @@ impl Renderer {
             return Some(Hit::Update);
         }
         let regions = [
+            (DISCORD_HIT, Hit::Discord),
             (TARGET_HIT, Hit::Target),
             (RUN_PREV_HIT, Hit::RunPrev),
             (RUN_NEXT_HIT, Hit::RunNext),
@@ -1681,6 +1702,8 @@ mod tests {
             taken_rate_shown: 0.0,
             update: Badge::None,
             sound_on: true,
+            discord: Link::Off,
+            discord_on: false,
             view_run: Some(0),
             view_group: Some(0),
             view_phase: None,
@@ -1709,6 +1732,33 @@ mod tests {
         let (bx, by, bw, bh) = LOG_BTN;
         assert_eq!(lx + lw, hx);
         assert!(bx >= lx && by >= ly && bx + bw <= lx + lw && by + bh <= ly + lh);
+    }
+
+    fn text_w(r: &Renderer, font: usize, s: &str) -> i32 {
+        let buf: Vec<u16> = s.encode_utf16().collect();
+        let mut size = windows_sys::Win32::Foundation::SIZE { cx: 0, cy: 0 };
+        unsafe {
+            SelectObject(r.dc, r.fonts[font] as _);
+            GetTextExtentPoint32W(r.dc, buf.as_ptr(), buf.len() as i32, &mut size);
+        }
+        size.cx
+    }
+
+    #[test]
+    fn footer_text_fits_its_regions() {
+        let r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+        let end = |x: i32, s: &str| x + text_w(&r, F_TINY, s);
+        let region = |i: Info| INFO_REGIONS.iter().find(|(j, _)| *j == i).unwrap().1;
+        let (vx, _, vw, _) = region(Info::Vr);
+        let (lx, _, lw, _) = region(Info::LogDot);
+        let (dx, _, dw, _) = DISCORD_HIT;
+        assert!(end(28, "STEAMVR") <= vx + vw);
+        assert!(end(124, "LOG") <= lx + lw);
+        assert!(lx + lw <= dx);
+        assert!(end(dx + 18, "DISCORD") <= dx + dw);
+        for badge in ["update v2026.12.31.10", "v2026.12.31.10-beta", "update failed"] {
+            assert!(LOGICAL_W - 14 - text_w(&r, F_TINY, badge) >= UPDATE_HIT.0, "{badge}");
+        }
     }
 
     #[test]
@@ -1748,8 +1798,13 @@ mod tests {
         assert!(px_ >= hx_ && py_ >= hy_ && px_ + pw_ <= hx_ + hw_ && py_ + ph_ <= hy_ + hh_);
         assert_eq!(hx_ + hw_, LOG_HIT.0);
         assert_eq!(r.hit_test(323, 36), Some(Hit::Info(Info::Status)));
-        assert_eq!(r.hit_test(210, LOGICAL_H - 32), Some(Hit::Update));
-        assert_eq!(r.hit_test(209, LOGICAL_H - 1), None);
+        assert_eq!(r.hit_test(230, LOGICAL_H - 32), Some(Hit::Update));
+        assert_eq!(r.hit_test(229, LOGICAL_H - 1), None);
+        let (dx, dy, dw, dh) = DISCORD_HIT;
+        assert_eq!(r.hit_test(dx, dy), Some(Hit::Discord));
+        assert_eq!(r.hit_test(dx + dw - 1, dy + dh - 1), Some(Hit::Discord));
+        assert_ne!(r.hit_test(dx + dw, dy), Some(Hit::Discord));
+        assert!(dx + dw <= UPDATE_HIT.0);
         for (rect, hit) in [
             (RUN_PREV_HIT, Hit::RunPrev),
             (RUN_NEXT_HIT, Hit::RunNext),
@@ -1935,8 +1990,12 @@ mod tests {
             topmost: false,
             sound_on: false,
             log_open: true,
+            discord_on: false,
         };
         assert!(Hit::Pin.tip(ctx).contains("keep it on top"));
+        assert!(Hit::Discord.tip(ctx).starts_with("Click to show"));
+        assert!(Hit::Discord.tip(TipCtx { discord_on: true, ..ctx }).ends_with("click to stop"));
+        assert!(Hit::Discord.tip(ctx).chars().count() <= 70);
         assert!(Hit::Target.tip(ctx).contains("unmute"));
         assert!(Hit::Log.tip(ctx).starts_with("Close"));
         assert_eq!(

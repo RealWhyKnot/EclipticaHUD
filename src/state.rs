@@ -286,6 +286,7 @@ pub struct GameState {
     pub tokens_got: u32,
     last_save: Option<u64>,
     stage_boss_seen: bool,
+    pub location: Option<String>,
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
     dead_seen: Option<(String, u64)>,
@@ -339,6 +340,7 @@ impl GameState {
         self.dead_until = 0;
         self.level_tokens.clear();
         self.pending_tokens.clear();
+        self.location = None;
         self.taken.clear();
         self.history.clear();
         self.deaths_log.clear();
@@ -559,6 +561,7 @@ impl GameState {
                 self.stage_no = None;
                 self.level_tokens.clear();
                 self.pending_tokens.clear();
+                self.location = None;
                 self.close_run(ts);
             }
             Event::TokenSpawn { rune, chance } => {
@@ -570,6 +573,9 @@ impl GameState {
                     self.tokens_got += 1;
                     self.last_save = Some(ts);
                 }
+            }
+            Event::RoomJoin(location) => {
+                self.location = Some(location);
             }
             Event::StageProgress(n) => {
                 self.stage_no = Some(n);
@@ -1015,6 +1021,19 @@ mod tests {
             "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
         );
         assert_eq!(gs.tokens_shown(), Some((1, 3)));
+    }
+
+    #[test]
+    fn location_follows_room_lines() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "03:59:35",
+            "[Behaviour] Joining wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)",
+        );
+        assert!(gs.location.as_deref().is_some_and(|l| l.ends_with("~region(use)")));
+        feed_at(&mut gs, "04:40:00", "[Behaviour] OnLeftRoom");
+        assert_eq!(gs.location, None);
     }
 
     #[test]

@@ -13,6 +13,7 @@ Everything comes from the log VRChat already writes: no mods, no OSC, nothing in
 - `src/app.rs` animation state and input handling
 - `src/ui.rs` Win32 windows, timer and persistence under `%APPDATA%\EclipticaHUD`
 - `src/vr.rs` OpenVR overlay, `src/update.rs` self-update
+- `src/discord.rs` optional Discord Rich Presence over the local IPC pipe, with a Join button and invites. Off by default; the DISCORD dot in the footer toggles it
 
 `ecliptica-hud.exe --scan [logfile]` parses a log and prints every recognized event plus totals, which is the quickest way to check what the parser sees.
 

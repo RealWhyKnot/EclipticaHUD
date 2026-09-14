@@ -32,7 +32,7 @@ pub enum VrStatus {
     Failing,
 }
 
-fn steamvr_running() -> bool {
+pub fn process_running(exe: &str) -> bool {
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snap == INVALID_HANDLE_VALUE {
@@ -50,7 +50,7 @@ fn steamvr_running() -> bool {
                 .take_while(|&c| c != 0)
                 .collect();
             let name = String::from_utf16_lossy(&name);
-            found = name.eq_ignore_ascii_case("vrserver.exe");
+            found = name.eq_ignore_ascii_case(exe);
             more = Process32NextW(snap, &mut entry) != 0;
         }
         windows_sys::Win32::Foundation::CloseHandle(snap);
@@ -68,7 +68,7 @@ impl VrOverlay {
 
     fn try_init(&mut self) {
         self.last_try = Some(Instant::now());
-        if !steamvr_running() {
+        if !process_running("vrserver.exe") {
             return;
         }
         let context = match unsafe { openvr::init(openvr::ApplicationType::Overlay) } {

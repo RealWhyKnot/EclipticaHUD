@@ -1,3 +1,4 @@
+use crate::discord::{self, Link, Presence};
 use crate::log::{self, Filter};
 use crate::logwatch::{self, LogWatch};
 use crate::render::{
@@ -63,6 +64,10 @@ pub struct App {
     pub tracking: bool,
     pub sound_on: bool,
     pub topmost: bool,
+    pub discord_on: bool,
+    presence: Option<Presence>,
+    presence_at: Option<Instant>,
+    link: Link,
     pub sel_run: Option<usize>,
     pub sel_group: Option<usize>,
     pub sel_phase: Option<usize>,
@@ -180,6 +185,10 @@ impl App {
             tracking: false,
             sound_on: true,
             topmost: true,
+            discord_on: false,
+            presence: None,
+            presence_at: None,
+            link: Link::Off,
             sel_run: None,
             sel_group: None,
             sel_phase: None,
@@ -237,7 +246,7 @@ impl App {
 
     pub fn hit_enabled(&self, hit: Hit) -> bool {
         match hit {
-            Hit::Close | Hit::Log | Hit::Pin => true,
+            Hit::Close | Hit::Log | Hit::Pin | Hit::Discord => true,
             Hit::Info(Info::Version) => !self.update_ready(),
             Hit::Info(i) if i.live_only() => self.is_live(),
             Hit::Info(i) if i.history_only() => !self.is_live(),
@@ -340,7 +349,40 @@ impl App {
                 self.topmost = !self.topmost;
                 true
             }
+            Hit::Discord => {
+                self.set_discord(!self.discord_on);
+                true
+            }
             Hit::Close | Hit::Update | Hit::Info(_) => false,
+        }
+    }
+
+    pub fn set_discord(&mut self, on: bool) {
+        self.discord_on = on;
+        self.presence_at = None;
+        if on {
+            discord::register_scheme();
+            self.presence.get_or_insert_with(Presence::new);
+        } else if let Some(p) = self.presence.as_mut() {
+            p.off();
+        }
+    }
+
+    fn feed_presence(&mut self, now: u64) {
+        if !self.discord_on || self.presence_at.is_some_and(|t| t.elapsed().as_millis() < 1000) {
+            return;
+        }
+        self.presence_at = Some(Instant::now());
+        let unix_now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let activity = if cfg!(test) || crate::vr::process_running("VRChat.exe") {
+            discord::activity(&self.gs, now, unix_now)
+        } else {
+            None
+        };
+        if let Some(p) = self.presence.as_mut() {
+            p.show(activity);
         }
     }
 
@@ -500,6 +542,8 @@ impl App {
             update: self.badge.clone(),
             sound_on: self.sound_on,
             topmost: self.topmost,
+            discord: self.link,
+            discord_on: self.discord_on,
             view_run: self.viewed_run().map(|(i, _)| i),
             view_group: self.viewed_group().map(|(i, _)| i),
             view_phase: self.sel_phase,
@@ -583,6 +627,10 @@ impl App {
         } else {
             0.0
         };
+        self.feed_presence(now);
+        let link = discord::link();
+        let link_changed = link != self.link;
+        self.link = link;
         let badge = update::badge();
         let badge_changed = badge != self.badge;
         if badge_changed {
@@ -623,6 +671,7 @@ impl App {
             || anim
             || self.gs.boss.is_some()
             || badge_changed
+            || link_changed
             || dead != self.was_dead;
         self.was_dead = dead;
 
@@ -842,6 +891,12 @@ mod tests {
         assert!(app.topmost);
         assert!(app.activate(Hit::Pin));
         assert!(!app.topmost);
+        assert!(!app.discord_on);
+        assert!(app.hit_enabled(Hit::Discord));
+        assert!(app.activate(Hit::Discord));
+        assert!(app.discord_on && app.presence.is_some());
+        assert!(app.activate(Hit::Discord));
+        assert!(!app.discord_on);
         assert!(app.hit_enabled(Hit::Info(Info::LastHit)));
         assert!(!app.hit_enabled(Hit::Info(Info::Result)));
         assert!(app.run_prev());

@@ -32,6 +32,7 @@ pub enum Event {
         chance: u32,
     },
     SessionSave,
+    RoomJoin(String),
 }
 
 impl Event {
@@ -52,6 +53,7 @@ impl Event {
             Event::PlayerDead => "player_dead",
             Event::TokenSpawn { .. } => "token_spawn",
             Event::SessionSave => "session_save",
+            Event::RoomJoin(_) => "room_join",
         }
     }
 }
@@ -150,10 +152,15 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
             name: name.to_string(),
         });
     }
+    if let Some(rest) = msg.strip_prefix("[Behaviour] Joining wrld_") {
+        return Some(Event::RoomJoin(format!("wrld_{}", rest.trim_end())));
+    }
     if msg.starts_with("ECLIPTICA saving SESSION ID ") {
         return Some(Event::SessionSave);
     }
-    if msg.trim_end() == "[Behaviour] OnLeftRoom" {
+    if msg.trim_end() == "[Behaviour] OnLeftRoom"
+        || msg.starts_with("VRCApplication: HandleApplicationQuit")
+    {
         return Some(Event::RoomLeft);
     }
     if msg.trim_end() == "Local controller dead, switching off." {
@@ -279,6 +286,10 @@ mod tests {
     fn room_left() {
         let l = split_line("2026.09.06 21:44:44 Debug      -  [Behaviour] OnLeftRoom").unwrap();
         assert_eq!(parse_msg(l.msg), Some(Event::RoomLeft));
+        assert_eq!(
+            parse_msg("VRCApplication: HandleApplicationQuit at 8111.613"),
+            Some(Event::RoomLeft)
+        );
         assert!(
             split_line("  at \u{cc}\u{ce}\u{ce}\u{cc}.OnLeftRoom () [0x00000] in <0>:0 ").is_none()
         );
@@ -317,12 +328,22 @@ mod tests {
     }
 
     #[test]
-    fn session_save() {
+    fn session_save_and_room_join() {
         assert_eq!(
             parse_msg("ECLIPTICA saving SESSION ID 19854"),
             Some(Event::SessionSave)
         );
         assert_eq!(parse_msg("ECLIPTICA MASTER Setting SESSION ID to 2505"), None);
+        assert_eq!(
+            parse_msg("[Behaviour] Joining wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)\r"),
+            Some(Event::RoomJoin(
+                "wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)".into()
+            ))
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] Joining or Creating Room: Ecliptica - Demo Playtest"),
+            None
+        );
     }
 
     #[test]

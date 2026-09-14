@@ -57,6 +57,20 @@ fn save_topmost(on: bool) {
     write_data("top.txt", if on { "1" } else { "0" }.to_string());
 }
 
+fn discord_on_from(text: &str) -> bool {
+    text.trim() == "1"
+}
+
+fn load_discord() -> bool {
+    data_file("discord.txt")
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|t| discord_on_from(&t))
+}
+
+fn save_discord(on: bool) {
+    write_data("discord.txt", if on { "1" } else { "0" }.to_string());
+}
+
 unsafe fn sync_topmost(main: HWND) {
     let Some(app) = app_mut(main) else {
         return;
@@ -397,6 +411,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                                 save_topmost(app.topmost);
                                 sync_topmost(hwnd);
                             }
+                            Hit::Discord => {
+                                app.activate(hit);
+                                save_discord(app.discord_on);
+                            }
                             _ => {
                                 app.activate(hit);
                             }
@@ -657,6 +675,9 @@ pub fn run() {
         app.sound_on = load_sound();
         app.topmost = load_topmost();
         app.backfill_history();
+        if load_discord() {
+            app.set_discord(true);
+        }
         let (w, h) = (app.renderer.width, app.renderer.height);
 
         let module = GetModuleHandleW(std::ptr::null());
@@ -727,6 +748,15 @@ mod tests {
         assert!(sound_on_from("1"));
         assert!(sound_on_from(""));
         assert!(sound_on_from("garbage"));
+    }
+
+    #[test]
+    fn discord_defaults_off() {
+        assert!(!discord_on_from(""));
+        assert!(!discord_on_from("0"));
+        assert!(!discord_on_from("garbage"));
+        assert!(discord_on_from("1
+"));
     }
 
     #[test]

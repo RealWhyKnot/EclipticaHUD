@@ -7,7 +7,7 @@ pub const VERSION: &str = match option_env!("EHUD_VERSION") {
     Some(v) => v,
     None => "dev",
 };
-const REPO: &str = "RealWhyKnot/EclipticaHUD";
+pub const REPO: &str = "RealWhyKnot/EclipticaHUD";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub struct UpdateInfo {
@@ -188,7 +188,7 @@ fn parse_version(s: &str) -> Option<[u64; 4]> {
     Some(v)
 }
 
-fn json_str(body: &str, key: &str) -> Option<String> {
+pub fn json_str(body: &str, key: &str) -> Option<String> {
     let pat = format!("\"{key}\":");
     let i = body.find(&pat)? + pat.len();
     let rest = body[i..].trim_start().strip_prefix('"')?;
