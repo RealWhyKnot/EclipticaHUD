@@ -78,7 +78,6 @@ pub struct App {
     pub sel_group: Option<usize>,
     pub sel_phase: Option<usize>,
     pub vrc_running: bool,
-    pub vrcx_running: bool,
     vrc_checked: Option<Instant>,
     last_env: Option<Env>,
     pub dpi: u32,
@@ -211,7 +210,6 @@ impl App {
             sel_group: None,
             sel_phase: None,
             vrc_running: true,
-            vrcx_running: false,
             vrc_checked: None,
             last_env: None,
             dpi,
@@ -704,7 +702,6 @@ impl App {
             scale: self.scale,
             alpha: self.alpha,
             window: self.gs.win(),
-            vrcx: self.vrcx_running,
             flash_t: timed(self.flash_at, FLASH_MS),
             taken_flash_t: timed(self.taken_flash_at, TAKEN_FLASH_MS),
             dead_pulse: self.dead_pulse(),
@@ -784,7 +781,6 @@ impl App {
         {
             self.vrc_checked = Some(Instant::now());
             self.vrc_running = crate::vr::process_running("VRChat.exe");
-            self.vrcx_running = crate::vr::process_running("VRCX.exe");
         }
         let env = self.env();
         let env_changed = self.last_env.is_some_and(|e| e != env);

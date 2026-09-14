@@ -150,7 +150,9 @@ fn art_key(name: &str) -> String {
 
 fn boss_art(base: &str) -> Option<String> {
     let key = art_key(base);
-    BOSS_ART.contains(&key.as_str()).then(|| format!("boss_{key}"))
+    BOSS_ART
+        .contains(&key.as_str())
+        .then(|| format!("boss_{key}"))
 }
 
 fn class_art(class: &str) -> Option<String> {
@@ -226,7 +228,10 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
                 if r.deaths > 0 {
                     facts.push(format!("{} deaths", r.deaths));
                 }
-                facts.push(format!("{}m in the run", now.saturating_sub(r.start_ts) / 60));
+                facts.push(format!(
+                    "{}m in the run",
+                    now.saturating_sub(r.start_ts) / 60
+                ));
                 state.push(pick(&facts, unix_now));
             }
             match gs.stage_no {
@@ -268,7 +273,10 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
                     facts.push(format!("{d} deaths"));
                 }
                 if s.start_ts > 0 {
-                    facts.push(format!("Clearing for {}m", now.saturating_sub(s.start_ts) / 60));
+                    facts.push(format!(
+                        "Clearing for {}m",
+                        now.saturating_sub(s.start_ts) / 60
+                    ));
                 }
                 state.push(pick(&facts, unix_now));
                 format!("{} | {}", stage_name(&gs.stage), phase_name(gs.progress))
@@ -292,7 +300,10 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
     let join_url = location.and_then(web_join_url);
     let secret = location.filter(|l| l.len() <= TEXT_MAX);
     let github = format!("https://github.com/{REPO}/releases/latest");
-    let mut fields = vec![format!("\"details\":{}", esc(&clip(&details)))];
+    let mut fields = vec![
+        "\"type\":5".to_string(),
+        format!("\"details\":{}", esc(&clip(&details))),
+    ];
     if let (Some(url), Some(_)) = (&join_url, secret) {
         fields.push(format!("\"details_url\":{}", esc(url)));
     }
@@ -321,7 +332,10 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
         None => {
             let mut buttons = Vec::new();
             if let Some(url) = &join_url {
-                buttons.push(format!("{{\"label\":\"Join in VRChat\",\"url\":{}}}", esc(url)));
+                buttons.push(format!(
+                    "{{\"label\":\"Join in VRChat\",\"url\":{}}}",
+                    esc(url)
+                ));
             }
             buttons.push(format!(
                 "{{\"label\":\"Get EclipticaHUD\",\"url\":{}}}",
@@ -437,7 +451,10 @@ impl Conn {
         let op = u32::from_le_bytes(head[..4].try_into().unwrap());
         let len = u32::from_le_bytes(head[4..].try_into().unwrap()) as usize;
         if len > 64 * 1024 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "frame too large",
+            ));
         }
         let mut body = vec![0u8; len];
         self.pipe.read_exact(&mut body)?;
@@ -451,7 +468,9 @@ impl Conn {
             match self.next_frame()? {
                 Some((1, body)) if json_str(&body, "evt").as_deref() == Some("READY") => {
                     return self.command(|n| {
-                        format!("{{\"cmd\":\"SUBSCRIBE\",\"evt\":\"ACTIVITY_JOIN\",\"nonce\":\"{n}\"}}")
+                        format!(
+                            "{{\"cmd\":\"SUBSCRIBE\",\"evt\":\"ACTIVITY_JOIN\",\"nonce\":\"{n}\"}}"
+                        )
                     });
                 }
                 Some((2, body)) => {
@@ -607,9 +626,10 @@ fn worker(rx: Receiver<Msg>) {
                 c.command(|n| set_activity_cmd(pid, n, activity.as_deref()))?;
                 diag(&format!(
                     "set_activity {}",
-                    activity
-                        .as_deref()
-                        .map_or_else(|| "clear".to_string(), |a| a.chars().take(DIAG_CLIP).collect())
+                    activity.as_deref().map_or_else(
+                        || "clear".to_string(),
+                        |a| a.chars().take(DIAG_CLIP).collect()
+                    )
                 ));
                 sent = Some(activity.clone());
                 next_send = Instant::now() + SEND_GAP;
@@ -699,7 +719,8 @@ mod tests {
     const LOC: &str = "wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)";
 
     fn feed(gs: &mut GameState, t: &str, msg: &str) -> u64 {
-        gs.feed(&format!("2026.09.14 {t} Debug      -  {msg}")).unwrap()
+        gs.feed(&format!("2026.09.14 {t} Debug      -  {msg}"))
+            .unwrap()
     }
 
     #[test]
@@ -727,8 +748,14 @@ mod tests {
         assert_eq!(boss_art("NX-Obsidian").as_deref(), Some("boss_nx_obsidian"));
         assert_eq!(boss_art("FlyLord").as_deref(), Some("boss_flylord"));
         assert_eq!(boss_art("SomeNewBoss"), None);
-        assert_eq!(class_art("Spellhammer").as_deref(), Some("class_spellhammer"));
-        assert_eq!(class_art("Shield Mage").as_deref(), Some("class_shieldmage"));
+        assert_eq!(
+            class_art("Spellhammer").as_deref(),
+            Some("class_spellhammer")
+        );
+        assert_eq!(
+            class_art("Shield Mage").as_deref(),
+            Some("class_shieldmage")
+        );
         assert_eq!(class_art(""), None);
         assert_eq!(BOSS_ART.len() + CLASS_ART.len() + 1, 41);
     }
@@ -746,7 +773,9 @@ mod tests {
         assert!(!valid_location(
             "wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:1 \"x\""
         ));
-        assert!(!valid_location("wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:"));
+        assert!(!valid_location(
+            "wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:"
+        ));
         assert_eq!(
             web_join_url(LOC).as_deref(),
             Some("https://vrchat.com/home/launch?worldId=wrld_0fb88df3-2057-4c2f-8e06-e948864378fd&instanceId=87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)")
@@ -760,7 +789,9 @@ mod tests {
         );
         assert_eq!(join_secret(&body).as_deref(), Some(LOC));
         assert_eq!(
-            join_secret("{\"cmd\":\"DISPATCH\",\"data\":{\"secret\":\"x\"},\"evt\":\"ACTIVITY_SPECTATE\"}"),
+            join_secret(
+                "{\"cmd\":\"DISPATCH\",\"data\":{\"secret\":\"x\"},\"evt\":\"ACTIVITY_SPECTATE\"}"
+            ),
             None
         );
     }
@@ -823,7 +854,8 @@ mod tests {
         let a = activity(&gs, now, unix_now).unwrap();
         let mut conn = Conn::open().expect("Discord running with IPC");
         let pid = std::process::id();
-        conn.command(|n| set_activity_cmd(pid, n, Some(&a))).unwrap();
+        conn.command(|n| set_activity_cmd(pid, n, Some(&a)))
+            .unwrap();
         let reply = live_reply(&mut conn);
         println!("{reply}");
         std::thread::sleep(Duration::from_secs(3));
@@ -859,17 +891,27 @@ mod tests {
             .map(|i| json_str(&activity(&gs, now, i * CYCLE_SECS).unwrap(), "state").unwrap())
             .collect();
         assert!(states.contains(&"Tokens 0/3".to_string()), "{states:?}");
-        assert!(states.contains(&"300 damage dealt".to_string()), "{states:?}");
+        assert!(
+            states.contains(&"300 damage dealt".to_string()),
+            "{states:?}"
+        );
         assert!(states.contains(&"8 damage taken".to_string()), "{states:?}");
         assert!(states.contains(&"1 hits taken".to_string()), "{states:?}");
-        assert!(states.iter().any(|s| s.ends_with(" DPS clearing")), "{states:?}");
+        assert!(
+            states.iter().any(|s| s.ends_with(" DPS clearing")),
+            "{states:?}"
+        );
         assert_ne!(states[0], states[1]);
         feed(
             &mut gs,
             "04:03:00",
             "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.19",
         );
-        feed(&mut gs, "04:03:01", "Boss Kakarot dead, personal damage dealt: ");
+        feed(
+            &mut gs,
+            "04:03:01",
+            "Boss Kakarot dead, personal damage dealt: ",
+        );
         feed(&mut gs, "04:03:01", "STRIKE DMG: 900");
         feed(&mut gs, "04:03:01", "NON-STRIKE DMG: 0");
         let now = feed(&mut gs, "04:03:05", "ECLIPTICA - now in intermission");
@@ -877,7 +919,10 @@ mod tests {
             .map(|i| json_str(&activity(&gs, now, i * CYCLE_SECS).unwrap(), "state").unwrap())
             .collect();
         assert!(states.contains(&"1 bosses down".to_string()), "{states:?}");
-        assert!(states.contains(&"300 damage dealt".to_string()), "{states:?}");
+        assert!(
+            states.contains(&"300 damage dealt".to_string()),
+            "{states:?}"
+        );
         assert!(states.contains(&"1m in the run".to_string()), "{states:?}");
     }
 
@@ -911,6 +956,7 @@ mod tests {
         feed(&mut gs, "04:02:03", "Advancing Stage Progress to: 2");
         let now = feed(&mut gs, "04:02:26", "ECLIPTICA saving SESSION ID 2505");
         let a = activity(&gs, now, 1_800_000_000).unwrap();
+        assert!(a.starts_with("{\"type\":5,"), "{a}");
         assert!(a.contains("\"details\":\"Balboa Ruins | Primal\""), "{a}");
         assert!(a.contains("\"state\":\"Stage 2\""), "{a}");
         let b = activity(&gs, now, 1_799_999_985).unwrap();
@@ -922,7 +968,9 @@ mod tests {
         assert!(a.contains("\"large_image\":\"logo\""));
         assert!(a.contains("\"small_image\":\"class_nekomancer\""));
         assert!(!a.contains("buttons"), "{a}");
-        assert!(a.contains("\"details_url\":\"https://vrchat.com/home/launch?worldId=wrld_0fb88df3"));
+        assert!(
+            a.contains("\"details_url\":\"https://vrchat.com/home/launch?worldId=wrld_0fb88df3")
+        );
         assert!(a.contains(
             "\"large_url\":\"https://github.com/RealWhyKnot/EclipticaHUD/releases/latest\""
         ));
@@ -943,12 +991,22 @@ mod tests {
             "04:10:51",
             "ECLIPTICA - now fighting boss: JimBringerPhase2(Clone) on phase: 0",
         );
-        feed(&mut gs, "04:10:52", "ownership of JimBringerPhase2 transferred to Alice");
+        feed(
+            &mut gs,
+            "04:10:52",
+            "ownership of JimBringerPhase2 transferred to Alice",
+        );
         feed(&mut gs, "04:10:53", "Dealing 21059 STRIKE damage");
         let now = feed(&mut gs, "04:10:53", "Local controller dead, switching off.");
         let a = activity(&gs, now, 1_800_000_000).unwrap();
-        assert!(a.contains("\"details\":\"Fighting Jim C. Bringer (P2)\""), "{a}");
-        assert!(a.contains("\"state\":\"Dead | 10.5k DPS | 21.1k damage | 1 death\""), "{a}");
+        assert!(
+            a.contains("\"details\":\"Fighting Jim C. Bringer (P2)\""),
+            "{a}"
+        );
+        assert!(
+            a.contains("\"state\":\"Dead | 10.5k DPS | 21.1k damage | 1 death\""),
+            "{a}"
+        );
         assert!(a.contains("\"large_image\":\"boss_jimbringer\""));
         assert!(!a.contains("Alice"));
         assert!(!a.contains("Join in VRChat"));
@@ -965,7 +1023,7 @@ mod tests {
         let a = activity(&gs, now, 1_800_000_000).unwrap();
         assert_eq!(
             a,
-            "{\"details\":\"In the lobby\",\"assets\":{\"large_image\":\"logo\",\"large_text\":\"Ecliptica\",\"large_url\":\"https://github.com/RealWhyKnot/EclipticaHUD/releases/latest\"},\"buttons\":[{\"label\":\"Get EclipticaHUD\",\"url\":\"https://github.com/RealWhyKnot/EclipticaHUD/releases/latest\"}]}"
+            "{\"type\":5,\"details\":\"In the lobby\",\"assets\":{\"large_image\":\"logo\",\"large_text\":\"Ecliptica\",\"large_url\":\"https://github.com/RealWhyKnot/EclipticaHUD/releases/latest\"},\"buttons\":[{\"label\":\"Get EclipticaHUD\",\"url\":\"https://github.com/RealWhyKnot/EclipticaHUD/releases/latest\"}]}"
         );
     }
 }

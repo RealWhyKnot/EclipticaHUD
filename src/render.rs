@@ -264,7 +264,6 @@ pub struct TipCtx {
     pub sound_on: bool,
     pub log_open: bool,
     pub discord_on: bool,
-    pub vrcx: bool,
 }
 
 impl Hit {
@@ -283,9 +282,6 @@ impl Hit {
             Hit::AlphaUp => "Make the HUD less see-through",
             Hit::WindowDown => "Shorter window for the live DPS and damage taken",
             Hit::WindowUp => "Longer window for the live DPS and damage taken",
-            Hit::Discord if c.discord_on && c.vrcx => {
-                "VRCX is running; its Discord presence, if on, hides this status"
-            }
             Hit::Discord if c.discord_on => {
                 "Showing this run as your Discord status; click to stop"
             }
@@ -400,7 +396,6 @@ pub struct Frame {
     pub scale: f32,
     pub alpha: u8,
     pub window: u64,
-    pub vrcx: bool,
     pub flash_t: f32,
     pub taken_flash_t: f32,
     pub dead_pulse: f32,
@@ -1421,9 +1416,7 @@ impl Renderer {
         let log_color = if f.log_ok { GOOD } else { AMBER };
         self.dot(M + 76, fy + 4, 8, log_color);
         self.text(M + 90, fy, 80, F_TINY, DIM, DT_LEFT, "LOG");
-        let vrcx_warn = f.discord_on && f.discord == Link::Connected && f.vrcx;
         let discord_color = match (f.discord_on, f.discord) {
-            _ if vrcx_warn => AMBER,
             (false, _) | (true, Link::Off) => DIM,
             (true, Link::Waiting) => AMBER,
             (true, Link::Connected) => GOOD,
@@ -1432,8 +1425,7 @@ impl Renderer {
         let (dx, _, _, _) = DISCORD_HIT;
         self.dot(dx + 4, fy + 4, 8, discord_color);
         let label = if hov(Hit::Discord) { TEXT } else { DIM };
-        let name = if vrcx_warn { "VRCX" } else { "DISCORD" };
-        self.text(dx + 18, fy, 60, F_TINY, label, DT_LEFT, name);
+        self.text(dx + 18, fy, 60, F_TINY, label, DT_LEFT, "DISCORD");
         let (utext, ucolor) = match &f.update {
             Badge::None => (VERSION.to_string(), DIM),
             Badge::Ready(tag) => (format!("update {tag}"), ACCENT),
@@ -1453,7 +1445,6 @@ impl Renderer {
                 sound_on: f.sound_on,
                 log_open: f.log_open,
                 discord_on: f.discord_on,
-                vrcx: f.vrcx,
             };
             self.tooltip(hit.rect(), hit.tip(ctx), LOGICAL_W, LOGICAL_H);
         }
@@ -1955,7 +1946,6 @@ mod tests {
             scale: 1.0,
             alpha: 100,
             window: 10,
-            vrcx: false,
             flash_t: 1.0,
             taken_flash_t: 1.0,
             dead_pulse: 0.0,
@@ -2344,7 +2334,6 @@ mod tests {
             sound_on: false,
             log_open: true,
             discord_on: false,
-            vrcx: false,
         };
         assert!(Hit::Pin.tip(ctx).contains("keep it on top"));
         assert!(Hit::Discord.tip(ctx).starts_with("Click to show"));
@@ -2356,13 +2345,6 @@ mod tests {
             .ends_with("click to stop"));
         assert!(Hit::Discord.tip(ctx).chars().count() <= 70);
         assert!(Hit::Settings.tip(ctx).chars().count() <= 70);
-        let warn = TipCtx {
-            discord_on: true,
-            vrcx: true,
-            ..ctx
-        };
-        assert!(Hit::Discord.tip(warn).starts_with("VRCX"));
-        assert!(Hit::Discord.tip(warn).chars().count() <= 70);
         assert!(Hit::ScaleUp.tip(ctx).contains("bigger"));
         assert!(Hit::Target.tip(ctx).contains("unmute"));
         assert!(Hit::Log.tip(ctx).starts_with("Close"));
