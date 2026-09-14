@@ -81,6 +81,19 @@ pub struct BossFight {
     pub lost: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct StageStats {
+    pub name: String,
+    pub start_ts: u64,
+    pub end_ts: Option<u64>,
+    pub dmg: u64,
+    pub taken: u64,
+    pub hits: u32,
+    pub max_hit: u64,
+    pub attacks: Vec<Tally>,
+    pub deaths: u32,
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct Run {
     pub start_ts: u64,
@@ -94,9 +107,56 @@ pub struct Run {
     pub hits: VecDeque<TakenEntry>,
     pub targets: VecDeque<TargetEntry>,
     pub death_log: VecDeque<(u64, u64)>,
+    pub stages: Vec<StageStats>,
 }
 
 impl Run {
+    pub fn dmg(&self) -> u64 {
+        self.fights.iter().map(|f| f.dmg).sum::<u64>()
+            + self.stages.iter().map(|s| s.dmg).sum::<u64>()
+    }
+
+    pub fn taken(&self) -> u64 {
+        self.fights.iter().map(|f| f.taken).sum::<u64>()
+            + self.stages.iter().map(|s| s.taken).sum::<u64>()
+    }
+
+    pub fn hit_count(&self) -> u32 {
+        self.fights.iter().map(|f| f.hits).sum::<u32>()
+            + self.stages.iter().map(|s| s.hits).sum::<u32>()
+    }
+
+    pub fn max_hit(&self) -> u64 {
+        self.fights
+            .iter()
+            .flat_map(|f| f.attacks.iter().map(|t| t.total / t.hits.max(1) as u64))
+            .chain(self.stages.iter().map(|s| s.max_hit))
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn kills(&self) -> usize {
+        self.fights.iter().filter(|f| f.kill.is_some()).count()
+    }
+
+    pub fn attacks(&self) -> Vec<Tally> {
+        merge_tallies(
+            self.fights
+                .iter()
+                .map(|f| f.attacks.as_slice())
+                .chain(self.stages.iter().map(|s| s.attacks.as_slice())),
+        )
+    }
+
+    pub fn active_secs(&self, now: u64) -> u64 {
+        let span = |start: u64, end: Option<u64>| end.unwrap_or(now).saturating_sub(start);
+        self.fights
+            .iter()
+            .map(|f| span(f.start_ts, f.end_ts))
+            .chain(self.stages.iter().map(|s| span(s.start_ts, s.end_ts)))
+            .sum()
+    }
+
     pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
         let mut out: Vec<std::ops::Range<usize>> = Vec::new();
         for (i, f) in self.fights.iter().enumerate() {
@@ -250,8 +310,7 @@ pub enum Mode {
     Stage,
 }
 
-const DPS_WINDOW: u64 = 3;
-const TAKEN_WINDOW: u64 = 10;
+pub const DEFAULT_WINDOW: u64 = 10;
 const KILL_DEDUPE_SECS: u64 = 30;
 const DEATH_HOLD: u64 = 3;
 const WIPE_SECS: u64 = 3;
@@ -289,6 +348,8 @@ pub struct GameState {
     stage_boss_seen: bool,
     pub location: Option<String>,
     pub world: Option<String>,
+    pub window: u64,
+    pub stage_stats: StageStats,
     last_death: Option<u64>,
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
@@ -329,7 +390,31 @@ impl GameState {
             .is_some_and(|w| w.starts_with("Ecliptica"))
     }
 
+    pub fn pre_boss(&self) -> bool {
+        self.mode == Mode::Stage && self.boss.is_none()
+    }
+
+    pub fn stage_dps(&self, now: u64) -> u64 {
+        self.stage_stats.dmg / now.saturating_sub(self.stage_stats.start_ts).max(1)
+    }
+
+    pub fn stage_taken_rate(&self, now: u64) -> u64 {
+        self.stage_stats.taken / now.saturating_sub(self.stage_stats.start_ts).max(1)
+    }
+
+    fn close_stage(&mut self, ts: u64) {
+        if self.stage_stats.start_ts == 0 {
+            return;
+        }
+        let mut done = std::mem::take(&mut self.stage_stats);
+        done.end_ts = Some(ts);
+        if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
+            r.stages.push(done);
+        }
+    }
+
     fn end_run(&mut self, ts: u64) {
+        self.close_stage(ts);
         let wiped = self
             .last_death
             .is_some_and(|d| ts.saturating_sub(d) <= WIPE_SECS);
@@ -427,6 +512,7 @@ impl GameState {
                             .is_none_or(|e| ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
                 });
                 if self.boss.as_deref() != Some(&name) && !just_ended {
+                    self.close_stage(ts);
                     self.boss = Some(name.clone());
                     if !self.stage_boss_seen {
                         self.stage_boss_seen = true;
@@ -498,11 +584,20 @@ impl GameState {
                     if let Some(f) = self.open_fight() {
                         f.dmg += n;
                     }
+                } else if self.pre_boss() {
+                    self.stage_stats.dmg += n;
                 }
             }
             Event::DamageTaken { amount, source } => {
                 self.taken_hits.push_back((ts, amount));
-                if self.boss.is_some() {
+                if self.pre_boss() {
+                    let s = &mut self.stage_stats;
+                    s.taken += amount;
+                    s.hits += 1;
+                    s.max_hit = s.max_hit.max(amount);
+                    let (who, attack) = describe_source(&source, amount);
+                    tally(&mut s.attacks, &who, &attack, amount);
+                } else if self.boss.is_some() {
                     self.fight_taken += amount;
                     self.fight_hits += 1;
                     self.fight_max_hit = self.fight_max_hit.max(amount);
@@ -553,6 +648,14 @@ impl GameState {
                     self.level_tokens.clear();
                     self.reset_stage_tokens();
                 }
+                if self.stage_stats.start_ts == 0 || self.stage != name || self.boss.is_some() {
+                    self.close_stage(ts);
+                    self.stage_stats = StageStats {
+                        name: name.clone(),
+                        start_ts: ts,
+                        ..Default::default()
+                    };
+                }
                 self.stage = name.clone();
                 self.progress = progress;
                 if !class.is_empty() {
@@ -568,6 +671,7 @@ impl GameState {
                 }
             }
             Event::Intermission => {
+                self.close_stage(ts);
                 self.mode = Mode::Intermission;
                 self.boss = None;
                 self.target = None;
@@ -614,6 +718,9 @@ impl GameState {
                 if ts >= self.dead_until {
                     if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
                         r.deaths += 1;
+                    }
+                    if self.pre_boss() {
+                        self.stage_stats.deaths += 1;
                     }
                     if let Some(f) = self.open_fight() {
                         f.deaths += 1;
@@ -666,15 +773,42 @@ impl GameState {
         Some(line.ts)
     }
 
-    pub fn rolling_dps(&mut self, now: u64) -> u64 {
-        while self.hits.front().is_some_and(|h| h.0 + DPS_WINDOW <= now) {
-            self.hits.pop_front();
+    pub fn last_kill_total(&self) -> Option<(String, u64, u64)> {
+        let k = self.last_kill.as_ref()?;
+        let run = self.live_run()?;
+        let idx = run
+            .fights
+            .iter()
+            .rposition(|f| f.name == k.boss && f.kill.is_some())?;
+        let group = run.groups().into_iter().find(|g| g.contains(&idx))?;
+        let (strike, other) = run.fights[group]
+            .iter()
+            .filter_map(|f| f.kill)
+            .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+        Some((base_name(&k.boss).to_string(), strike, other))
+    }
+
+    pub fn win(&self) -> u64 {
+        if self.window == 0 {
+            DEFAULT_WINDOW
+        } else {
+            self.window
         }
-        let span = self
-            .hits
+    }
+
+    fn windowed(deque: &mut VecDeque<(u64, u64)>, now: u64, window: u64) -> u64 {
+        while deque.front().is_some_and(|h| h.0 + window <= now) {
+            deque.pop_front();
+        }
+        let span = deque
             .front()
-            .map_or(1, |h| (now.saturating_sub(h.0) + 1).clamp(1, DPS_WINDOW));
-        self.hits.iter().map(|h| h.1).sum::<u64>() / span
+            .map_or(1, |h| (now.saturating_sub(h.0) + 1).clamp(1, window));
+        deque.iter().map(|h| h.1).sum::<u64>() / span
+    }
+
+    pub fn rolling_dps(&mut self, now: u64) -> u64 {
+        let window = self.win();
+        Self::windowed(&mut self.hits, now, window)
     }
 
     pub fn fight_dps(&self, now: u64) -> u64 {
@@ -685,14 +819,8 @@ impl GameState {
     }
 
     pub fn rolling_taken(&mut self, now: u64) -> u64 {
-        while self
-            .taken_hits
-            .front()
-            .is_some_and(|h| h.0 + TAKEN_WINDOW < now)
-        {
-            self.taken_hits.pop_front();
-        }
-        self.taken_hits.iter().map(|h| h.1).sum::<u64>() / TAKEN_WINDOW
+        let window = self.win();
+        Self::windowed(&mut self.taken_hits, now, window)
     }
 
     pub fn fight_taken_rate(&self, now: u64) -> u64 {
@@ -1153,8 +1281,14 @@ mod tests {
         assert_eq!(gs.fight_dmg, 150);
         assert_eq!(gs.rolling_dps(t0), 150);
         assert_eq!(gs.rolling_dps(t0 + 2), 50);
-        assert_eq!(gs.rolling_dps(t0 + 3), 0);
+        assert_eq!(gs.rolling_dps(t0 + 9), 15);
+        assert_eq!(gs.rolling_dps(t0 + 10), 0);
         assert_eq!(gs.rolling_dps(t0 + 60), 0);
+        let mut short = GameState::default();
+        short.window = 3;
+        short.feed(&format!("{P}Dealing 90 STRIKE damage"));
+        assert_eq!(short.rolling_dps(t0 + 2), 30);
+        assert_eq!(short.rolling_dps(t0 + 3), 0);
         assert_eq!(gs.fight_dps(t0 + 10), 15);
         gs.feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
         assert!(gs.boss.is_none());
@@ -1322,7 +1456,7 @@ mod tests {
             "12:00:00",
             "damage has been taken: 5, from source: attack_Spit",
         );
-        assert_eq!(gs.rolling_taken(t0), 0);
+        assert_eq!(gs.rolling_taken(t0), 5);
         assert_eq!(gs.fight_taken, 0);
         assert_eq!(gs.fight_hits, 0);
         feed_at(
@@ -1350,7 +1484,7 @@ mod tests {
             "12:00:14",
             "damage has been taken: 10, from source: attack_Spit (2)",
         );
-        assert_eq!(gs.rolling_taken(t), 6);
+        assert_eq!(gs.rolling_taken(t), 15);
         assert_eq!(gs.fight_taken, 60);
         assert_eq!(gs.fight_hits, 4);
         assert_eq!(gs.fight_max_hit, 30);
@@ -1717,6 +1851,122 @@ mod tests {
         kill_at(&mut gs, "09:14:00", "Kakarot", 900);
         assert_eq!(gs.runs[0].fights[0].kill, Some((700, 0)));
         assert_eq!(gs.runs[0].fights[1].kill, Some((900, 0)));
+    }
+
+    #[test]
+    fn stage_stats_before_the_boss() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:00", "Advancing Stage Progress to: 2");
+        feed_at(&mut gs, "09:10:01", HALL);
+        assert!(gs.pre_boss());
+        feed_at(&mut gs, "09:10:05", "Dealing 40 STRIKE damage");
+        feed_at(
+            &mut gs,
+            "09:10:06",
+            "damage has been taken: 7, from source: machinegunShooter1",
+        );
+        feed_at(
+            &mut gs,
+            "09:10:07",
+            "damage has been taken: 9, from source: machinegunShooter1",
+        );
+        feed_at(&mut gs, "09:10:08", DEAD);
+        feed_at(
+            &mut gs,
+            "09:10:30",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0.05 as class: Spellhammer",
+        );
+        feed_at(&mut gs, "09:10:31", "Dealing 60 STRIKE damage");
+        let s = &gs.stage_stats;
+        assert_eq!(
+            (s.dmg, s.taken, s.hits, s.max_hit, s.deaths),
+            (100, 16, 2, 9, 1)
+        );
+        assert_eq!(s.attacks.len(), 1);
+        assert_eq!(gs.fight_dmg, 0);
+        let t = feed_at(&mut gs, "09:10:41", "Dealing 0 STRIKE damage");
+        assert_eq!(gs.stage_dps(t), 100 / 40);
+        feed_at(
+            &mut gs,
+            "09:11:01",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0.05",
+        );
+        assert!(!gs.pre_boss());
+        assert_eq!(gs.stage_stats.start_ts, 0);
+        let run = gs.live_run().unwrap();
+        assert_eq!(run.stages.len(), 1);
+        assert_eq!(run.stages[0].end_ts, Some(t + 20));
+        assert_eq!(run.stages[0].dmg, 100);
+        feed_at(&mut gs, "09:11:05", "Dealing 500 STRIKE damage");
+        feed_at(
+            &mut gs,
+            "09:11:06",
+            "damage has been taken: 30, from source: (Nan) slam",
+        );
+        assert_eq!(gs.fight_dmg, 500);
+        kill_at(&mut gs, "09:12:00", "Nan", 500);
+        feed_at(&mut gs, "09:12:05", "ECLIPTICA - now in intermission");
+        let run = gs.live_run().unwrap();
+        assert_eq!(run.dmg(), 600);
+        assert_eq!(run.taken(), 46);
+        assert_eq!(run.hit_count(), 3);
+        assert_eq!(run.max_hit(), 30);
+        assert_eq!(run.kills(), 1);
+        assert_eq!(run.attacks().len(), 2);
+        assert_eq!(run.active_secs(0), 60 + 59);
+        feed_at(
+            &mut gs,
+            "09:13:00",
+            "ECLIPTICA - now in stage: Stage_GMFuncFlat on phase: 0.1 as class: Spellhammer",
+        );
+        assert_eq!(gs.stage_stats.name, "GMFuncFlat");
+        assert_eq!(gs.stage_stats.dmg, 0);
+        feed_at(&mut gs, "09:13:10", "Dealing 5 STRIKE damage");
+        feed_at(&mut gs, "09:14:00", LOBBY);
+        assert_eq!(gs.runs[0].stages.len(), 2);
+        assert_eq!(gs.runs[0].stages[1].dmg, 5);
+        assert_eq!(gs.stage_stats.start_ts, 0);
+    }
+
+    #[test]
+    fn last_kill_sums_the_phases() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:01", HALL);
+        assert_eq!(gs.last_kill_total(), None);
+        feed_at(
+            &mut gs,
+            "09:12:00",
+            "ECLIPTICA - now fighting boss: Mephiel(Clone) on phase: 0.8",
+        );
+        kill_at(&mut gs, "09:15:00", "Mephiel", 6388);
+        assert_eq!(gs.last_kill_total(), Some(("Mephiel".into(), 6388, 0)));
+        feed_at(
+            &mut gs,
+            "09:15:02",
+            "ECLIPTICA - now fighting boss: MephielPhase2(Clone) on phase: 0.8",
+        );
+        feed_at(
+            &mut gs,
+            "09:18:00",
+            "Boss MephielPhase2 dead, personal damage dealt: ",
+        );
+        feed_at(&mut gs, "09:18:00", "STRIKE DMG: 5113");
+        feed_at(&mut gs, "09:18:00", "NON-STRIKE DMG: 7");
+        assert_eq!(gs.last_kill_total(), Some(("Mephiel".into(), 11501, 7)));
+        feed_at(&mut gs, "09:18:05", "ECLIPTICA - now in intermission");
+        assert_eq!(gs.last_kill_total(), Some(("Mephiel".into(), 11501, 7)));
+        feed_at(
+            &mut gs,
+            "09:20:00",
+            "ECLIPTICA - now in stage: Stage_GMFuncFlat on phase: 0.9 as class: Spellhammer",
+        );
+        feed_at(
+            &mut gs,
+            "09:22:00",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0.9",
+        );
+        kill_at(&mut gs, "09:23:00", "Nan", 100);
+        assert_eq!(gs.last_kill_total(), Some(("Nan".into(), 100, 0)));
     }
 
     #[test]

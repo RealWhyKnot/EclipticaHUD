@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::app::WINDOW_STEPS;
 use crate::render::{Hit, LogHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
 use crate::update;
 use std::path::PathBuf;
@@ -79,6 +80,18 @@ fn load_text(name: &str) -> Option<String> {
 
 fn save_scale(scale: f32) {
     write_data("scale.txt", ((scale * 100.0).round() as i32).to_string());
+}
+
+fn window_from(text: &str) -> u64 {
+    text.trim()
+        .parse::<u64>()
+        .map_or(crate::state::DEFAULT_WINDOW, |w| {
+            w.clamp(WINDOW_STEPS[0], WINDOW_STEPS[WINDOW_STEPS.len() - 1])
+        })
+}
+
+fn save_window(window: u64) {
+    write_data("window.txt", window.to_string());
 }
 
 fn save_alpha(alpha: u8) {
@@ -475,6 +488,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                                     apply_size(app, hwnd);
                                 }
                             }
+                            Hit::WindowDown | Hit::WindowUp => {
+                                if app.activate(hit) {
+                                    save_window(app.gs.win());
+                                }
+                            }
                             Hit::AlphaDown | Hit::AlphaUp => {
                                 if app.activate(hit) {
                                     save_alpha(app.alpha);
@@ -742,6 +760,9 @@ pub fn run() {
         app.topmost = load_topmost();
         app.set_scale(load_text("scale.txt").map_or(1.0, |t| scale_from(&t)));
         app.set_alpha(load_text("alpha.txt").map_or(MAX_ALPHA, |t| alpha_from(&t)));
+        app.set_window(
+            load_text("window.txt").map_or(crate::state::DEFAULT_WINDOW, |t| window_from(&t)),
+        );
         app.backfill_history();
         if load_discord() {
             app.set_discord(true);
@@ -829,6 +850,10 @@ mod tests {
         assert_eq!(alpha_from(""), MAX_ALPHA);
         assert_eq!(alpha_from("5"), MIN_ALPHA);
         assert_eq!(alpha_from("300"), MAX_ALPHA);
+        assert_eq!(window_from("15"), 15);
+        assert_eq!(window_from("x"), 10);
+        assert_eq!(window_from("1"), 3);
+        assert_eq!(window_from("99"), 30);
     }
 
     #[test]

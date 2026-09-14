@@ -25,6 +25,7 @@ const STALE_SECS: u64 = 120;
 const VRC_CHECK_SECS: u64 = 2;
 const SCALE_STEP: f32 = 0.1;
 const ALPHA_STEP: u8 = 10;
+pub const WINDOW_STEPS: [u64; 12] = [3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30];
 
 pub struct Tick {
     pub redraw: bool,
@@ -77,6 +78,7 @@ pub struct App {
     pub sel_group: Option<usize>,
     pub sel_phase: Option<usize>,
     pub vrc_running: bool,
+    pub vrcx_running: bool,
     vrc_checked: Option<Instant>,
     last_env: Option<Env>,
     pub dpi: u32,
@@ -209,6 +211,7 @@ impl App {
             sel_group: None,
             sel_phase: None,
             vrc_running: true,
+            vrcx_running: false,
             vrc_checked: None,
             last_env: None,
             dpi,
@@ -277,6 +280,26 @@ impl App {
         }
         self.alpha = next;
         true
+    }
+
+    pub fn set_window(&mut self, window: u64) {
+        self.gs.window = window.clamp(WINDOW_STEPS[0], WINDOW_STEPS[WINDOW_STEPS.len() - 1]);
+    }
+
+    fn step_window(&mut self, up: bool) -> bool {
+        let cur = self.gs.win();
+        let next = if up {
+            WINDOW_STEPS.iter().copied().find(|w| *w > cur)
+        } else {
+            WINDOW_STEPS.iter().rev().copied().find(|w| *w < cur)
+        };
+        match next {
+            Some(w) => {
+                self.gs.window = w;
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn alpha_byte(&self) -> u8 {
@@ -369,10 +392,16 @@ impl App {
             Hit::ScaleUp => self.settings_open && self.scale < MAX_SCALE - 0.001,
             Hit::AlphaDown => self.settings_open && self.alpha > MIN_ALPHA,
             Hit::AlphaUp => self.settings_open && self.alpha < MAX_ALPHA,
+            Hit::WindowDown => self.settings_open && self.gs.win() > WINDOW_STEPS[0],
+            Hit::WindowUp => {
+                self.settings_open && self.gs.win() < WINDOW_STEPS[WINDOW_STEPS.len() - 1]
+            }
             Hit::Target | Hit::FightPrev | Hit::FightNext | Hit::Phase if self.settings_open => {
                 false
             }
-            Hit::Info(Info::Boss | Info::Result) if self.settings_open => false,
+            Hit::Info(
+                Info::Boss | Info::Result | Info::Dealt(_) | Info::DealtBar | Info::LastKill,
+            ) if self.settings_open => false,
             Hit::Info(Info::Version) => !self.update_ready(),
             Hit::Info(i) if i.live_only() => self.is_live(),
             Hit::Info(i) if i.history_only() => !self.is_live(),
@@ -488,6 +517,8 @@ impl App {
             Hit::ScaleUp => self.step_scale(1.0),
             Hit::AlphaDown => self.step_alpha(false),
             Hit::AlphaUp => self.step_alpha(true),
+            Hit::WindowDown => self.step_window(false),
+            Hit::WindowUp => self.step_window(true),
             Hit::Close | Hit::Update | Hit::Info(_) => false,
         }
     }
@@ -672,6 +703,8 @@ impl App {
             settings_open: self.settings_open,
             scale: self.scale,
             alpha: self.alpha,
+            window: self.gs.win(),
+            vrcx: self.vrcx_running,
             flash_t: timed(self.flash_at, FLASH_MS),
             taken_flash_t: timed(self.taken_flash_at, TAKEN_FLASH_MS),
             dead_pulse: self.dead_pulse(),
@@ -751,6 +784,7 @@ impl App {
         {
             self.vrc_checked = Some(Instant::now());
             self.vrc_running = crate::vr::process_running("VRChat.exe");
+            self.vrcx_running = crate::vr::process_running("VRCX.exe");
         }
         let env = self.env();
         let env_changed = self.last_env.is_some_and(|e| e != env);
@@ -986,6 +1020,28 @@ mod tests {
         assert!(app.activate(Hit::AlphaUp));
         assert_eq!(app.alpha, MIN_ALPHA + ALPHA_STEP);
         assert_eq!(app.alpha_byte(), 102);
+        assert_eq!(app.gs.win(), 10);
+        assert!(app.hit_enabled(Hit::WindowUp) && app.hit_enabled(Hit::WindowDown));
+        assert!(app.activate(Hit::WindowUp));
+        assert_eq!(app.gs.win(), 15);
+        for _ in 0..10 {
+            app.activate(Hit::WindowUp);
+        }
+        assert_eq!(app.gs.win(), 30);
+        assert!(!app.hit_enabled(Hit::WindowUp));
+        assert!(!app.activate(Hit::WindowUp));
+        for _ in 0..20 {
+            app.activate(Hit::WindowDown);
+        }
+        assert_eq!(app.gs.win(), 3);
+        assert!(!app.activate(Hit::WindowDown));
+        app.set_window(12);
+        assert_eq!(app.gs.win(), 12);
+        assert!(app.activate(Hit::WindowDown));
+        assert_eq!(app.gs.win(), 10);
+        app.set_window(99);
+        assert_eq!(app.gs.win(), 30);
+        assert!(!app.hit_enabled(Hit::Info(Info::LastKill)));
         app.set_scale(9.0);
         assert_eq!(app.scale, MAX_SCALE);
         app.set_alpha(0);
@@ -1198,14 +1254,14 @@ mod tests {
         app.tick();
         let peak = app.dps_peak;
         assert!(peak > 0);
-        assert_eq!(app.taken_peak, 4);
+        assert_eq!(app.taken_peak, 40);
         assert_eq!(app.dps_boss.as_deref(), Some("Yuki"));
         app.gs.feed(&format!(
             "{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0"
         ));
         app.tick();
         assert_eq!(app.dps_peak, peak);
-        assert_eq!(app.taken_peak, 4);
+        assert_eq!(app.taken_peak, 40);
         assert_eq!(app.dps_boss.as_deref(), Some("Yuki"));
         app.gs.feed(&format!(
             "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0"
@@ -1270,7 +1326,8 @@ mod tests {
             .feed(&format!("{P}damage has been taken: 5, from source: "));
         let t = app.tick();
         assert!(app.taken_flash_at.is_some());
-        assert_eq!(t.timer_ms, Some(ANIM_MS));
+        assert!(t.timer_ms.is_none_or(|ms| ms == ANIM_MS));
+        assert_eq!(app.timer_ms, ANIM_MS);
         assert!(app.taken_shown > 0.0);
     }
 

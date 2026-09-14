@@ -27,6 +27,8 @@ pub const SCALE_DOWN_HIT: (i32, i32, i32, i32) = (200, 90, 26, 24);
 pub const SCALE_UP_HIT: (i32, i32, i32, i32) = (306, 90, 26, 24);
 pub const ALPHA_DOWN_HIT: (i32, i32, i32, i32) = (200, 134, 26, 24);
 pub const ALPHA_UP_HIT: (i32, i32, i32, i32) = (306, 134, 26, 24);
+pub const WINDOW_DOWN_HIT: (i32, i32, i32, i32) = (200, 178, 26, 24);
+pub const WINDOW_UP_HIT: (i32, i32, i32, i32) = (306, 178, 26, 24);
 pub const UPDATE_HIT: (i32, i32) = (230, LOGICAL_H - 32);
 pub const DISCORD_HIT: (i32, i32, i32, i32) = (156, LOGICAL_H - 30, 72, 24);
 pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 126, 308, 40);
@@ -42,6 +44,8 @@ pub const MIN_SCALE: f32 = 0.5;
 pub const MAX_SCALE: f32 = 2.0;
 pub const MIN_ALPHA: u8 = 30;
 pub const MAX_ALPHA: u8 = 100;
+pub const MIN_WINDOW: u64 = 3;
+pub const MAX_WINDOW: u64 = 30;
 
 pub const LOG_CLOSE_HIT: (i32, i32, i32, i32) = (380, 0, 40, 36);
 pub const LOG_CLOSE_BTN: (i32, i32, i32, i32) = (388, 8, 24, 24);
@@ -95,6 +99,8 @@ pub enum Hit {
     ScaleUp,
     AlphaDown,
     AlphaUp,
+    WindowDown,
+    WindowUp,
     Discord,
     Log,
     Close,
@@ -205,16 +211,16 @@ impl Info {
             (Info::RunRow, false) => {
                 "Run number, start time, stage and deaths; LOST means a boss survived"
             }
-            (Info::Boss, true) => "The boss you are fighting; (P2) means a later phase",
+            (Info::Boss, true) => "The boss you are fighting, or the stage you are clearing",
             (Info::Boss, false) => "The boss of this fight; (P2) means a later phase",
             (Info::Result, _) => {
                 "killed, lost (run ended with it alive) or unfinished, plus fight time"
             }
-            (Info::Dealt(0), true) => "Damage you are dealing per second right now",
+            (Info::Dealt(0), true) => "Damage per second over the stat window from settings",
             (Info::Dealt(0), false) => "All damage you dealt in this fight, across phases",
-            (Info::Dealt(1), true) => "Your fight damage divided by the fight time so far",
+            (Info::Dealt(1), true) => "Damage divided by the time in this fight, stage or run",
             (Info::Dealt(1), false) => "Your fight damage divided by the fight time",
-            (Info::Dealt(2), true) => "All damage you dealt this fight, across phases",
+            (Info::Dealt(2), true) => "All damage you dealt in this fight, stage or run",
             (Info::Dealt(2), false) => "How long the fight lasted",
             (Info::Dealt(_), _) => "",
             (Info::DealtBar, _) => "Your DPS right now against your best moment this fight",
@@ -222,14 +228,14 @@ impl Info {
             (Info::LastKill, false) => "What the game credited you with when this boss died",
             (Info::TakenTitle, true) => "Damage you took; the right side counts deaths in this run",
             (Info::TakenTitle, false) => "Damage you took in this fight",
-            (Info::Taken(0), true) => "Damage you took in the last 10 seconds, per second",
+            (Info::Taken(0), true) => "Damage taken per second over the stat window from settings",
             (Info::Taken(0), false) => "All damage you took in this fight",
-            (Info::Taken(1), true) => "All damage you took this fight, across phases",
+            (Info::Taken(1), true) => "All damage you took in this fight, stage or run",
             (Info::Taken(1), false) => "How many times you were hit in this fight",
-            (Info::Taken(2), true) => "How many times you were hit this fight",
+            (Info::Taken(2), true) => "How many times you were hit, or deaths during intermission",
             (Info::Taken(2), false) => "Damage taken divided by the fight time",
             (Info::Taken(_), _) => "",
-            (Info::TakenMore(0), true) => "The largest single hit on you this fight",
+            (Info::TakenMore(0), true) => "The largest single hit on you so far",
             (Info::TakenMore(0), false) => "Damage taken divided by the number of hits",
             (Info::TakenMore(1), _) => "Damage taken divided by the number of hits",
             (Info::TakenMore(2), _) => "Damage taken divided by the fight time so far",
@@ -258,6 +264,7 @@ pub struct TipCtx {
     pub sound_on: bool,
     pub log_open: bool,
     pub discord_on: bool,
+    pub vrcx: bool,
 }
 
 impl Hit {
@@ -274,6 +281,11 @@ impl Hit {
             Hit::ScaleUp => "Make the HUD bigger",
             Hit::AlphaDown => "Make the HUD more see-through",
             Hit::AlphaUp => "Make the HUD less see-through",
+            Hit::WindowDown => "Shorter window for the live DPS and damage taken",
+            Hit::WindowUp => "Longer window for the live DPS and damage taken",
+            Hit::Discord if c.discord_on && c.vrcx => {
+                "VRCX is running; its Discord presence, if on, hides this status"
+            }
             Hit::Discord if c.discord_on => {
                 "Showing this run as your Discord status; click to stop"
             }
@@ -301,6 +313,8 @@ impl Hit {
             Hit::ScaleUp => SCALE_UP_HIT,
             Hit::AlphaDown => ALPHA_DOWN_HIT,
             Hit::AlphaUp => ALPHA_UP_HIT,
+            Hit::WindowDown => WINDOW_DOWN_HIT,
+            Hit::WindowUp => WINDOW_UP_HIT,
             Hit::Discord => DISCORD_HIT,
             Hit::Log => LOG_BTN,
             Hit::Close => CLOSE_BTN,
@@ -385,6 +399,8 @@ pub struct Frame {
     pub settings_open: bool,
     pub scale: f32,
     pub alpha: u8,
+    pub window: u64,
+    pub vrcx: bool,
     pub flash_t: f32,
     pub taken_flash_t: f32,
     pub dead_pulse: f32,
@@ -421,6 +437,21 @@ impl Frame {
     fn empty(&self) -> bool {
         self.live() && (self.env != Env::InWorld || self.view_run.is_none())
     }
+}
+
+struct LiveTaken {
+    l0: String,
+    v0: String,
+    l1: &'static str,
+    v1: String,
+    l2: &'static str,
+    v2: String,
+    big: String,
+    avg: String,
+    rate: String,
+    attacks: Vec<Tally>,
+    total: u64,
+    empty: &'static str,
 }
 
 pub struct LogView {
@@ -862,7 +893,14 @@ impl Renderer {
                 }
             }
         });
-        self.text(M + 12, 88, W - 24, F_LABEL, DIM, DT_LEFT, "BOSS");
+        let card_label = if f.live() && !f.empty() && gs.pre_boss() {
+            "STAGE"
+        } else if f.live() && !f.empty() && gs.mode == Mode::Intermission {
+            "RUN"
+        } else {
+            "BOSS"
+        };
+        self.text(M + 12, 88, W - 24, F_LABEL, DIM, DT_LEFT, card_label);
         if !groups.is_empty() {
             self.arrow(
                 FIGHT_PREV_HIT,
@@ -923,6 +961,60 @@ impl Renderer {
                         }
                         None => self.text(M + 12, 128, W - 24, F_BOSS, DIM, DT_LEFT, "-"),
                     }
+                }
+                (None, _) if gs.pre_boss() && !f.empty() => {
+                    self.text(
+                        M + 60,
+                        88,
+                        166,
+                        F_BOSS,
+                        TEXT,
+                        DT_LEFT,
+                        stage_name(&gs.stage),
+                    );
+                    self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "CLEARING");
+                    let since = fmt_dur(now.saturating_sub(gs.stage_stats.start_ts));
+                    self.text(M + 12, 128, W - 24, F_BOSS, AMBER, DT_LEFT, &since);
+                    if let Some((got, total)) = gs.tokens_shown() {
+                        self.text_rect(
+                            M + 12,
+                            128,
+                            W - 24,
+                            22,
+                            F_TINY,
+                            DIM,
+                            DT_RIGHT | DT_VCENTER,
+                            &format!("{got}/{total} tokens"),
+                        );
+                    }
+                }
+                (None, _) if gs.mode == Mode::Intermission && !f.empty() => {
+                    let run = gs.live_run();
+                    let head = match run.and_then(|r| r.fights.last()) {
+                        Some(fight) => format!(
+                            "{} {}",
+                            boss_name(base_name(&fight.name)),
+                            if fight.lost {
+                                "lost"
+                            } else if fight.kill.is_some() {
+                                "killed"
+                            } else {
+                                "unfinished"
+                            }
+                        ),
+                        None => "no boss yet".to_string(),
+                    };
+                    self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, &head);
+                    self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "INTERMISSION");
+                    let line = match run {
+                        Some(r) => format!(
+                            "{} bosses down   {} in the run",
+                            r.kills(),
+                            fmt_dur(now.saturating_sub(r.start_ts))
+                        ),
+                        None => dash.clone(),
+                    };
+                    self.text(M + 12, 128, W - 24, F_BOSS, TEXT, DT_LEFT, &line);
                 }
                 (None, _) => {
                     self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss active");
@@ -991,46 +1083,6 @@ impl Renderer {
             }
         }
 
-        if f.settings_open {
-            self.rround(M, 82, W, 96, 8, CARD_HI);
-            let rows = [
-                (
-                    "SIZE",
-                    format!("{}%", (f.scale * 100.0).round() as i32),
-                    (Hit::ScaleDown, SCALE_DOWN_HIT, f.scale > MIN_SCALE + 0.001),
-                    (Hit::ScaleUp, SCALE_UP_HIT, f.scale < MAX_SCALE - 0.001),
-                ),
-                (
-                    "OPACITY",
-                    format!("{}%", f.alpha),
-                    (Hit::AlphaDown, ALPHA_DOWN_HIT, f.alpha > MIN_ALPHA),
-                    (Hit::AlphaUp, ALPHA_UP_HIT, f.alpha < MAX_ALPHA),
-                ),
-            ];
-            for (label, value, down, up) in rows {
-                let y = down.1 .1;
-                self.text_rect(
-                    M + 12,
-                    y,
-                    150,
-                    24,
-                    F_LABEL,
-                    DIM,
-                    DT_LEFT | DT_VCENTER,
-                    label,
-                );
-                self.text_rect(226, y, 80, 24, F_BOSS, TEXT, DT_CENTER | DT_VCENTER, &value);
-                for (hit, rect, on) in [down, up] {
-                    let glyph = if hit == down.0 {
-                        GLYPH_MINUS
-                    } else {
-                        GLYPH_PLUS
-                    };
-                    self.arrow(rect, on, hov(hit), prs(hit), glyph);
-                }
-            }
-        }
-
         self.rround(M, 186, W, 92, 8, CARD);
         let col = (W - 24) / 3;
         let stat = |r: &Renderer, y: i32, i: i32, label: &str, value: &str, color: u32| {
@@ -1038,37 +1090,64 @@ impl Renderer {
             r.text(x, y, col, F_LABEL, DIM, DT_LEFT, label);
             r.text(x, y + 16, col, F_BOSS, color, DT_LEFT, value);
         };
+        let pre = f.live() && !f.empty() && gs.pre_boss();
+        let inter = f.live() && !f.empty() && gs.mode == Mode::Intermission;
+        let in_fight = f.live() && !f.empty() && gs.boss.is_some();
+        let run = gs.live_run();
         if f.live() {
-            let in_fight = gs.boss.is_some() && !f.empty();
-            let or_dash = |s: String| if in_fight { s } else { dash.clone() };
             let live = |s: String| if f.empty() { dash.clone() } else { s };
-            stat(self, 192, 0, "DPS", &live(fmt_anim(f.dps_shown)), AMBER);
-            stat(
-                self,
-                192,
-                1,
-                "FIGHT DPS",
-                &or_dash(fmt_anim(f.fight_dps_shown)),
-                AMBER,
-            );
-            stat(
-                self,
-                192,
-                2,
-                "FIGHT DMG",
-                &or_dash(group_digits(gs.fight_dmg)),
-                AMBER,
-            );
+            let win = format!("DPS {}s", f.window);
+            let (l0, v0, l1, v1, l2, v2) = if pre {
+                (
+                    win.as_str(),
+                    live(fmt_anim(f.dps_shown)),
+                    "STAGE DPS",
+                    group_digits(gs.stage_dps(now)),
+                    "STAGE DMG",
+                    group_digits(gs.stage_stats.dmg),
+                )
+            } else if let (true, Some(r)) = (inter, run) {
+                let active = r.active_secs(now).max(1);
+                (
+                    "RUN DPS",
+                    group_digits(r.dmg() / active),
+                    "RUN DMG",
+                    group_digits(r.dmg()),
+                    "BOSSES",
+                    format!("{}/{}", r.kills(), r.fights.len()),
+                )
+            } else if in_fight {
+                (
+                    win.as_str(),
+                    fmt_anim(f.dps_shown),
+                    "FIGHT DPS",
+                    fmt_anim(f.fight_dps_shown),
+                    "FIGHT DMG",
+                    group_digits(gs.fight_dmg),
+                )
+            } else {
+                (
+                    win.as_str(),
+                    live(fmt_anim(f.dps_shown)),
+                    "FIGHT DPS",
+                    dash.clone(),
+                    "FIGHT DMG",
+                    dash.clone(),
+                )
+            };
+            stat(self, 192, 0, l0, &v0, AMBER);
+            stat(self, 192, 1, l1, &v1, AMBER);
+            stat(self, 192, 2, l2, &v2, AMBER);
             if in_fight {
                 self.bar(M + 12, 233, W - 24, 3, f.dps_frac_shown, ACCENT);
             }
-            match gs.last_kill.as_ref().filter(|_| !f.empty()) {
-                Some(k) => {
+            match gs.last_kill_total().filter(|_| !f.empty()) {
+                Some((boss, strike, other)) => {
                     let line = format!(
                         "last kill  {}   {} strike + {} other",
-                        boss_name(base_name(&k.boss)),
-                        group_digits(k.strike),
-                        group_digits(k.non_strike)
+                        boss_name(&boss),
+                        group_digits(strike),
+                        group_digits(other)
                     );
                     self.text(M + 12, 242, W - 24, F_BODY, TEXT, DT_LEFT, &line);
                 }
@@ -1112,6 +1191,52 @@ impl Renderer {
             self.text(M + 12, 208, W - 24, F_BODY, DIM, DT_LEFT, "no data");
         }
 
+        if f.settings_open {
+            self.rround(M, 82, W, 184, 8, CARD_HI);
+            let rows = [
+                (
+                    "SIZE",
+                    format!("{}%", (f.scale * 100.0).round() as i32),
+                    (Hit::ScaleDown, SCALE_DOWN_HIT, f.scale > MIN_SCALE + 0.001),
+                    (Hit::ScaleUp, SCALE_UP_HIT, f.scale < MAX_SCALE - 0.001),
+                ),
+                (
+                    "OPACITY",
+                    format!("{}%", f.alpha),
+                    (Hit::AlphaDown, ALPHA_DOWN_HIT, f.alpha > MIN_ALPHA),
+                    (Hit::AlphaUp, ALPHA_UP_HIT, f.alpha < MAX_ALPHA),
+                ),
+                (
+                    "STAT WINDOW",
+                    format!("{} s", f.window),
+                    (Hit::WindowDown, WINDOW_DOWN_HIT, f.window > MIN_WINDOW),
+                    (Hit::WindowUp, WINDOW_UP_HIT, f.window < MAX_WINDOW),
+                ),
+            ];
+            for (label, value, down, up) in rows {
+                let y = down.1 .1;
+                self.text_rect(
+                    M + 12,
+                    y,
+                    150,
+                    24,
+                    F_LABEL,
+                    DIM,
+                    DT_LEFT | DT_VCENTER,
+                    label,
+                );
+                self.text_rect(226, y, 80, 24, F_BOSS, TEXT, DT_CENTER | DT_VCENTER, &value);
+                for (hit, rect, on) in [down, up] {
+                    let glyph = if hit == down.0 {
+                        GLYPH_MINUS
+                    } else {
+                        GLYPH_PLUS
+                    };
+                    self.arrow(rect, on, hov(hit), prs(hit), glyph);
+                }
+            }
+        }
+
         let card = mix(CARD, DANGER, 0.22 * (1.0 - ease_out_cubic(f.taken_flash_t)));
         self.rround(M, 286, W, 276, 8, card);
         self.text(M + 12, 292, W - 24, F_LABEL, DIM, DT_LEFT, "DAMAGE TAKEN");
@@ -1133,53 +1258,84 @@ impl Renderer {
             r.text(x, y + 15, col, F_BODY, TEXT, DT_LEFT, value);
         };
         if f.live() {
-            let in_fight = gs.boss.is_some() && !f.empty();
-            let or_dash = |s: String| if in_fight { s } else { dash.clone() };
             let live = |s: String| if f.empty() { dash.clone() } else { s };
-            stat(
-                self,
-                312,
-                0,
-                "TAKEN 10s",
-                &live(fmt_anim(f.taken_shown)),
-                DANGER,
-            );
-            stat(
-                self,
-                308,
-                1,
-                "FIGHT TAKEN",
-                &or_dash(group_digits(gs.fight_taken)),
-                DANGER,
-            );
-            stat(
-                self,
-                308,
-                2,
-                "HITS",
-                &or_dash(gs.fight_hits.to_string()),
-                DANGER,
-            );
-            let avg = if gs.fight_hits > 0 {
-                gs.fight_taken / gs.fight_hits as u64
-            } else {
-                0
+            let avg = |taken: u64, hits: u32| {
+                if hits > 0 {
+                    (taken / hits as u64).to_string()
+                } else {
+                    dash.clone()
+                }
             };
-            small(
-                self,
-                350,
-                0,
-                "BIGGEST HIT",
-                &or_dash(gs.fight_max_hit.to_string()),
-            );
-            small(self, 356, 1, "AVG HIT", &or_dash(avg.to_string()));
-            small(
-                self,
-                350,
-                2,
-                "TAKEN/S",
-                &or_dash(fmt_anim(f.taken_rate_shown)),
-            );
+            let win = format!("TAKEN {}s", f.window);
+            let s = &gs.stage_stats;
+            let t = if pre {
+                LiveTaken {
+                    l0: win.clone(),
+                    v0: live(fmt_anim(f.taken_shown)),
+                    l1: "STAGE TAKEN",
+                    v1: group_digits(s.taken),
+                    l2: "HITS",
+                    v2: s.hits.to_string(),
+                    big: s.max_hit.to_string(),
+                    avg: avg(s.taken, s.hits),
+                    rate: group_digits(gs.stage_taken_rate(now)),
+                    attacks: s.attacks.clone(),
+                    total: s.taken,
+                    empty: "nothing has hit you this stage",
+                }
+            } else if let (true, Some(r)) = (inter, run) {
+                let active = r.active_secs(now).max(1);
+                LiveTaken {
+                    l0: "RUN TAKEN".to_string(),
+                    v0: group_digits(r.taken()),
+                    l1: "HITS",
+                    v1: r.hit_count().to_string(),
+                    l2: "DEATHS",
+                    v2: r.deaths.to_string(),
+                    big: r.max_hit().to_string(),
+                    avg: avg(r.taken(), r.hit_count()),
+                    rate: group_digits(r.taken() / active),
+                    attacks: r.attacks(),
+                    total: r.taken(),
+                    empty: "nothing has hit you this run",
+                }
+            } else if in_fight {
+                LiveTaken {
+                    l0: win.clone(),
+                    v0: fmt_anim(f.taken_shown),
+                    l1: "FIGHT TAKEN",
+                    v1: group_digits(gs.fight_taken),
+                    l2: "HITS",
+                    v2: gs.fight_hits.to_string(),
+                    big: gs.fight_max_hit.to_string(),
+                    avg: avg(gs.fight_taken, gs.fight_hits),
+                    rate: fmt_anim(f.taken_rate_shown),
+                    attacks: gs.fight_attacks.clone(),
+                    total: gs.fight_taken,
+                    empty: "nothing has hit you this fight",
+                }
+            } else {
+                LiveTaken {
+                    l0: win.clone(),
+                    v0: live(fmt_anim(f.taken_shown)),
+                    l1: "FIGHT TAKEN",
+                    v1: dash.clone(),
+                    l2: "HITS",
+                    v2: dash.clone(),
+                    big: dash.clone(),
+                    avg: dash.clone(),
+                    rate: dash.clone(),
+                    attacks: Vec::new(),
+                    total: 0,
+                    empty: "attack breakdown starts with the next boss",
+                }
+            };
+            stat(self, 312, 0, &t.l0, &t.v0, DANGER);
+            stat(self, 308, 1, t.l1, &t.v1, DANGER);
+            stat(self, 308, 2, t.l2, &t.v2, DANGER);
+            small(self, 350, 0, "BIGGEST HIT", &t.big);
+            small(self, 356, 1, "AVG HIT", &t.avg);
+            small(self, 350, 2, "TAKEN/S", &t.rate);
             if in_fight {
                 self.bar_on(M + 12, 396, W - 24, 3, f.taken_frac_shown, DANGER, BG);
             }
@@ -1210,7 +1366,7 @@ impl Renderer {
                 }
                 None => self.text(M + 12, 404, W - 24, F_BODY, DIM, DT_LEFT, "no hits yet"),
             }
-            if !in_fight {
+            if t.attacks.is_empty() {
                 self.text_rect(
                     M + 12,
                     430,
@@ -1219,10 +1375,10 @@ impl Renderer {
                     F_BODY,
                     DIM,
                     DT_CENTER | DT_VCENTER,
-                    "attack breakdown starts with the next boss",
+                    t.empty,
                 );
             } else {
-                self.breakdown(430, &gs.fight_attacks, gs.fight_taken);
+                self.breakdown(430, &t.attacks, t.total);
             }
         } else if let Some(h) = &hist {
             let end = h.last.end_ts.unwrap_or(now);
@@ -1265,7 +1421,9 @@ impl Renderer {
         let log_color = if f.log_ok { GOOD } else { AMBER };
         self.dot(M + 96, fy + 4, 8, log_color);
         self.text(M + 110, fy, 80, F_TINY, DIM, DT_LEFT, "LOG");
+        let vrcx_warn = f.discord_on && f.discord == Link::Connected && f.vrcx;
         let discord_color = match (f.discord_on, f.discord) {
+            _ if vrcx_warn => AMBER,
             (false, _) | (true, Link::Off) => DIM,
             (true, Link::Waiting) => AMBER,
             (true, Link::Connected) => GOOD,
@@ -1274,7 +1432,8 @@ impl Renderer {
         let (dx, _, _, _) = DISCORD_HIT;
         self.dot(dx + 4, fy + 4, 8, discord_color);
         let label = if hov(Hit::Discord) { TEXT } else { DIM };
-        self.text(dx + 18, fy, 60, F_TINY, label, DT_LEFT, "DISCORD");
+        let name = if vrcx_warn { "VRCX" } else { "DISCORD" };
+        self.text(dx + 18, fy, 60, F_TINY, label, DT_LEFT, name);
         let (utext, ucolor) = match &f.update {
             Badge::None => (VERSION.to_string(), DIM),
             Badge::Ready(tag) => (format!("update {tag}"), ACCENT),
@@ -1294,6 +1453,7 @@ impl Renderer {
                 sound_on: f.sound_on,
                 log_open: f.log_open,
                 discord_on: f.discord_on,
+                vrcx: f.vrcx,
             };
             self.tooltip(hit.rect(), hit.tip(ctx), LOGICAL_W, LOGICAL_H);
         }
@@ -1666,6 +1826,8 @@ impl Renderer {
             (SCALE_UP_HIT, Hit::ScaleUp),
             (ALPHA_DOWN_HIT, Hit::AlphaDown),
             (ALPHA_UP_HIT, Hit::AlphaUp),
+            (WINDOW_DOWN_HIT, Hit::WindowDown),
+            (WINDOW_UP_HIT, Hit::WindowUp),
             (DISCORD_HIT, Hit::Discord),
             (TARGET_HIT, Hit::Target),
             (RUN_PREV_HIT, Hit::RunPrev),
@@ -1792,6 +1954,8 @@ mod tests {
             settings_open: false,
             scale: 1.0,
             alpha: 100,
+            window: 10,
+            vrcx: false,
             flash_t: 1.0,
             taken_flash_t: 1.0,
             dead_pulse: 0.0,
@@ -1917,11 +2081,13 @@ mod tests {
             (SCALE_UP_HIT, Hit::ScaleUp),
             (ALPHA_DOWN_HIT, Hit::AlphaDown),
             (ALPHA_UP_HIT, Hit::AlphaUp),
+            (WINDOW_DOWN_HIT, Hit::WindowDown),
+            (WINDOW_UP_HIT, Hit::WindowUp),
         ] {
             let (x, y, w, h) = rect;
             assert_eq!(r.hit_test(x, y), Some(hit));
             assert_eq!(r.hit_test(x + w - 1, y + h - 1), Some(hit));
-            assert!(x >= 14 && x + w <= LOGICAL_W - 14 && y >= 82 && y + h <= 178);
+            assert!(x >= 14 && x + w <= LOGICAL_W - 14 && y >= 82 && y + h <= 266);
         }
         let (px_, py_, pw_, ph_) = PIN_BTN;
         let (hx_, hy_, hw_, hh_) = PIN_HIT;
@@ -2067,8 +2233,31 @@ mod tests {
         r.draw_main(&mut gs, &settings);
         assert_eq!(pix(&r, 120, 100), CARD_HI);
         assert_eq!(pix(&r, 120, 150), CARD_HI);
+        assert_eq!(pix(&r, 120, 250), CARD_HI);
         r.draw_main(&mut gs, &frame());
         assert_eq!(pix(&r, 120, 100), CARD);
+        assert_eq!(pix(&r, 120, 250), CARD);
+
+        let mut pre = GameState::default();
+        pre.feed(&format!(
+            "{P}ECLIPTICA - now in stage: Stage_Test on phase: 0.5 as class: Blade"
+        ));
+        pre.feed(&format!("{P}Dealing 100 STRIKE damage"));
+        pre.feed(&format!(
+            "{P}damage has been taken: 12, from source: machinegunShooter1"
+        ));
+        r.draw_main(&mut pre, &frame());
+        assert_eq!(pix(&r, 100, 234), CARD);
+        assert_eq!(pix(&r, 100, 397), CARD);
+        pre.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.5"
+        ));
+        pre.feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
+        pre.feed(&format!("{P}STRIKE DMG: 300"));
+        pre.feed(&format!("{P}NON-STRIKE DMG: 0"));
+        pre.feed(&format!("{P}ECLIPTICA - now in intermission"));
+        r.draw_main(&mut pre, &frame());
+        assert_eq!(pix(&r, 100, 234), CARD);
 
         let flashing = Frame {
             taken_flash_t: 0.0,
@@ -2155,6 +2344,7 @@ mod tests {
             sound_on: false,
             log_open: true,
             discord_on: false,
+            vrcx: false,
         };
         assert!(Hit::Pin.tip(ctx).contains("keep it on top"));
         assert!(Hit::Discord.tip(ctx).starts_with("Click to show"));
@@ -2166,6 +2356,13 @@ mod tests {
             .ends_with("click to stop"));
         assert!(Hit::Discord.tip(ctx).chars().count() <= 70);
         assert!(Hit::Settings.tip(ctx).chars().count() <= 70);
+        let warn = TipCtx {
+            discord_on: true,
+            vrcx: true,
+            ..ctx
+        };
+        assert!(Hit::Discord.tip(warn).starts_with("VRCX"));
+        assert!(Hit::Discord.tip(warn).chars().count() <= 70);
         assert!(Hit::ScaleUp.tip(ctx).contains("bigger"));
         assert!(Hit::Target.tip(ctx).contains("unmute"));
         assert!(Hit::Log.tip(ctx).starts_with("Close"));
