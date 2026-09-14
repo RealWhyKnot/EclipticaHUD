@@ -2,9 +2,11 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 const SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
 const CHUNK: usize = 65536;
+const RESCAN: Duration = Duration::from_secs(1);
 
 pub fn log_dir() -> Option<PathBuf> {
     let profile = std::env::var_os("USERPROFILE")?;
@@ -15,17 +17,17 @@ pub fn all_logs(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut logs: Vec<(std::time::SystemTime, PathBuf)> = entries
+    let mut logs: Vec<PathBuf> = entries
         .flatten()
         .filter(|e| {
             let name = e.file_name();
             let name = name.to_string_lossy();
             name.starts_with("output_log_") && name.ends_with(".txt")
         })
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .map(|e| e.path())
         .collect();
     logs.sort();
-    logs.into_iter().map(|(_, p)| p).collect()
+    logs
 }
 
 pub fn newest_log(dir: &Path) -> Option<PathBuf> {
@@ -46,12 +48,15 @@ pub struct LogWatch {
     file: Option<File>,
     offset: u64,
     carry: Vec<u8>,
+    scanned: Option<Instant>,
+    rescan: Duration,
 }
 
 impl LogWatch {
     pub fn new() -> Self {
         LogWatch {
             dir: log_dir(),
+            rescan: RESCAN,
             ..Default::default()
         }
     }
@@ -68,15 +73,19 @@ impl LogWatch {
         let Some(dir) = self.dir.as_deref() else {
             return false;
         };
-        let newest = newest_log(dir);
-        if newest != self.path {
-            let rotated = self.path.is_some();
-            self.file = newest.as_deref().and_then(|p| open_shared(p).ok());
-            self.path = newest;
-            self.offset = 0;
-            self.carry.clear();
-            if rotated {
-                return true;
+        let due = self.scanned.is_none_or(|t| t.elapsed() >= self.rescan);
+        if due {
+            self.scanned = Some(Instant::now());
+            let newest = newest_log(dir);
+            if newest.is_some() && newest != self.path {
+                let rotated = self.path.is_some();
+                self.file = newest.as_deref().and_then(|p| open_shared(p).ok());
+                self.path = newest;
+                self.offset = 0;
+                self.carry.clear();
+                if rotated {
+                    return true;
+                }
             }
         }
         let Some(file) = self.file.as_mut() else {
@@ -179,6 +188,46 @@ mod tests {
         assert_eq!(all_logs(&dir), [log_a.clone(), log_b.clone()]);
 
         drop(fa);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(collect(&mut w), (Vec::new(), false));
+        assert_eq!(w.path.as_deref(), Some(log_b.as_path()));
+    }
+
+    #[test]
+    fn newest_by_name_not_mtime() {
+        let dir = std::env::temp_dir().join(format!("ehud_names_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = dir.join("output_log_2026-01-01_00-00-00.txt");
+        let new = dir.join("output_log_2026-01-02_00-00-00.txt");
+        std::fs::write(&new, "b\n").unwrap();
+        std::fs::write(&old, "a\n").unwrap();
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(future)
+            .unwrap();
+        assert_eq!(newest_log(&dir).as_deref(), Some(new.as_path()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rescan_is_throttled() {
+        let dir = std::env::temp_dir().join(format!("ehud_throttle_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("output_log_2026-01-01_00-00-00.txt"), "a\n").unwrap();
+        let mut w = LogWatch {
+            dir: Some(dir.clone()),
+            rescan: Duration::from_secs(60),
+            ..Default::default()
+        };
+        assert_eq!(collect(&mut w), (vec!["a".to_string()], false));
+        std::fs::write(dir.join("output_log_2026-01-02_00-00-00.txt"), "b\n").unwrap();
+        assert_eq!(collect(&mut w), (Vec::new(), false));
+        w.scanned = None;
+        assert_eq!(collect(&mut w), (Vec::new(), true));
+        assert_eq!(collect(&mut w), (vec!["b".to_string()], false));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
