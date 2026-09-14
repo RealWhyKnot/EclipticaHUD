@@ -22,7 +22,7 @@ pub const LOG_BTN: (i32, i32, i32, i32) = (296, 8, 24, 24);
 pub const PIN_HIT: (i32, i32, i32, i32) = (260, 0, 32, 36);
 pub const PIN_BTN: (i32, i32, i32, i32) = (264, 8, 24, 24);
 pub const SETTINGS_HIT: (i32, i32, i32, i32) = (228, 0, 32, 36);
-pub const SETTINGS_BTN: (i32, i32, i32, i32) = (232, 8, 24, 24);
+pub const SETTINGS_BTN: (i32, i32, i32, i32) = (235, 8, 24, 24);
 pub const SCALE_DOWN_HIT: (i32, i32, i32, i32) = (200, 90, 26, 24);
 pub const SCALE_UP_HIT: (i32, i32, i32, i32) = (306, 90, 26, 24);
 pub const ALPHA_DOWN_HIT: (i32, i32, i32, i32) = (200, 134, 26, 24);
@@ -1966,6 +1966,35 @@ mod tests {
             GetTextExtentPoint32W(r.dc, buf.as_ptr(), buf.len() as i32, &mut size);
         }
         size.cx
+    }
+
+    #[test]
+    fn toolbar_ink_gaps() {
+        let r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+        r.fill(0, 0, LOGICAL_W, LOGICAL_H, BG);
+        let buttons = [
+            (SETTINGS_BTN, GLYPH_SETTINGS),
+            (PIN_BTN, GLYPH_PIN),
+            (LOG_BTN, GLYPH_LOG),
+            (CLOSE_BTN, GLYPH_CLOSE),
+        ];
+        let mut spans = Vec::new();
+        for (b, g) in buttons {
+            r.glyph_button(b, false, false, false, g);
+            unsafe { GdiFlush() };
+            let (bx, by, bw, bh) = b;
+            let inked = |x: i32| (by..by + bh).any(|y| pix(&r, x, y) != BG);
+            let xs: Vec<i32> = (bx..bx + bw).filter(|&x| inked(x)).collect();
+            let ys: Vec<i32> = (by..by + bh)
+                .filter(|&y| (bx..bx + bw).any(|x| pix(&r, x, y) != BG))
+                .collect();
+            spans.push((xs[0], xs[xs.len() - 1], ys[0], ys[ys.len() - 1]));
+        }
+        let gaps: Vec<i32> = spans.windows(2).map(|w| w[1].0 - w[0].1).collect();
+        println!("toolbar ink spans {spans:?} gaps {gaps:?}");
+        let lo = gaps.iter().min().unwrap();
+        let hi = gaps.iter().max().unwrap();
+        assert!(hi - lo <= 2, "ink spans {spans:?} gaps {gaps:?}");
     }
 
     #[test]
