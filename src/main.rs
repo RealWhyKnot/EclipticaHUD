@@ -11,7 +11,6 @@ mod state;
 mod ui;
 mod update;
 mod vr;
-mod vrcx;
 
 use state::{fmt_clock, GameState};
 
