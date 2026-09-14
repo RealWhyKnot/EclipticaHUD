@@ -390,7 +390,7 @@ impl GameState {
     }
 
     pub fn pre_boss(&self) -> bool {
-        self.mode == Mode::Stage && self.boss.is_none()
+        self.mode == Mode::Stage && self.boss.is_none() && self.stage_stats.start_ts != 0
     }
 
     pub fn stage_dps(&self, now: u64) -> u64 {
@@ -1967,6 +1967,26 @@ mod tests {
         );
         kill_at(&mut gs, "09:23:00", "Nan", 100);
         assert_eq!(gs.last_kill_total(), Some(("Nan".into(), 100, 0)));
+    }
+
+    #[test]
+    fn gap_after_a_kill_is_not_pre_boss() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:01", HALL);
+        assert!(gs.pre_boss());
+        feed_at(
+            &mut gs,
+            "09:11:01",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0.05",
+        );
+        kill_at(&mut gs, "09:12:00", "Nan", 100);
+        assert!(gs.boss.is_none());
+        assert_eq!(gs.mode, Mode::Stage);
+        assert!(!gs.pre_boss());
+        feed_at(&mut gs, "09:12:04", "Dealing 9 STRIKE damage");
+        assert_eq!(gs.stage_stats.dmg, 0);
+        feed_at(&mut gs, "09:12:10", "ECLIPTICA - now in intermission");
+        assert_eq!(gs.live_run().unwrap().stages.len(), 1);
     }
 
     #[test]
