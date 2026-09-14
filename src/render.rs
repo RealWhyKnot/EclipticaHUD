@@ -30,7 +30,7 @@ pub const ALPHA_UP_HIT: (i32, i32, i32, i32) = (306, 134, 26, 24);
 pub const WINDOW_DOWN_HIT: (i32, i32, i32, i32) = (200, 178, 26, 24);
 pub const WINDOW_UP_HIT: (i32, i32, i32, i32) = (306, 178, 26, 24);
 pub const UPDATE_HIT: (i32, i32) = (230, LOGICAL_H - 32);
-pub const DISCORD_HIT: (i32, i32, i32, i32) = (156, LOGICAL_H - 30, 72, 24);
+pub const DISCORD_HIT: (i32, i32, i32, i32) = (136, LOGICAL_H - 30, 72, 24);
 pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 126, 308, 40);
 pub const RUN_PREV_HIT: (i32, i32, i32, i32) = (14, 54, 26, 24);
 pub const RUN_NEXT_HIT: (i32, i32, i32, i32) = (320, 54, 26, 24);
@@ -162,8 +162,8 @@ pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
     (Info::TopAttacks, (14, 478, 332, 82)),
     (Info::HistAttackers, (14, 398, 332, 48)),
     (Info::HistTopAttacks, (14, 448, 332, 82)),
-    (Info::Vr, (14, LOGICAL_H - 30, 84, 24)),
-    (Info::LogDot, (104, LOGICAL_H - 30, 48, 24)),
+    (Info::Vr, (14, LOGICAL_H - 30, 72, 24)),
+    (Info::LogDot, (86, LOGICAL_H - 30, 50, 24)),
     (
         Info::Version,
         (
@@ -1419,8 +1419,8 @@ impl Renderer {
         self.dot(M, fy + 4, 8, vr_color);
         self.text(M + 14, fy, 80, F_TINY, DIM, DT_LEFT, "STEAMVR");
         let log_color = if f.log_ok { GOOD } else { AMBER };
-        self.dot(M + 96, fy + 4, 8, log_color);
-        self.text(M + 110, fy, 80, F_TINY, DIM, DT_LEFT, "LOG");
+        self.dot(M + 76, fy + 4, 8, log_color);
+        self.text(M + 90, fy, 80, F_TINY, DIM, DT_LEFT, "LOG");
         let vrcx_warn = f.discord_on && f.discord == Link::Connected && f.vrcx;
         let discord_color = match (f.discord_on, f.discord) {
             _ if vrcx_warn => AMBER,
@@ -2026,7 +2026,7 @@ mod tests {
         let (lx, _, lw, _) = region(Info::LogDot);
         let (dx, _, dw, _) = DISCORD_HIT;
         assert!(end(28, "STEAMVR") <= vx + vw);
-        assert!(end(124, "LOG") <= lx + lw);
+        assert!(end(104, "LOG") <= lx + lw);
         assert!(lx + lw <= dx);
         assert!(end(dx + 18, "DISCORD") <= dx + dw);
         for badge in [
