@@ -255,6 +255,7 @@ pub enum Mode {
 const DPS_WINDOW: u64 = 10;
 const KILL_DEDUPE_SECS: u64 = 30;
 const DEATH_HOLD: u64 = 3;
+const BOSS_SAVE_LEAD: u64 = 8;
 
 #[derive(Default)]
 pub struct GameState {
@@ -282,6 +283,9 @@ pub struct GameState {
     pub runs: Vec<Run>,
     pub level_tokens: Vec<(bool, u32)>,
     pending_tokens: Vec<(bool, u32)>,
+    pub tokens_got: u32,
+    last_save: Option<u64>,
+    stage_boss_seen: bool,
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
     dead_seen: Option<(String, u64)>,
@@ -342,6 +346,20 @@ impl GameState {
         self.changed = true;
     }
 
+    fn reset_stage_tokens(&mut self) {
+        self.tokens_got = 0;
+        self.last_save = None;
+        self.stage_boss_seen = false;
+    }
+
+    pub fn tokens_shown(&self) -> Option<(u32, u32)> {
+        if self.mode != Mode::Stage || self.level_tokens.is_empty() {
+            return None;
+        }
+        let total = self.level_tokens.len() as u32;
+        Some((self.tokens_got.min(total), total))
+    }
+
     pub fn is_dead(&self, now: u64) -> bool {
         now < self.dead_until
     }
@@ -369,6 +387,15 @@ impl GameState {
                 });
                 if self.boss.as_deref() != Some(&name) && !just_ended {
                     self.boss = Some(name.clone());
+                    if !self.stage_boss_seen {
+                        self.stage_boss_seen = true;
+                        if self
+                            .last_save
+                            .is_some_and(|s| ts.saturating_sub(s) <= BOSS_SAVE_LEAD)
+                        {
+                            self.tokens_got = self.tokens_got.saturating_sub(1);
+                        }
+                    }
                     if !transition {
                         self.fight_start = ts;
                         self.fight_dmg = 0;
@@ -495,8 +522,10 @@ impl GameState {
                 self.mode = Mode::Stage;
                 if !self.pending_tokens.is_empty() {
                     self.level_tokens = std::mem::take(&mut self.pending_tokens);
+                    self.reset_stage_tokens();
                 } else if self.stage != name {
                     self.level_tokens.clear();
+                    self.reset_stage_tokens();
                 }
                 self.stage = name.clone();
                 self.progress = progress;
@@ -534,6 +563,13 @@ impl GameState {
             }
             Event::TokenSpawn { rune, chance } => {
                 self.pending_tokens.push((rune, chance));
+            }
+            Event::SessionSave => {
+                if self.mode == Mode::Stage && !self.level_tokens.is_empty() && !self.stage_boss_seen
+                {
+                    self.tokens_got += 1;
+                    self.last_save = Some(ts);
+                }
             }
             Event::StageProgress(n) => {
                 self.stage_no = Some(n);
@@ -899,6 +935,86 @@ mod tests {
         assert_eq!(gs.level_tokens, vec![(true, 35), (true, 55)]);
         feed_at(&mut gs, "08:50:00", "ECLIPTICA - now in lobby");
         assert!(gs.level_tokens.is_empty());
+    }
+
+    const HALL: &str =
+        "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer";
+    const SAVE: &str = "ECLIPTICA saving SESSION ID 2505";
+
+    fn spawn_level(gs: &mut GameState, t: &str, stage: &str) {
+        for _ in 0..3 {
+            feed_at(gs, t, "spawn token, False, 0");
+        }
+        feed_at(gs, t, stage);
+    }
+
+    #[test]
+    fn tokens_count_session_saves_until_boss() {
+        let mut gs = GameState::default();
+        assert_eq!(gs.tokens_shown(), None);
+        spawn_level(&mut gs, "04:02:02", HALL);
+        assert_eq!(gs.tokens_shown(), Some((0, 3)));
+        feed_at(&mut gs, "04:02:26", SAVE);
+        assert_eq!(gs.tokens_shown(), Some((1, 3)));
+        feed_at(&mut gs, "04:02:30", SAVE);
+        feed_at(&mut gs, "04:03:24", SAVE);
+        assert_eq!(gs.tokens_shown(), Some((3, 3)));
+        feed_at(&mut gs, "04:03:53", SAVE);
+        assert_eq!(gs.tokens_shown(), Some((3, 3)));
+        feed_at(
+            &mut gs,
+            "04:03:57",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0",
+        );
+        assert_eq!(gs.tokens_got, 3);
+        feed_at(&mut gs, "04:06:56", "Boss Kakarot dead, personal damage dealt: ");
+        feed_at(&mut gs, "04:06:58", SAVE);
+        assert_eq!(gs.tokens_shown(), Some((3, 3)));
+        feed_at(&mut gs, "04:07:04", "ECLIPTICA - now in intermission");
+        feed_at(&mut gs, "04:07:27", SAVE);
+        assert_eq!(gs.tokens_got, 3);
+        assert_eq!(gs.tokens_shown(), None);
+        spawn_level(
+            &mut gs,
+            "04:07:56",
+            "ECLIPTICA - now in stage: Stage_GMFuncFlat on phase: 0.06 as class: Spellhammer",
+        );
+        assert_eq!(gs.tokens_shown(), Some((0, 3)));
+    }
+
+    #[test]
+    fn skipped_token_and_boss_save() {
+        let mut gs = GameState::default();
+        spawn_level(&mut gs, "04:28:53", HALL);
+        feed_at(&mut gs, "04:29:16", SAVE);
+        feed_at(&mut gs, "04:29:19", SAVE);
+        feed_at(&mut gs, "04:31:38", SAVE);
+        assert_eq!(gs.tokens_shown(), Some((3, 3)));
+        feed_at(
+            &mut gs,
+            "04:31:42",
+            "ECLIPTICA - now fighting boss: FlyLord(Clone) on phase: 0.12",
+        );
+        assert_eq!(gs.tokens_shown(), Some((2, 3)));
+        feed_at(
+            &mut gs,
+            "04:34:35",
+            "ECLIPTICA - now fighting boss: FlyLordPhase2(Clone) on phase: 0.12",
+        );
+        assert_eq!(gs.tokens_shown(), Some((2, 3)));
+    }
+
+    #[test]
+    fn token_left_long_before_boss_is_kept() {
+        let mut gs = GameState::default();
+        spawn_level(&mut gs, "05:00:00", HALL);
+        feed_at(&mut gs, "05:00:10", SAVE);
+        feed_at(
+            &mut gs,
+            "05:03:00",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        assert_eq!(gs.tokens_shown(), Some((1, 3)));
     }
 
     #[test]

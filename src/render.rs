@@ -181,7 +181,7 @@ impl Info {
 
     fn tip(self, live: bool) -> &'static str {
         match (self, live) {
-            (Info::Status, _) => "Stage you are in, how far the run is, and your class",
+            (Info::Status, _) => "Stage, run phase and class, plus tokens picked up this stage",
             (Info::Progress, _) => "How far the run has progressed through this stage",
             (Info::RunRow, true) => "Run number and the stage counter of the live run",
             (Info::RunRow, false) => {
@@ -680,15 +680,20 @@ impl Renderer {
         if gs.is_dead(now) {
             let color = mix(mix(BG, DANGER, 0.45), DANGER, f.dead_pulse);
             self.text(M, 28, W, F_BODY, color, DT_RIGHT, "DEAD");
-        } else if gs.mode == Mode::Stage && !gs.level_tokens.is_empty() {
+        } else if let Some((got, total)) = gs.tokens_shown() {
             let rune = gs.level_tokens.iter().any(|t| t.0);
             let txt = format!(
-                "{} token{}{}",
-                gs.level_tokens.len(),
-                if gs.level_tokens.len() == 1 { "" } else { "s" },
+                "{got}/{total} token{}{}",
+                if total == 1 { "" } else { "s" },
                 if rune { " +rune" } else { "" }
             );
-            let color = if rune { AMBER } else { DIM };
+            let color = if got == total {
+                GOOD
+            } else if rune {
+                AMBER
+            } else {
+                DIM
+            };
             self.text_rect(M, 28, W, 18, F_TINY, color, DT_RIGHT | DT_VCENTER, &txt);
         }
         if gs.mode == Mode::Stage {

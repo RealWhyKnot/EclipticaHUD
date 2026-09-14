@@ -61,7 +61,13 @@ fn scan(path: Option<String>) {
             *counts.entry(ev.label()).or_insert(0u64) += 1;
             let before = gs.targets_total;
             let hits_before = gs.taken.back().map_or(0, |h| h.seq);
+            let boss_before = gs.boss.is_some();
             gs.apply(line.ts, ev);
+            if !boss_before && gs.boss.is_some() {
+                if let Some((got, total)) = gs.tokens_shown() {
+                    println!("{}  tokens  {got}/{total}  {}", fmt_clock(line.ts), gs.stage);
+                }
+            }
             if let Some(hit) = gs.taken.back().filter(|h| h.seq != hits_before) {
                 let (who, attack) = state::describe_source(&hit.source, hit.amount);
                 println!(

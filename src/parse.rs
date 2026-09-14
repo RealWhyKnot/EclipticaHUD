@@ -31,6 +31,7 @@ pub enum Event {
         rune: bool,
         chance: u32,
     },
+    SessionSave,
 }
 
 impl Event {
@@ -50,6 +51,7 @@ impl Event {
             Event::RoomLeft => "room_left",
             Event::PlayerDead => "player_dead",
             Event::TokenSpawn { .. } => "token_spawn",
+            Event::SessionSave => "session_save",
         }
     }
 }
@@ -147,6 +149,9 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
         return Some(Event::BossDead {
             name: name.to_string(),
         });
+    }
+    if msg.starts_with("ECLIPTICA saving SESSION ID ") {
+        return Some(Event::SessionSave);
     }
     if msg.trim_end() == "[Behaviour] OnLeftRoom" {
         return Some(Event::RoomLeft);
@@ -312,6 +317,15 @@ mod tests {
     }
 
     #[test]
+    fn session_save() {
+        assert_eq!(
+            parse_msg("ECLIPTICA saving SESSION ID 19854"),
+            Some(Event::SessionSave)
+        );
+        assert_eq!(parse_msg("ECLIPTICA MASTER Setting SESSION ID to 2505"), None);
+    }
+
+    #[test]
     fn stage_progress() {
         assert_eq!(
             parse_msg("Advancing Stage Progress to: 5"),
@@ -325,7 +339,6 @@ mod tests {
     fn non_events() {
         assert_eq!(parse_msg("Retiring Enemy POOL ID19"), None);
         assert_eq!(parse_msg("2.5"), None);
-        assert_eq!(parse_msg("ECLIPTICA saving SESSION ID 19854"), None);
         assert_eq!(parse_msg("Backup Active, swapping..."), None);
     }
 
