@@ -1,9 +1,9 @@
 use crate::discord::Link;
+use crate::game::event::fmt_clock;
 use crate::game::names::{boss_name, phase_name, stage_name};
-use crate::game::state::{
-    base_name, describe_source, fmt_clock, generic_attacker, merge_tallies, phase_num, BossFight,
-    GameState, Mode, Tally,
-};
+use crate::game::run::{base_name, merge_tallies, phase_num, BossFight, Tally};
+use crate::game::source::{describe_source, generic_attacker};
+use crate::game::state::{GameState, Mode};
 use crate::log::{self, Filter, Row};
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;

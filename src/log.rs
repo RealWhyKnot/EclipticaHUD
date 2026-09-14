@@ -1,4 +1,5 @@
-use crate::game::state::{continues, BossFight, GameState, Run, TakenEntry, TargetEntry};
+use crate::game::run::{continues, BossFight, Run, TakenEntry, TargetEntry};
+use crate::game::state::GameState;
 use std::collections::VecDeque;
 
 pub const ROW_H: i32 = 24;

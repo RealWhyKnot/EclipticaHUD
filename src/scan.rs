@@ -1,5 +1,7 @@
-use crate::game::event as parse;
-use crate::game::state::{self, fmt_clock, GameState};
+use crate::game::event::{self as parse, fmt_clock};
+use crate::game::run::base_name;
+use crate::game::source::describe_source;
+use crate::game::state::GameState;
 use crate::logwatch;
 
 pub fn scan(path: Option<String>) {
@@ -61,7 +63,7 @@ pub fn scan(path: Option<String>) {
                 }
             }
             if let Some(hit) = gs.taken.back().filter(|h| h.seq != hits_before) {
-                let (who, attack) = state::describe_source(&hit.source, hit.amount);
+                let (who, attack) = describe_source(&hit.source, hit.amount);
                 println!(
                     "{}  hit     {:>4}  {who}  {attack}",
                     fmt_clock(hit.ts),
@@ -91,7 +93,7 @@ pub fn scan(path: Option<String>) {
             if r.lost { "LOST" } else { "run " },
             r.groups().len(),
             r.fights.len(),
-            r.fights.last().map_or("", |f| state::base_name(&f.name))
+            r.fights.last().map_or("", |f| base_name(&f.name))
         );
     }
     println!("boss targets recorded: {}", gs.targets_total);

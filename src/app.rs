@@ -1,5 +1,6 @@
 use crate::discord::{self, Link, Presence};
-use crate::game::state::{base_name, GameState, Run};
+use crate::game::run::{base_name, Run};
+use crate::game::state::GameState;
 use crate::log::{self, Filter};
 use crate::logwatch::{self, LogWatch};
 use crate::render::{

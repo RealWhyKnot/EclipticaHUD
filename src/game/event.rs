@@ -206,6 +206,10 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
     None
 }
 
+pub fn fmt_clock(ts: u64) -> String {
+    format!("{:02}:{:02}:{:02}", ts / 3600 % 24, ts / 60 % 60, ts % 60)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

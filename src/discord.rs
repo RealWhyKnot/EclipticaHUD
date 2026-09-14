@@ -1,5 +1,6 @@
 use crate::game::names::{boss_name, phase_name, stage_name};
-use crate::game::state::{base_name, GameState, Mode};
+use crate::game::run::base_name;
+use crate::game::state::{GameState, Mode};
 use crate::update::{json_str, REPO};
 use std::fs::File;
 use std::io::{self, Read, Write};
