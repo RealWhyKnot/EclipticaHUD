@@ -155,7 +155,7 @@ impl App {
                 .is_none_or(|t| t.elapsed().as_secs() >= VRC_CHECK_SECS)
         {
             self.vrc_checked = Some(Instant::now());
-            self.vrc_running = crate::vr::process_running("VRChat.exe");
+            self.vrc_running = crate::process::running("VRChat.exe");
         }
         let env = self.env();
         let env_changed = self.last_env.is_some_and(|e| e != env);

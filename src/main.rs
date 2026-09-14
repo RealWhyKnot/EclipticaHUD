@@ -8,7 +8,7 @@ mod game;
 
 mod scan;
 
-mod ui;
+mod process;
 mod update;
 mod vr;
 
@@ -24,6 +24,6 @@ fn main() {
     match args.next().as_deref() {
         Some("--scan") => scan::scan(args.next()),
         Some("--discord-join") => discord::join_listener(),
-        _ => ui::run(),
+        _ => hud::win32::run(),
     }
 }
