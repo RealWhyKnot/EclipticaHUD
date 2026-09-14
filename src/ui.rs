@@ -1,5 +1,5 @@
-use crate::app::App;
-use crate::app::WINDOW_STEPS;
+use crate::hud::app::App;
+use crate::hud::app::WINDOW_STEPS;
 use crate::hud::render::{Hit, LogHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
 use crate::update;
 use std::path::PathBuf;

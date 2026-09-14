@@ -1,6 +1,5 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
-mod app;
 mod discord;
 mod hud;
 mod vrchat;

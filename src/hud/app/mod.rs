@@ -110,8 +110,8 @@ pub struct App {
     badge: Badge,
 }
 
-static BLIP: &[u8] = include_bytes!("../assets/target.wav");
-static TOKENS: &[u8] = include_bytes!("../assets/tokens.wav");
+static BLIP: &[u8] = include_bytes!("../../../assets/target.wav");
+static TOKENS: &[u8] = include_bytes!("../../../assets/tokens.wav");
 
 fn play(wav: &'static [u8]) {
     let _ = wav;
