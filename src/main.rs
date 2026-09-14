@@ -63,13 +63,11 @@ fn scan(path: Option<String>) {
             let hits_before = gs.taken.back().map_or(0, |h| h.seq);
             gs.apply(line.ts, ev);
             if let Some(hit) = gs.taken.back().filter(|h| h.seq != hits_before) {
-                let (_, attack) = state::split_source(&hit.source);
+                let (who, attack) = state::describe_source(&hit.source, hit.amount);
                 println!(
-                    "{}  hit     {:>4}  {}  {}",
+                    "{}  hit     {:>4}  {who}  {attack}",
                     fmt_clock(hit.ts),
-                    hit.amount,
-                    state::attacker_label(&hit.source),
-                    state::pretty_attack(attack)
+                    hit.amount
                 );
             }
             if gs.targets_total > before {

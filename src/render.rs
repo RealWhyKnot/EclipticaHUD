@@ -1,8 +1,8 @@
 use crate::log::{self, Filter, Row};
 use crate::names::{boss_name, phase_name, stage_name};
 use crate::state::{
-    attacker_label, base_name, fmt_clock, merge_tallies, phase_num, pretty_attack, split_source,
-    BossFight, GameState, Mode, Tally,
+    base_name, describe_source, fmt_clock, generic_attacker, merge_tallies, phase_num, BossFight,
+    GameState, Mode, Tally,
 };
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
@@ -219,7 +219,7 @@ impl Info {
             (Info::TakenBar, _) => {
                 "Incoming damage right now against the worst 10 seconds this fight"
             }
-            (Info::LastHit, _) => "The most recent hit on you: amount, attacker, attack",
+            (Info::LastHit, _) => "Newest hit on you; sourceless ticks are status effects",
             (Info::Attackers | Info::HistAttackers, _) => {
                 "Who hurt you this fight, as a share of all damage taken"
             }
@@ -1075,13 +1075,8 @@ impl Renderer {
             }
             match gs.taken.back() {
                 Some(hit) => {
-                    let (_, attack) = split_source(&hit.source);
-                    let line = format!(
-                        "last hit  {}   {}   {}",
-                        hit.amount,
-                        attacker_label(&hit.source),
-                        pretty_attack(attack)
-                    );
+                    let (who, attack) = describe_source(&hit.source, hit.amount);
+                    let line = format!("last hit  {}   {who}   {attack}", hit.amount);
                     self.text_rect(
                         M + 12,
                         402,
@@ -1273,7 +1268,7 @@ impl Renderer {
         let top = attacks.first().map_or(1, |a| a.total).max(1) as f32;
         for (i, t) in attacks.iter().take(3).enumerate() {
             let y = y0 + 66 + i as i32 * 20;
-            let label = if t.who == "environment" {
+            let label = if generic_attacker(&t.who) {
                 t.attack.clone()
             } else {
                 format!("{}  {}", t.who, t.attack)
@@ -1459,27 +1454,10 @@ impl Renderer {
                     DT_RIGHT | DT_VCENTER,
                     &h.amount.to_string(),
                 );
-                let (_, attack) = split_source(&h.source);
-                self.text_rect(
-                    x + 130,
-                    y,
-                    120,
-                    log::ROW_H,
-                    F_BODY,
-                    TEXT,
-                    vc,
-                    attacker_label(&h.source),
-                );
-                self.text_rect(
-                    x + 254,
-                    y,
-                    w - 254,
-                    log::ROW_H,
-                    F_BODY,
-                    DIM,
-                    vc,
-                    &pretty_attack(attack),
-                );
+                let (who, attack) = describe_source(&h.source, h.amount);
+                let who_color = if generic_attacker(&who) { DIM } else { TEXT };
+                self.text_rect(x + 130, y, 120, log::ROW_H, F_BODY, who_color, vc, &who);
+                self.text_rect(x + 254, y, w - 254, log::ROW_H, F_BODY, DIM, vc, &attack);
             }
             Row::Target(t) => {
                 self.rround(x, y + 5, 3, log::ROW_H - 10, 1, ACCENT);

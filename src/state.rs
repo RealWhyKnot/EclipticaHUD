@@ -139,35 +139,108 @@ pub fn phase_num(name: &str) -> u32 {
 pub fn split_source(source: &str) -> (&str, &str) {
     let s = source.trim();
     if let Some(rest) = s.strip_prefix('(') {
-        if let Some((who, attack)) = rest.split_once(')') {
-            return (who.trim(), attack.trim());
+        if let Some(pos) = rest.rfind(')') {
+            return (rest[..pos].trim(), rest[pos + 1..].trim());
         }
     }
     ("", s)
 }
 
+fn words(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    let mut prev: Option<char> = None;
+    for c in s.chars() {
+        if c == '_' {
+            if !out.ends_with(' ') {
+                out.push(' ');
+            }
+            prev = Some(' ');
+            continue;
+        }
+        let boundary = match prev {
+            Some(p) => {
+                (c.is_ascii_uppercase() && p.is_ascii_lowercase())
+                    || (c.is_ascii_digit() && !p.is_ascii_digit() && p != ' ')
+                    || (c.is_ascii_alphabetic() && p.is_ascii_digit())
+            }
+            None => false,
+        };
+        if boundary && !out.ends_with(' ') {
+            out.push(' ');
+        }
+        if out.is_empty() || out.ends_with(' ') {
+            out.extend(c.to_uppercase());
+        } else {
+            out.push(c);
+        }
+        prev = Some(c);
+    }
+    out.trim().to_string()
+}
+
 pub fn pretty_attack(attack: &str) -> String {
     let mut s = attack.trim();
+    let mut suffix = "";
     if let Some(open) = s.rfind(" (") {
-        if s.ends_with(')') && s[open + 2..s.len() - 1].bytes().all(|b| b.is_ascii_digit()) {
+        if s.ends_with(')') {
+            let inner = &s[open + 2..s.len() - 1];
+            if !inner.bytes().all(|b| b.is_ascii_digit()) {
+                suffix = inner;
+            }
             s = &s[..open];
         }
     }
     let s = s.strip_prefix("attack_").unwrap_or(s);
+    let s = s.strip_suffix("_VFX").unwrap_or(s);
+    let s = s.strip_suffix("Hitbox").unwrap_or(s);
+    let s = s
+        .strip_suffix("Damage")
+        .filter(|r| !r.is_empty())
+        .unwrap_or(s);
     if s.is_empty() {
-        "unknown".to_string()
+        return "hit".to_string();
+    }
+    let mut out = words(s);
+    if !suffix.is_empty() {
+        out.push_str(&format!(" ({})", suffix.to_lowercase()));
+    }
+    out
+}
+
+fn attacker_name(who: &str) -> String {
+    if let Some(key) = who
+        .strip_prefix("[Missing Key \"")
+        .and_then(|r| r.strip_suffix("\"]"))
+    {
+        let key = key.strip_prefix("e_").unwrap_or(key);
+        return match key {
+            "VirtueBeam" => "Black Virtue".to_string(),
+            "GravetenderOrb" => "Gravetender Orb".to_string(),
+            other => words(other),
+        };
+    }
+    who.to_string()
+}
+
+const DOT_MAX: u64 = 20;
+
+pub fn describe_source(source: &str, amount: u64) -> (String, String) {
+    let (who, attack) = split_source(source);
+    if !who.is_empty() {
+        return (attacker_name(who), pretty_attack(attack));
+    }
+    if !attack.is_empty() {
+        return ("enemy".to_string(), pretty_attack(attack));
+    }
+    if amount <= DOT_MAX {
+        ("status effect".to_string(), "damage over time".to_string())
     } else {
-        s.to_string()
+        ("unattributed".to_string(), "direct hit".to_string())
     }
 }
 
-pub fn attacker_label(source: &str) -> &str {
-    let (who, _) = split_source(source);
-    if who.is_empty() {
-        "environment"
-    } else {
-        who
-    }
+pub fn generic_attacker(who: &str) -> bool {
+    matches!(who, "enemy" | "status effect" | "unattributed")
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -380,14 +453,12 @@ impl GameState {
                     self.fight_taken += amount;
                     self.fight_hits += 1;
                     self.fight_max_hit = self.fight_max_hit.max(amount);
-                    let (_, attack) = split_source(&source);
-                    let who = attacker_label(&source);
-                    let attack = pretty_attack(attack);
-                    tally(&mut self.fight_attacks, who, &attack, amount);
+                    let (who, attack) = describe_source(&source, amount);
+                    tally(&mut self.fight_attacks, &who, &attack, amount);
                     if let Some(f) = self.open_fight() {
                         f.taken += amount;
                         f.hits += 1;
-                        tally(&mut f.attacks, who, &attack, amount);
+                        tally(&mut f.attacks, &who, &attack, amount);
                     }
                 }
                 self.taken.push_back(TakenEntry {
@@ -992,12 +1063,48 @@ mod tests {
             ("[Missing Key \"e_VirtueBeam\"]", "damageTick")
         );
         assert_eq!(pretty_attack("attack_Spit (2)"), "Spit");
-        assert_eq!(pretty_attack("attack_Claws2"), "Claws2");
-        assert_eq!(pretty_attack("machinegunShooter2"), "machinegunShooter2");
+        assert_eq!(pretty_attack("attack_Claws2"), "Claws 2");
+        assert_eq!(pretty_attack("machinegunShooter2"), "Machinegun Shooter 2");
         assert_eq!(pretty_attack("Frost Shots (1)"), "Frost Shots");
-        assert_eq!(pretty_attack(""), "unknown");
-        assert_eq!(attacker_label(""), "environment");
-        assert_eq!(attacker_label("(Yuki) frostBeam"), "Yuki");
+        assert_eq!(pretty_attack("attack_BasicSlam"), "Basic Slam");
+        assert_eq!(pretty_attack("FrostAuraDamage"), "Frost Aura");
+        assert_eq!(pretty_attack("NukeHitbox (BIG)"), "Nuke (big)");
+        assert_eq!(pretty_attack("LightningHitbox (13)"), "Lightning");
+        assert_eq!(pretty_attack("GunSwing_VFX"), "Gun Swing");
+        assert_eq!(pretty_attack("satellite_4"), "Satellite 4");
+        assert_eq!(pretty_attack("projectile1Aimed"), "Projectile 1 Aimed");
+        assert_eq!(pretty_attack("attack_DespairNuke"), "Despair Nuke");
+        assert_eq!(pretty_attack("damageTick"), "Damage Tick");
+        assert_eq!(pretty_attack("NX-Obsidian"), "NX-Obsidian");
+        assert_eq!(pretty_attack(""), "hit");
+        let d = |s: &str, n: u64| {
+            let (w, a) = describe_source(s, n);
+            format!("{w}|{a}")
+        };
+        assert_eq!(d("(Yuki) frostBeam", 8), "Yuki|Frost Beam");
+        assert_eq!(d("(Khepri) attack_Claws2", 12), "Khepri|Claws 2");
+        assert_eq!(
+            d("(The Gravetender) attack_roar", 77),
+            "The Gravetender|Roar"
+        );
+        assert_eq!(d("attack_Spit (2)", 3), "enemy|Spit");
+        assert_eq!(d("machinegunShooter2", 33), "enemy|Machinegun Shooter 2");
+        assert_eq!(
+            d("([Missing Key \"e_VirtueBeam\"]) damageTick", 5),
+            "Black Virtue|Damage Tick"
+        );
+        assert_eq!(
+            d("([Missing Key \"e_GravetenderOrb\"]) damageAura", 5),
+            "Gravetender Orb|Damage Aura"
+        );
+        assert_eq!(d("([Missing Key \"e_NewThing\"]) zap", 5), "New Thing|Zap");
+        assert_eq!(d("(dmg)", 9), "dmg|hit");
+        assert_eq!(d("", 2), "status effect|damage over time");
+        assert_eq!(d("", 20), "status effect|damage over time");
+        assert_eq!(d("", 21), "unattributed|direct hit");
+        assert_eq!(d("", 115), "unattributed|direct hit");
+        assert!(generic_attacker("enemy"));
+        assert!(!generic_attacker("Yuki"));
     }
 
     #[test]
@@ -1047,10 +1154,7 @@ mod tests {
             total,
             hits,
         };
-        let expected = vec![
-            tl("Yuki", "frostBeam", 20, 2),
-            tl("environment", "Spit", 40, 2),
-        ];
+        let expected = vec![tl("Yuki", "Frost Beam", 20, 2), tl("enemy", "Spit", 40, 2)];
         assert_eq!(gs.fight_attacks, expected);
         assert_eq!(gs.runs[0].fights[0].taken, 60);
         assert_eq!(gs.runs[0].fights[0].hits, 4);
@@ -1070,15 +1174,12 @@ mod tests {
         assert_eq!(gs.runs[0].fights[1].taken, 1);
         assert_eq!(
             gs.runs[0].fights[1].attacks,
-            vec![tl("Yuki", "frostBeam", 1, 1)]
+            vec![tl("Yuki", "Frost Beam", 1, 1)]
         );
         let merged = merge_tallies(gs.runs[0].fights.iter().map(|f| f.attacks.as_slice()));
         assert_eq!(
             merged,
-            vec![
-                tl("Yuki", "frostBeam", 21, 3),
-                tl("environment", "Spit", 40, 2)
-            ]
+            vec![tl("Yuki", "Frost Beam", 21, 3), tl("enemy", "Spit", 40, 2)]
         );
         feed_at(
             &mut gs,
