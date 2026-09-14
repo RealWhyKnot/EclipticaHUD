@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::render::{Hit, LogHit, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W};
+use crate::render::{Hit, LogHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
 use crate::update;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::*;
@@ -59,6 +59,60 @@ fn save_topmost(on: bool) {
 
 fn discord_on_from(text: &str) -> bool {
     text.trim() == "1"
+}
+
+fn scale_from(text: &str) -> f32 {
+    text.trim()
+        .parse::<u32>()
+        .map_or(1.0, |p| (p as f32 / 100.0).clamp(MIN_SCALE, MAX_SCALE))
+}
+
+fn alpha_from(text: &str) -> u8 {
+    text.trim().parse::<u32>().map_or(MAX_ALPHA, |p| {
+        p.clamp(MIN_ALPHA as u32, MAX_ALPHA as u32) as u8
+    })
+}
+
+fn load_text(name: &str) -> Option<String> {
+    data_file(name).and_then(|p| std::fs::read_to_string(p).ok())
+}
+
+fn save_scale(scale: f32) {
+    write_data("scale.txt", ((scale * 100.0).round() as i32).to_string());
+}
+
+fn save_alpha(alpha: u8) {
+    write_data("alpha.txt", alpha.to_string());
+}
+
+unsafe fn apply_alpha(app: &App, main: HWND) {
+    SetLayeredWindowAttributes(main, 0, app.alpha_byte(), LWA_ALPHA);
+}
+
+unsafe fn apply_size(app: &mut App, main: HWND) {
+    let flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
+    SetWindowPos(
+        main,
+        std::ptr::null_mut(),
+        0,
+        0,
+        app.renderer.width,
+        app.renderer.height,
+        flags,
+    );
+    if !app.log.hwnd.is_null() {
+        SetWindowPos(
+            app.log.hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            app.log.renderer.width,
+            app.log.renderer.height,
+            flags,
+        );
+    }
+    repaint(app, main);
+    repaint_log(app);
 }
 
 fn load_discord() -> bool {
@@ -415,6 +469,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                                 app.activate(hit);
                                 save_discord(app.discord_on);
                             }
+                            Hit::ScaleDown | Hit::ScaleUp => {
+                                if app.activate(hit) {
+                                    save_scale(app.scale);
+                                    apply_size(app, hwnd);
+                                }
+                            }
+                            Hit::AlphaDown | Hit::AlphaUp => {
+                                if app.activate(hit) {
+                                    save_alpha(app.alpha);
+                                    apply_alpha(app, hwnd);
+                                }
+                            }
                             _ => {
                                 app.activate(hit);
                             }
@@ -456,7 +522,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         }
         WM_DPICHANGED => {
             if let Some(app) = app_mut(hwnd) {
-                app.renderer = Renderer::new((wp & 0xffff) as u32, LOGICAL_W, LOGICAL_H);
+                app.dpi = (wp & 0xffff) as u32;
+                app.rescale();
                 let r = &*(lp as *const RECT);
                 SetWindowPos(
                     hwnd,
@@ -640,7 +707,6 @@ unsafe extern "system" fn log_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
         }
         WM_DPICHANGED => {
             if let Some(app) = app_mut(hwnd) {
-                app.log.renderer = Renderer::new((wp & 0xffff) as u32, LOG_W, LOG_H);
                 let r = &*(lp as *const RECT);
                 SetWindowPos(
                     hwnd,
@@ -674,6 +740,8 @@ pub fn run() {
         let mut app = App::new(dpi);
         app.sound_on = load_sound();
         app.topmost = load_topmost();
+        app.set_scale(load_text("scale.txt").map_or(1.0, |t| scale_from(&t)));
+        app.set_alpha(load_text("alpha.txt").map_or(MAX_ALPHA, |t| alpha_from(&t)));
         app.backfill_history();
         if load_discord() {
             app.set_discord(true);
@@ -701,7 +769,7 @@ pub fn run() {
             .unwrap_or_else(|| default_pos(w, h));
         let title = wide("Ecliptica HUD");
         let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_APPWINDOW,
+            WS_EX_TOPMOST | WS_EX_APPWINDOW | WS_EX_LAYERED,
             class_name.as_ptr(),
             title.as_ptr(),
             WS_POPUP,
@@ -715,6 +783,7 @@ pub fn run() {
             &mut app as *mut App as *mut core::ffi::c_void,
         );
         apply_dwm(hwnd);
+        apply_alpha(&app, hwnd);
 
         app.tick();
         app.render();
@@ -751,12 +820,26 @@ mod tests {
     }
 
     #[test]
+    fn scale_and_alpha_parse() {
+        assert_eq!(scale_from("150"), 1.5);
+        assert_eq!(scale_from("garbage"), 1.0);
+        assert_eq!(scale_from("10"), MIN_SCALE);
+        assert_eq!(scale_from("900"), MAX_SCALE);
+        assert_eq!(alpha_from("70\n"), 70);
+        assert_eq!(alpha_from(""), MAX_ALPHA);
+        assert_eq!(alpha_from("5"), MIN_ALPHA);
+        assert_eq!(alpha_from("300"), MAX_ALPHA);
+    }
+
+    #[test]
     fn discord_defaults_off() {
         assert!(!discord_on_from(""));
         assert!(!discord_on_from("0"));
         assert!(!discord_on_from("garbage"));
-        assert!(discord_on_from("1
-"));
+        assert!(discord_on_from(
+            "1
+"
+        ));
     }
 
     #[test]

@@ -19,6 +19,8 @@ struct Inner {
     needs_frame: bool,
     failures: u32,
     visible: bool,
+    alpha: f32,
+    scale: f32,
 }
 
 pub struct VrOverlay {
@@ -91,6 +93,8 @@ impl VrOverlay {
             needs_frame: true,
             failures: 0,
             visible: true,
+            alpha: 1.0,
+            scale: 1.0,
         });
     }
 
@@ -126,7 +130,17 @@ impl VrOverlay {
         }
     }
 
-    pub fn submit(&mut self, rgba: &[u8], width: u32, height: u32, changed: bool, visible: bool) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        changed: bool,
+        visible: bool,
+        alpha: f32,
+        scale: f32,
+    ) {
         if self.inner.is_none() {
             let due = self
                 .last_try
@@ -143,6 +157,24 @@ impl VrOverlay {
             if let Ok(mut overlay) = inner.context.overlay() {
                 if overlay.set_visibility(inner.handle, visible).is_ok() {
                     inner.visible = visible;
+                }
+            }
+        }
+        let alpha = alpha.clamp(0.0, 1.0);
+        if inner.alpha != alpha {
+            if let Ok(mut overlay) = inner.context.overlay() {
+                if overlay.set_opacity(inner.handle, alpha).is_ok() {
+                    inner.alpha = alpha;
+                }
+            }
+        }
+        if inner.scale != scale {
+            if let Ok(mut overlay) = inner.context.overlay() {
+                if overlay
+                    .set_width(inner.handle, WIDTH_METERS * scale)
+                    .is_ok()
+                {
+                    inner.scale = scale;
                 }
             }
         }

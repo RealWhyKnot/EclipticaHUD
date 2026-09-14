@@ -2,7 +2,8 @@ use crate::discord::{self, Link, Presence};
 use crate::log::{self, Filter};
 use crate::logwatch::{self, LogWatch};
 use crate::render::{
-    tip_ready, Env, Frame, Hit, Info, LogHit, LogView, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W,
+    tip_ready, Env, Frame, Hit, Info, LogHit, LogView, Renderer, LOGICAL_H, LOGICAL_W, LOG_H,
+    LOG_W, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE,
 };
 use crate::state::{base_name, GameState, Run};
 use crate::update::{self, Badge};
@@ -22,6 +23,8 @@ const WHEEL_DELTA: i32 = 120;
 const ANIM_MS: u32 = 16;
 const STALE_SECS: u64 = 120;
 const VRC_CHECK_SECS: u64 = 2;
+const SCALE_STEP: f32 = 0.1;
+const ALPHA_STEP: u8 = 10;
 
 pub struct Tick {
     pub redraw: bool,
@@ -76,6 +79,10 @@ pub struct App {
     pub vrc_running: bool,
     vrc_checked: Option<Instant>,
     last_env: Option<Env>,
+    pub dpi: u32,
+    pub scale: f32,
+    pub alpha: u8,
+    pub settings_open: bool,
     flash_at: Option<Instant>,
     last_target_since: u64,
     progress_shown: f32,
@@ -204,6 +211,10 @@ impl App {
             vrc_running: true,
             vrc_checked: None,
             last_env: None,
+            dpi,
+            scale: 1.0,
+            alpha: MAX_ALPHA,
+            settings_open: false,
             flash_at: None,
             last_target_since: 0,
             progress_shown: 0.0,
@@ -226,6 +237,50 @@ impl App {
             timer_ms: 1000,
             badge: Badge::None,
         }
+    }
+
+    pub fn rescale(&mut self) {
+        let eff = (self.dpi as f32 * self.scale).round() as u32;
+        self.renderer = Renderer::new(eff, LOGICAL_W, LOGICAL_H);
+        self.log.renderer = Renderer::new(eff, LOG_W, LOG_H);
+        self.rgba.clear();
+    }
+
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
+        self.rescale();
+    }
+
+    pub fn set_alpha(&mut self, alpha: u8) {
+        self.alpha = alpha.clamp(MIN_ALPHA, MAX_ALPHA);
+    }
+
+    fn step_scale(&mut self, dir: f32) -> bool {
+        let next = ((self.scale + dir * SCALE_STEP) * 10.0).round() / 10.0;
+        let next = next.clamp(MIN_SCALE, MAX_SCALE);
+        if (next - self.scale).abs() < 0.001 {
+            return false;
+        }
+        self.set_scale(next);
+        true
+    }
+
+    fn step_alpha(&mut self, up: bool) -> bool {
+        let next = if up {
+            self.alpha.saturating_add(ALPHA_STEP)
+        } else {
+            self.alpha.saturating_sub(ALPHA_STEP)
+        }
+        .clamp(MIN_ALPHA, MAX_ALPHA);
+        if next == self.alpha {
+            return false;
+        }
+        self.alpha = next;
+        true
+    }
+
+    pub fn alpha_byte(&self) -> u8 {
+        (self.alpha as u32 * 255 / 100) as u8
     }
 
     pub fn update_ready(&self) -> bool {
@@ -309,7 +364,15 @@ impl App {
 
     pub fn hit_enabled(&self, hit: Hit) -> bool {
         match hit {
-            Hit::Close | Hit::Log | Hit::Pin | Hit::Discord => true,
+            Hit::Close | Hit::Log | Hit::Pin | Hit::Discord | Hit::Settings => true,
+            Hit::ScaleDown => self.settings_open && self.scale > MIN_SCALE + 0.001,
+            Hit::ScaleUp => self.settings_open && self.scale < MAX_SCALE - 0.001,
+            Hit::AlphaDown => self.settings_open && self.alpha > MIN_ALPHA,
+            Hit::AlphaUp => self.settings_open && self.alpha < MAX_ALPHA,
+            Hit::Target | Hit::FightPrev | Hit::FightNext | Hit::Phase if self.settings_open => {
+                false
+            }
+            Hit::Info(Info::Boss | Info::Result) if self.settings_open => false,
             Hit::Info(Info::Version) => !self.update_ready(),
             Hit::Info(i) if i.live_only() => self.is_live(),
             Hit::Info(i) if i.history_only() => !self.is_live(),
@@ -417,6 +480,14 @@ impl App {
                 self.set_discord(!self.discord_on);
                 true
             }
+            Hit::Settings => {
+                self.settings_open = !self.settings_open;
+                true
+            }
+            Hit::ScaleDown => self.step_scale(-1.0),
+            Hit::ScaleUp => self.step_scale(1.0),
+            Hit::AlphaDown => self.step_alpha(false),
+            Hit::AlphaUp => self.step_alpha(true),
             Hit::Close | Hit::Update | Hit::Info(_) => false,
         }
     }
@@ -598,6 +669,9 @@ impl App {
             env,
             pages: self.pages(),
             view_page: self.viewed_page(),
+            settings_open: self.settings_open,
+            scale: self.scale,
+            alpha: self.alpha,
             flash_t: timed(self.flash_at, FLASH_MS),
             taken_flash_t: timed(self.taken_flash_at, TAKEN_FLASH_MS),
             dead_pulse: self.dead_pulse(),
@@ -633,6 +707,8 @@ impl App {
             self.renderer.height as u32,
             true,
             env == Env::InWorld,
+            self.alpha as f32 / 100.0,
+            self.scale,
         );
     }
 
@@ -792,7 +868,7 @@ impl App {
             );
             log_anim |= self.log.slide_at.is_some() && timed(self.log.slide_at, SLIDE_MS) < 1.0;
             let fade = timed(self.log.opened_at, FADE_MS);
-            self.log.alpha = (crate::render::ease_out_cubic(fade) * 255.0) as u8;
+            self.log.alpha = (crate::render::ease_out_cubic(fade) * self.alpha_byte() as f32) as u8;
             log_anim |= fade < 1.0;
             log_anim |= log_tip_pending;
             let log_tip = self.log_tip();
@@ -813,6 +889,8 @@ impl App {
                 self.renderer.height as u32,
                 false,
                 env == Env::InWorld,
+                self.alpha as f32 / 100.0,
+                self.scale,
             );
         }
         let want: u32 = if anim || log_anim { ANIM_MS } else { 1000 };
@@ -870,6 +948,52 @@ mod tests {
         "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Blade";
     const STAGE_B: &str =
         "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Twinmage";
+
+    #[test]
+    fn settings_steps_and_clamps() {
+        let mut app = headless();
+        let base = app.renderer.width;
+        assert!(!app.hit_enabled(Hit::ScaleUp));
+        assert!(app.hit_enabled(Hit::Target) || app.gs.boss.is_none());
+        assert!(app.activate(Hit::Settings));
+        assert!(app.settings_open);
+        assert!(!app.hit_enabled(Hit::Target));
+        assert!(!app.hit_enabled(Hit::Info(Info::Boss)));
+        assert!(!app.hit_enabled(Hit::AlphaUp));
+        assert!(app.hit_enabled(Hit::AlphaDown));
+        assert!(app.activate(Hit::ScaleUp));
+        assert!((app.scale - 1.1).abs() < 0.001);
+        assert!(app.renderer.width > base);
+        assert!(app.log.renderer.width > LOG_W);
+        for _ in 0..20 {
+            app.activate(Hit::ScaleUp);
+        }
+        assert_eq!(app.scale, MAX_SCALE);
+        assert!(!app.hit_enabled(Hit::ScaleUp));
+        assert!(!app.activate(Hit::ScaleUp));
+        assert_eq!(app.renderer.width, base * 2);
+        for _ in 0..20 {
+            app.activate(Hit::ScaleDown);
+        }
+        assert_eq!(app.scale, MIN_SCALE);
+        assert_eq!(app.renderer.width, base / 2);
+        assert!(!app.hit_enabled(Hit::ScaleDown));
+        for _ in 0..10 {
+            app.activate(Hit::AlphaDown);
+        }
+        assert_eq!(app.alpha, MIN_ALPHA);
+        assert!(!app.activate(Hit::AlphaDown));
+        assert!(app.activate(Hit::AlphaUp));
+        assert_eq!(app.alpha, MIN_ALPHA + ALPHA_STEP);
+        assert_eq!(app.alpha_byte(), 102);
+        app.set_scale(9.0);
+        assert_eq!(app.scale, MAX_SCALE);
+        app.set_alpha(0);
+        assert_eq!(app.alpha, MIN_ALPHA);
+        assert!(app.activate(Hit::Settings));
+        assert!(!app.settings_open);
+        assert!(!app.hit_enabled(Hit::ScaleDown));
+    }
 
     #[test]
     fn empty_state_has_one_page() {

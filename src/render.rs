@@ -21,6 +21,12 @@ pub const LOG_HIT: (i32, i32, i32, i32) = (292, 0, 32, 36);
 pub const LOG_BTN: (i32, i32, i32, i32) = (296, 8, 24, 24);
 pub const PIN_HIT: (i32, i32, i32, i32) = (260, 0, 32, 36);
 pub const PIN_BTN: (i32, i32, i32, i32) = (264, 8, 24, 24);
+pub const SETTINGS_HIT: (i32, i32, i32, i32) = (228, 0, 32, 36);
+pub const SETTINGS_BTN: (i32, i32, i32, i32) = (232, 8, 24, 24);
+pub const SCALE_DOWN_HIT: (i32, i32, i32, i32) = (200, 90, 26, 24);
+pub const SCALE_UP_HIT: (i32, i32, i32, i32) = (306, 90, 26, 24);
+pub const ALPHA_DOWN_HIT: (i32, i32, i32, i32) = (200, 134, 26, 24);
+pub const ALPHA_UP_HIT: (i32, i32, i32, i32) = (306, 134, 26, 24);
 pub const UPDATE_HIT: (i32, i32) = (230, LOGICAL_H - 32);
 pub const DISCORD_HIT: (i32, i32, i32, i32) = (156, LOGICAL_H - 30, 72, 24);
 pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 126, 308, 40);
@@ -32,6 +38,10 @@ pub const PHASE_HIT: (i32, i32, i32, i32) = (220, 110, 114, 20);
 const UPDATE_RECT: (i32, i32, i32, i32) =
     (UPDATE_HIT.0, UPDATE_HIT.1, LOGICAL_W - UPDATE_HIT.0, 32);
 const TIP_DELAY_MS: u128 = 450;
+pub const MIN_SCALE: f32 = 0.5;
+pub const MAX_SCALE: f32 = 2.0;
+pub const MIN_ALPHA: u8 = 30;
+pub const MAX_ALPHA: u8 = 100;
 
 pub const LOG_CLOSE_HIT: (i32, i32, i32, i32) = (380, 0, 40, 36);
 pub const LOG_CLOSE_BTN: (i32, i32, i32, i32) = (388, 8, 24, 24);
@@ -80,6 +90,11 @@ fn mix(a: u32, b: u32, t: f32) -> u32 {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hit {
     Pin,
+    Settings,
+    ScaleDown,
+    ScaleUp,
+    AlphaDown,
+    AlphaUp,
     Discord,
     Log,
     Close,
@@ -254,6 +269,11 @@ impl Hit {
         match self {
             Hit::Pin if c.topmost => "Kept above other windows; click to let them cover it",
             Hit::Pin => "Other windows can cover the HUD; click to keep it on top",
+            Hit::Settings => "Size and opacity of the HUD",
+            Hit::ScaleDown => "Make the HUD smaller",
+            Hit::ScaleUp => "Make the HUD bigger",
+            Hit::AlphaDown => "Make the HUD more see-through",
+            Hit::AlphaUp => "Make the HUD less see-through",
             Hit::Discord if c.discord_on => {
                 "Showing this run as your Discord status; click to stop"
             }
@@ -276,6 +296,11 @@ impl Hit {
     fn rect(self) -> (i32, i32, i32, i32) {
         match self {
             Hit::Pin => PIN_BTN,
+            Hit::Settings => SETTINGS_BTN,
+            Hit::ScaleDown => SCALE_DOWN_HIT,
+            Hit::ScaleUp => SCALE_UP_HIT,
+            Hit::AlphaDown => ALPHA_DOWN_HIT,
+            Hit::AlphaUp => ALPHA_UP_HIT,
             Hit::Discord => DISCORD_HIT,
             Hit::Log => LOG_BTN,
             Hit::Close => CLOSE_BTN,
@@ -357,6 +382,9 @@ pub struct Frame {
     pub env: Env,
     pub pages: usize,
     pub view_page: usize,
+    pub settings_open: bool,
+    pub scale: f32,
+    pub alpha: u8,
     pub flash_t: f32,
     pub taken_flash_t: f32,
     pub dead_pulse: f32,
@@ -442,6 +470,9 @@ const GLYPH_NEXT: &str = "\u{E76C}";
 const GLYPH_LOG: &str = "\u{E81C}";
 const GLYPH_PIN: &str = "\u{E718}";
 const GLYPH_UNPIN: &str = "\u{E77A}";
+const GLYPH_SETTINGS: &str = "\u{E713}";
+const GLYPH_MINUS: &str = "\u{E738}";
+const GLYPH_PLUS: &str = "\u{E710}";
 
 const SEG_COLORS: [u32; 4] = [DANGER, AMBER, ACCENT, DIM];
 
@@ -679,6 +710,13 @@ impl Renderer {
             if f.topmost { GLYPH_PIN } else { GLYPH_UNPIN },
         );
         self.glyph_button(LOG_BTN, hov(Hit::Log), prs(Hit::Log), f.log_open, GLYPH_LOG);
+        self.glyph_button(
+            SETTINGS_BTN,
+            hov(Hit::Settings),
+            prs(Hit::Settings),
+            f.settings_open,
+            GLYPH_SETTINGS,
+        );
         self.glyph_button(
             CLOSE_BTN,
             hov(Hit::Close),
@@ -950,6 +988,46 @@ impl Renderer {
                     );
                 }
                 None => self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss fights"),
+            }
+        }
+
+        if f.settings_open {
+            self.rround(M, 82, W, 96, 8, CARD_HI);
+            let rows = [
+                (
+                    "SIZE",
+                    format!("{}%", (f.scale * 100.0).round() as i32),
+                    (Hit::ScaleDown, SCALE_DOWN_HIT, f.scale > MIN_SCALE + 0.001),
+                    (Hit::ScaleUp, SCALE_UP_HIT, f.scale < MAX_SCALE - 0.001),
+                ),
+                (
+                    "OPACITY",
+                    format!("{}%", f.alpha),
+                    (Hit::AlphaDown, ALPHA_DOWN_HIT, f.alpha > MIN_ALPHA),
+                    (Hit::AlphaUp, ALPHA_UP_HIT, f.alpha < MAX_ALPHA),
+                ),
+            ];
+            for (label, value, down, up) in rows {
+                let y = down.1 .1;
+                self.text_rect(
+                    M + 12,
+                    y,
+                    150,
+                    24,
+                    F_LABEL,
+                    DIM,
+                    DT_LEFT | DT_VCENTER,
+                    label,
+                );
+                self.text_rect(226, y, 80, 24, F_BOSS, TEXT, DT_CENTER | DT_VCENTER, &value);
+                for (hit, rect, on) in [down, up] {
+                    let glyph = if hit == down.0 {
+                        GLYPH_MINUS
+                    } else {
+                        GLYPH_PLUS
+                    };
+                    self.arrow(rect, on, hov(hit), prs(hit), glyph);
+                }
             }
         }
 
@@ -1576,11 +1654,18 @@ impl Renderer {
             if x >= self.px(PIN_HIT.0) && x < self.px(LOG_HIT.0) && ok(Hit::Pin) {
                 return Some(Hit::Pin);
             }
+            if x >= self.px(SETTINGS_HIT.0) && x < self.px(PIN_HIT.0) && ok(Hit::Settings) {
+                return Some(Hit::Settings);
+            }
         }
         if x >= self.px(UPDATE_HIT.0) && y >= self.px(UPDATE_HIT.1) && ok(Hit::Update) {
             return Some(Hit::Update);
         }
         let regions = [
+            (SCALE_DOWN_HIT, Hit::ScaleDown),
+            (SCALE_UP_HIT, Hit::ScaleUp),
+            (ALPHA_DOWN_HIT, Hit::AlphaDown),
+            (ALPHA_UP_HIT, Hit::AlphaUp),
             (DISCORD_HIT, Hit::Discord),
             (TARGET_HIT, Hit::Target),
             (RUN_PREV_HIT, Hit::RunPrev),
@@ -1704,6 +1789,9 @@ mod tests {
             env: Env::InWorld,
             pages: 1,
             view_page: 0,
+            settings_open: false,
+            scale: 1.0,
+            alpha: 100,
             flash_t: 1.0,
             taken_flash_t: 1.0,
             dead_pulse: 0.0,
@@ -1820,7 +1908,21 @@ mod tests {
         assert_eq!(r.hit_test(292, 0), Some(Hit::Log));
         assert_eq!(r.hit_test(291, 0), Some(Hit::Pin));
         assert_eq!(r.hit_test(260, 35), Some(Hit::Pin));
-        assert_eq!(r.hit_test(259, 0), None);
+        assert_eq!(r.hit_test(259, 0), Some(Hit::Settings));
+        assert_eq!(r.hit_test(228, 35), Some(Hit::Settings));
+        assert_eq!(r.hit_test(227, 0), None);
+        assert_eq!(SETTINGS_HIT.0 + SETTINGS_HIT.2, PIN_HIT.0);
+        for (rect, hit) in [
+            (SCALE_DOWN_HIT, Hit::ScaleDown),
+            (SCALE_UP_HIT, Hit::ScaleUp),
+            (ALPHA_DOWN_HIT, Hit::AlphaDown),
+            (ALPHA_UP_HIT, Hit::AlphaUp),
+        ] {
+            let (x, y, w, h) = rect;
+            assert_eq!(r.hit_test(x, y), Some(hit));
+            assert_eq!(r.hit_test(x + w - 1, y + h - 1), Some(hit));
+            assert!(x >= 14 && x + w <= LOGICAL_W - 14 && y >= 82 && y + h <= 178);
+        }
         let (px_, py_, pw_, ph_) = PIN_BTN;
         let (hx_, hy_, hw_, hh_) = PIN_HIT;
         assert!(px_ >= hx_ && py_ >= hy_ && px_ + pw_ <= hx_ + hw_ && py_ + ph_ <= hy_ + hh_);
@@ -1956,6 +2058,17 @@ mod tests {
         assert_eq!(pix(&r, 100, 397), CARD);
         assert_eq!(pix(&r, 30, 449), CARD);
         r.draw_main(&mut gs, &frame());
+        let settings = Frame {
+            settings_open: true,
+            scale: 2.0,
+            alpha: 30,
+            ..frame()
+        };
+        r.draw_main(&mut gs, &settings);
+        assert_eq!(pix(&r, 120, 100), CARD_HI);
+        assert_eq!(pix(&r, 120, 150), CARD_HI);
+        r.draw_main(&mut gs, &frame());
+        assert_eq!(pix(&r, 120, 100), CARD);
 
         let flashing = Frame {
             taken_flash_t: 0.0,
@@ -2052,6 +2165,8 @@ mod tests {
             })
             .ends_with("click to stop"));
         assert!(Hit::Discord.tip(ctx).chars().count() <= 70);
+        assert!(Hit::Settings.tip(ctx).chars().count() <= 70);
+        assert!(Hit::ScaleUp.tip(ctx).contains("bigger"));
         assert!(Hit::Target.tip(ctx).contains("unmute"));
         assert!(Hit::Log.tip(ctx).starts_with("Close"));
         assert_eq!(
