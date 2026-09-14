@@ -22,24 +22,24 @@ pub(super) fn sound_on_from(text: &str) -> bool {
     text.trim() != "0"
 }
 
+fn save_flag(name: &str, on: bool) {
+    write_data(name, if on { "1" } else { "0" }.to_string());
+}
+
 pub(super) fn load_sound() -> bool {
-    data_file("sound.txt")
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_none_or(|t| sound_on_from(&t))
+    load_text("sound.txt").is_none_or(|t| sound_on_from(&t))
 }
 
 pub(super) fn save_sound(on: bool) {
-    write_data("sound.txt", if on { "1" } else { "0" }.to_string());
+    save_flag("sound.txt", on);
 }
 
 pub(super) fn load_topmost() -> bool {
-    data_file("top.txt")
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_none_or(|t| sound_on_from(&t))
+    load_text("top.txt").is_none_or(|t| sound_on_from(&t))
 }
 
 pub(super) fn save_topmost(on: bool) {
-    write_data("top.txt", if on { "1" } else { "0" }.to_string());
+    save_flag("top.txt", on);
 }
 
 pub(super) fn discord_on_from(text: &str) -> bool {
@@ -47,13 +47,11 @@ pub(super) fn discord_on_from(text: &str) -> bool {
 }
 
 pub(super) fn load_discord() -> bool {
-    data_file("discord.txt")
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_some_and(|t| discord_on_from(&t))
+    load_text("discord.txt").is_some_and(|t| discord_on_from(&t))
 }
 
 pub(super) fn save_discord(on: bool) {
-    write_data("discord.txt", if on { "1" } else { "0" }.to_string());
+    save_flag("discord.txt", on);
 }
 
 pub(super) fn scale_from(text: &str) -> f32 {
