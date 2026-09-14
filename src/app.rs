@@ -2,12 +2,12 @@ use crate::discord::{self, Link, Presence};
 use crate::log::{self, Filter};
 use crate::logwatch::{self, LogWatch};
 use crate::render::{
-    tip_ready, Frame, Hit, Info, LogHit, LogView, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W,
+    tip_ready, Env, Frame, Hit, Info, LogHit, LogView, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W,
 };
 use crate::state::{base_name, GameState, Run};
 use crate::update::{self, Badge};
 use crate::vr::VrOverlay;
-use std::io::Read;
+use std::io::BufRead;
 use std::path::Path;
 use std::time::Instant;
 use windows_sys::Win32::Foundation::HWND;
@@ -20,6 +20,8 @@ const THUMB_HOLD_MS: u128 = 900;
 const DEAD_PULSE_MS: f32 = 1100.0;
 const WHEEL_DELTA: i32 = 120;
 const ANIM_MS: u32 = 16;
+const STALE_SECS: u64 = 120;
+const VRC_CHECK_SECS: u64 = 2;
 
 pub struct Tick {
     pub redraw: bool,
@@ -71,6 +73,9 @@ pub struct App {
     pub sel_run: Option<usize>,
     pub sel_group: Option<usize>,
     pub sel_phase: Option<usize>,
+    pub vrc_running: bool,
+    vrc_checked: Option<Instant>,
+    last_env: Option<Env>,
     flash_at: Option<Instant>,
     last_target_since: u64,
     progress_shown: f32,
@@ -113,15 +118,19 @@ fn backfill(gs: &mut GameState, dir: &Path) {
         return;
     };
     for path in old {
-        let Ok(mut file) = logwatch::open_shared(path) else {
+        let Ok(file) = logwatch::open_shared(path) else {
             continue;
         };
-        let mut bytes = Vec::new();
-        if file.read_to_end(&mut bytes).is_err() {
-            continue;
-        }
-        for line in String::from_utf8_lossy(&bytes).lines() {
-            gs.feed(line);
+        let mut reader = std::io::BufReader::new(file);
+        let mut raw = Vec::new();
+        loop {
+            raw.clear();
+            match reader.read_until(b'\n', &mut raw) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let line = String::from_utf8_lossy(&raw);
+            gs.feed(line.trim_end_matches(['\r', '\n']));
         }
         gs.log_rotated();
     }
@@ -192,6 +201,9 @@ impl App {
             sel_run: None,
             sel_group: None,
             sel_phase: None,
+            vrc_running: true,
+            vrc_checked: None,
+            last_env: None,
             flash_at: None,
             last_target_since: 0,
             progress_shown: 0.0,
@@ -226,10 +238,61 @@ impl App {
         }
     }
 
+    pub fn env(&self) -> Env {
+        if !self.vrc_running {
+            Env::NoVrchat
+        } else if !self.gs.in_ecliptica() {
+            Env::NotInWorld
+        } else {
+            Env::InWorld
+        }
+    }
+
+    pub fn pages(&self) -> usize {
+        self.gs.runs.len() + usize::from(self.gs.live_run().is_none())
+    }
+
+    fn live_page(&self) -> usize {
+        self.pages() - 1
+    }
+
+    pub fn viewed_page(&self) -> usize {
+        self.sel_run
+            .map_or(self.live_page(), |i| i.min(self.live_page()))
+    }
+
     pub fn viewed_run(&self) -> Option<(usize, &Run)> {
-        let n = self.gs.runs.len();
-        let i = self.sel_run.unwrap_or(n.checked_sub(1)?).min(n - 1);
-        Some((i, &self.gs.runs[i]))
+        let p = self.viewed_page();
+        self.gs.runs.get(p).map(|r| (p, r))
+    }
+
+    fn shown_run(&self) -> Option<(usize, &Run)> {
+        if self.sel_run.is_none() && self.env() != Env::InWorld {
+            return None;
+        }
+        self.viewed_run()
+    }
+
+    fn log_source(&self) -> Option<log::Source<'_>> {
+        Self::source(&self.gs, self.sel_run, self.viewed_page(), self.env())
+    }
+
+    fn source(
+        gs: &GameState,
+        sel: Option<usize>,
+        page: usize,
+        env: Env,
+    ) -> Option<log::Source<'_>> {
+        match sel {
+            None => log::live(gs).filter(|_| env == Env::InWorld),
+            Some(_) => gs.runs.get(page).map(log::of_run),
+        }
+    }
+
+    fn log_reset(&mut self) {
+        self.log.scroll = 0.0;
+        self.log.scroll_shown = 0.0;
+        self.log.rows = self.log_rows();
     }
 
     pub fn viewed_group(&self) -> Option<(usize, std::ops::Range<usize>)> {
@@ -253,7 +316,7 @@ impl App {
             Hit::Info(_) => true,
             Hit::Update => self.update_ready(),
             Hit::Target => self.is_live() && self.gs.boss.is_some() && self.gs.target.is_some(),
-            Hit::RunPrev => self.viewed_run().is_some_and(|(i, _)| i > 0),
+            Hit::RunPrev => self.viewed_page() > 0,
             Hit::RunNext => self.sel_run.is_some(),
             Hit::FightPrev => self.viewed_group().is_some_and(|(i, _)| i > 0),
             Hit::FightNext => self.sel_group.is_some(),
@@ -266,23 +329,24 @@ impl App {
     }
 
     pub fn run_prev(&mut self) -> bool {
-        match self.viewed_run() {
-            Some((i, _)) if i > 0 => {
-                self.sel_run = Some(i - 1);
-                self.sel_group = None;
-                self.sel_phase = None;
-                true
-            }
-            _ => false,
+        let p = self.viewed_page();
+        if p == 0 {
+            return false;
         }
+        self.sel_run = Some(p - 1);
+        self.sel_group = None;
+        self.sel_phase = None;
+        self.log_reset();
+        true
     }
 
     pub fn run_next(&mut self) -> bool {
         match self.sel_run {
             Some(i) => {
-                self.sel_run = (i + 2 < self.gs.runs.len()).then_some(i + 1);
+                self.sel_run = (i + 1 < self.live_page()).then_some(i + 1);
                 self.sel_group = None;
                 self.sel_phase = None;
+                self.log_reset();
                 true
             }
             None => false,
@@ -369,14 +433,18 @@ impl App {
     }
 
     fn feed_presence(&mut self, now: u64) {
-        if !self.discord_on || self.presence_at.is_some_and(|t| t.elapsed().as_millis() < 1000) {
+        if !self.discord_on
+            || self
+                .presence_at
+                .is_some_and(|t| t.elapsed().as_millis() < 1000)
+        {
             return;
         }
         self.presence_at = Some(Instant::now());
         let unix_now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        let activity = if cfg!(test) || crate::vr::process_running("VRChat.exe") {
+        let activity = if self.vrc_running {
             discord::activity(&self.gs, now, unix_now)
         } else {
             None
@@ -408,7 +476,7 @@ impl App {
     }
 
     pub fn log_rows(&self) -> usize {
-        log::timeline(&self.gs, self.log.filter).len()
+        log::timeline(self.log_source(), self.log.filter).len()
     }
 
     pub fn log_thumb(&self) -> Option<(i32, i32)> {
@@ -422,9 +490,7 @@ impl App {
     pub fn log_set_filter(&mut self, filter: Filter) {
         if self.log.filter != filter {
             self.log.filter = filter;
-            self.log.scroll = 0.0;
-            self.log.scroll_shown = 0.0;
-            self.log.rows = self.log_rows();
+            self.log_reset();
         }
     }
 
@@ -507,7 +573,12 @@ impl App {
     }
 
     fn now(&self) -> u64 {
-        self.last_ts + self.last_ts_at.elapsed().as_secs()
+        let elapsed = self.last_ts_at.elapsed().as_secs();
+        if self.env() == Env::InWorld && elapsed <= STALE_SECS {
+            self.last_ts + elapsed
+        } else {
+            self.last_ts
+        }
     }
 
     fn dead_pulse(&self) -> f32 {
@@ -521,8 +592,12 @@ impl App {
     }
 
     pub fn render(&mut self) {
+        let env = self.env();
         let frame = Frame {
             now: self.now(),
+            env,
+            pages: self.pages(),
+            view_page: self.viewed_page(),
             flash_t: timed(self.flash_at, FLASH_MS),
             taken_flash_t: timed(self.taken_flash_at, TAKEN_FLASH_MS),
             dead_pulse: self.dead_pulse(),
@@ -530,7 +605,7 @@ impl App {
             pressed: self.pressed,
             tip: self.tip(),
             vr: self.vr.status(),
-            log_ok: self.watch.path.is_some(),
+            log_ok: env != Env::NoVrchat && self.watch.path.is_some(),
             log_open: self.log.visible,
             progress_shown: self.progress_shown,
             dps_frac_shown: self.dps_frac_shown,
@@ -544,7 +619,7 @@ impl App {
             topmost: self.topmost,
             discord: self.link,
             discord_on: self.discord_on,
-            view_run: self.viewed_run().map(|(i, _)| i),
+            view_run: self.shown_run().map(|(i, _)| i),
             view_group: self.viewed_group().map(|(i, _)| i),
             view_phase: self.sel_phase,
             run_sel: self.sel_run.is_some(),
@@ -557,6 +632,7 @@ impl App {
             self.renderer.width as u32,
             self.renderer.height as u32,
             true,
+            env == Env::InWorld,
         );
     }
 
@@ -572,7 +648,9 @@ impl App {
             thumb_t: self.log.thumb_t,
             slide: -(1.0 - crate::render::ease_out_cubic(slide_t)) * log::ROW_H as f32,
         };
-        self.log.renderer.draw_log(&self.gs, &view);
+        let (sel, page, env) = (self.sel_run, self.viewed_page(), self.env());
+        let src = Self::source(&self.gs, sel, page, env);
+        self.log.renderer.draw_log(src, &view);
     }
 
     pub fn tick(&mut self) -> Tick {
@@ -590,6 +668,17 @@ impl App {
             self.last_ts = newest;
             self.last_ts_at = Instant::now();
         }
+        if cfg!(not(test))
+            && self
+                .vrc_checked
+                .is_none_or(|t| t.elapsed().as_secs() >= VRC_CHECK_SECS)
+        {
+            self.vrc_checked = Some(Instant::now());
+            self.vrc_running = crate::vr::process_running("VRChat.exe");
+        }
+        let env = self.env();
+        let env_changed = self.last_env.is_some_and(|e| e != env);
+        self.last_env = Some(env);
         let now = self.now();
         if self.gs.target_since != self.last_target_since {
             self.last_target_since = self.gs.target_since;
@@ -656,7 +745,7 @@ impl App {
         );
         anim |= self.flash_at.is_some() && timed(self.flash_at, FLASH_MS) < 1.0;
         anim |= self.taken_flash_at.is_some() && timed(self.taken_flash_at, TAKEN_FLASH_MS) < 1.0;
-        let dead = self.gs.is_dead(now);
+        let dead = env == Env::InWorld && self.gs.is_dead(now);
         if dead && self.dead_since.is_none() {
             self.dead_since = Some(Instant::now());
         } else if !dead {
@@ -669,9 +758,10 @@ impl App {
         let redraw = tip_changed
             || self.gs.changed
             || anim
-            || self.gs.boss.is_some()
+            || (env == Env::InWorld && self.gs.boss.is_some())
             || badge_changed
             || link_changed
+            || env_changed
             || dead != self.was_dead;
         self.was_dead = dead;
 
@@ -708,7 +798,7 @@ impl App {
             let log_tip = self.log_tip();
             let log_tip_changed = log_tip != self.last_log_tip;
             self.last_log_tip = log_tip;
-            redraw_log = changed || log_anim || rotated || log_tip_changed;
+            redraw_log = changed || log_anim || rotated || log_tip_changed || env_changed;
             if redraw_log {
                 self.render_log();
             }
@@ -722,6 +812,7 @@ impl App {
                 self.renderer.width as u32,
                 self.renderer.height as u32,
                 false,
+                env == Env::InWorld,
             );
         }
         let want: u32 = if anim || log_anim { ANIM_MS } else { 1000 };
@@ -743,10 +834,13 @@ mod tests {
     use super::*;
 
     const P: &str = "2026.09.07 09:12:28 Debug      -  ";
+    const ENTER: &str = "[Behaviour] Entering Room: Ecliptica - Demo Playtest";
 
     fn headless() -> App {
         let mut app = App::new(96);
         app.watch = LogWatch::default();
+        app.gs.feed(&format!("{P}{ENTER}"));
+        app.gs.changed = false;
         app
     }
 
@@ -776,6 +870,55 @@ mod tests {
         "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Blade";
     const STAGE_B: &str =
         "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Twinmage";
+
+    #[test]
+    fn empty_state_has_one_page() {
+        let mut app = headless();
+        assert_eq!(app.pages(), 1);
+        assert_eq!(app.viewed_page(), 0);
+        assert!(app.viewed_run().is_none());
+        assert!(!app.hit_enabled(Hit::RunPrev));
+        assert!(!app.run_prev());
+        assert!(app.log_rows() == 0);
+        app.gs.feed(&format!("{P}{STAGE_A}"));
+        app.gs.feed(&format!("{P}ECLIPTICA - now in lobby"));
+        app.gs.feed(&format!("{P}{STAGE_B}"));
+        assert_eq!(app.pages(), 2);
+        assert!(app.run_prev());
+        app.gs.feed(&format!("{P}ECLIPTICA - now in lobby"));
+        assert_eq!(app.sel_run, Some(0));
+        assert_eq!(app.pages(), 3);
+        assert!(app.run_next());
+        assert_eq!(app.sel_run, Some(1));
+        assert!(app.run_next());
+        assert_eq!(app.sel_run, None);
+    }
+
+    #[test]
+    fn env_and_clock() {
+        let mut app = headless();
+        assert_eq!(app.env(), Env::InWorld);
+        app.gs.feed(&format!("{P}{STAGE_A}"));
+        app.tick();
+        let ts = app.last_ts;
+        assert_eq!(app.now(), ts);
+        app.last_ts_at = Instant::now() - std::time::Duration::from_secs(STALE_SECS + 5);
+        assert_eq!(app.now(), ts);
+        app.last_ts_at = Instant::now() - std::time::Duration::from_secs(10);
+        assert_eq!(app.now(), ts + 10);
+        app.gs
+            .feed(&format!("{P}[Behaviour] Entering Room: Sky Dream"));
+        assert_eq!(app.env(), Env::NotInWorld);
+        assert_eq!(app.now(), ts);
+        assert!(app.gs.runs[0].end_ts.is_some());
+        assert_eq!(app.pages(), 2);
+        assert!(app.log_rows() == 0);
+        app.vrc_running = false;
+        assert_eq!(app.env(), Env::NoVrchat);
+        let t = app.tick();
+        assert!(t.redraw);
+        assert!(!app.tick().redraw);
+    }
 
     #[test]
     fn backfill_reads_all_but_newest() {
@@ -859,8 +1002,23 @@ mod tests {
             "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0"
         ));
         app.gs.feed(&format!("{P}ECLIPTICA - now in lobby"));
+        assert_eq!(app.pages(), 2);
+        assert_eq!(app.viewed_page(), 1);
+        assert!(app.viewed_run().is_none());
+        assert!(app.hit_enabled(Hit::RunPrev));
+        assert!(!app.hit_enabled(Hit::RunNext));
+        assert!(app.run_prev());
+        assert_eq!(app.sel_run, Some(0));
+        assert!(app
+            .viewed_run()
+            .is_some_and(|(i, r)| i == 0 && r.fights.len() == 3));
+        assert!(app.run_next());
+        assert!(app.is_live() && app.sel_run.is_none());
+        assert!(app.viewed_run().is_none());
         app.gs.feed(&format!("{P}{STAGE_B}"));
         assert_eq!(app.gs.runs.len(), 2);
+        assert_eq!(app.pages(), 2);
+        assert!(app.viewed_run().is_some_and(|(i, _)| i == 1));
         assert!(app.is_live());
         assert!(!app.run_next());
         assert!(!app.group_next());

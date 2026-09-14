@@ -67,7 +67,11 @@ fn scan(path: Option<String>) {
             gs.apply(line.ts, ev);
             if !boss_before && gs.boss.is_some() {
                 if let Some((got, total)) = gs.tokens_shown() {
-                    println!("{}  tokens  {got}/{total}  {}", fmt_clock(line.ts), gs.stage);
+                    println!(
+                        "{}  tokens  {got}/{total}  {}",
+                        fmt_clock(line.ts),
+                        gs.stage
+                    );
                 }
             }
             if let Some(hit) = gs.taken.back().filter(|h| h.seq != hits_before) {
@@ -92,6 +96,16 @@ fn scan(path: Option<String>) {
     println!("--- {}", path.display());
     for (label, n) in counts {
         println!("{label}: {n}");
+    }
+    for (i, r) in gs.runs.iter().enumerate() {
+        println!(
+            "run {:>2}  {}  {}  {:>2} fights  {}",
+            i + 1,
+            fmt_clock(r.start_ts),
+            if r.lost { "LOST" } else { "run " },
+            r.fights.len(),
+            r.fights.last().map_or("", |f| f.name.as_str())
+        );
     }
     println!("boss targets recorded: {}", gs.targets_total);
 }

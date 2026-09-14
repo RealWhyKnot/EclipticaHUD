@@ -33,6 +33,7 @@ pub enum Event {
     },
     SessionSave,
     RoomJoin(String),
+    RoomEnter(String),
 }
 
 impl Event {
@@ -54,6 +55,7 @@ impl Event {
             Event::TokenSpawn { .. } => "token_spawn",
             Event::SessionSave => "session_save",
             Event::RoomJoin(_) => "room_join",
+            Event::RoomEnter(_) => "room_enter",
         }
     }
 }
@@ -151,6 +153,9 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
         return Some(Event::BossDead {
             name: name.to_string(),
         });
+    }
+    if let Some(rest) = msg.strip_prefix("[Behaviour] Entering Room: ") {
+        return Some(Event::RoomEnter(rest.trim_end().to_string()));
     }
     if let Some(rest) = msg.strip_prefix("[Behaviour] Joining wrld_") {
         return Some(Event::RoomJoin(format!("wrld_{}", rest.trim_end())));
@@ -293,10 +298,6 @@ mod tests {
         assert!(
             split_line("  at \u{cc}\u{ce}\u{ce}\u{cc}.OnLeftRoom () [0x00000] in <0>:0 ").is_none()
         );
-        assert_eq!(
-            parse_msg("[Behaviour] Entering Room: Ecliptica - Demo Playtest"),
-            None
-        );
     }
 
     #[test]
@@ -333,7 +334,10 @@ mod tests {
             parse_msg("ECLIPTICA saving SESSION ID 19854"),
             Some(Event::SessionSave)
         );
-        assert_eq!(parse_msg("ECLIPTICA MASTER Setting SESSION ID to 2505"), None);
+        assert_eq!(
+            parse_msg("ECLIPTICA MASTER Setting SESSION ID to 2505"),
+            None
+        );
         assert_eq!(
             parse_msg("[Behaviour] Joining wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)\r"),
             Some(Event::RoomJoin(
@@ -343,6 +347,26 @@ mod tests {
         assert_eq!(
             parse_msg("[Behaviour] Joining or Creating Room: Ecliptica - Demo Playtest"),
             None
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] Entering Room: Ecliptica - Demo Playtest\r"),
+            Some(Event::RoomEnter("Ecliptica - Demo Playtest".into()))
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] Entering Room: Sky Dream"),
+            Some(Event::RoomEnter("Sky Dream".into()))
+        );
+    }
+
+    #[test]
+    fn empty_class_parses() {
+        assert_eq!(
+            parse_msg("ECLIPTICA - now in stage: Stage_ProtoColony on phase: 0.1220348 as class: "),
+            Some(Event::Stage {
+                name: "ProtoColony".into(),
+                progress: 0.1220348,
+                class: String::new(),
+            })
         );
     }
 

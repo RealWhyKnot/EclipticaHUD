@@ -18,6 +18,7 @@ struct Inner {
     attached: bool,
     needs_frame: bool,
     failures: u32,
+    visible: bool,
 }
 
 pub struct VrOverlay {
@@ -89,6 +90,7 @@ impl VrOverlay {
             attached: false,
             needs_frame: true,
             failures: 0,
+            visible: true,
         });
     }
 
@@ -124,7 +126,7 @@ impl VrOverlay {
         }
     }
 
-    pub fn submit(&mut self, rgba: &[u8], width: u32, height: u32, changed: bool) {
+    pub fn submit(&mut self, rgba: &[u8], width: u32, height: u32, changed: bool, visible: bool) {
         if self.inner.is_none() {
             let due = self
                 .last_try
@@ -137,6 +139,13 @@ impl VrOverlay {
             return;
         };
         Self::attach(inner);
+        if inner.visible != visible {
+            if let Ok(mut overlay) = inner.context.overlay() {
+                if overlay.set_visibility(inner.handle, visible).is_ok() {
+                    inner.visible = visible;
+                }
+            }
+        }
         if !(changed || inner.needs_frame) || rgba.is_empty() {
             return;
         }

@@ -78,6 +78,7 @@ pub struct BossFight {
     pub attacks: Vec<Tally>,
     pub deaths: u32,
     pub kill: Option<(u64, u64)>,
+    pub lost: bool,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -89,16 +90,13 @@ pub struct Run {
     pub stage_no: Option<u32>,
     pub fights: Vec<BossFight>,
     pub deaths: u32,
+    pub lost: bool,
+    pub hits: VecDeque<TakenEntry>,
+    pub targets: VecDeque<TargetEntry>,
+    pub death_log: VecDeque<(u64, u64)>,
 }
 
 impl Run {
-    pub fn lost_fight(&self) -> Option<&BossFight> {
-        let end = self.end_ts?;
-        self.fights
-            .last()
-            .filter(|f| f.kill.is_none() && f.end_ts == Some(end))
-    }
-
     pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
         let mut out: Vec<std::ops::Range<usize>> = Vec::new();
         for (i, f) in self.fights.iter().enumerate() {
@@ -255,6 +253,8 @@ pub enum Mode {
 const DPS_WINDOW: u64 = 10;
 const KILL_DEDUPE_SECS: u64 = 30;
 const DEATH_HOLD: u64 = 3;
+const WIPE_SECS: u64 = 3;
+const LOG_CAP: usize = 500;
 const BOSS_SAVE_LEAD: u64 = 8;
 
 #[derive(Default)]
@@ -287,6 +287,8 @@ pub struct GameState {
     last_save: Option<u64>,
     stage_boss_seen: bool,
     pub location: Option<String>,
+    pub world: Option<String>,
+    last_death: Option<u64>,
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
     dead_seen: Option<(String, u64)>,
@@ -299,6 +301,7 @@ pub struct GameState {
 impl GameState {
     fn open_run(&mut self, ts: u64) -> &mut Run {
         if self.runs.last().is_none_or(|r| r.end_ts.is_some()) {
+            self.last_kill = None;
             self.runs.push(Run {
                 start_ts: ts,
                 ..Default::default()
@@ -315,36 +318,67 @@ impl GameState {
             .filter(|f| f.end_ts.is_none())
     }
 
-    fn close_run(&mut self, ts: u64) {
-        if let Some(f) = self.open_fight() {
-            f.end_ts = Some(ts);
-        }
-        if let Some(r) = self.runs.last_mut() {
-            if r.end_ts.is_none() {
-                r.end_ts = Some(ts);
-            }
-        }
+    pub fn live_run(&self) -> Option<&Run> {
+        self.runs.last().filter(|r| r.end_ts.is_none())
     }
 
-    pub fn log_rotated(&mut self) {
-        self.close_run(self.last_ts);
-        self.mode = Mode::Idle;
+    pub fn in_ecliptica(&self) -> bool {
+        self.world
+            .as_deref()
+            .is_some_and(|w| w.starts_with("Ecliptica"))
+    }
+
+    fn end_run(&mut self, ts: u64) {
+        let wiped = self
+            .last_death
+            .is_some_and(|d| ts.saturating_sub(d) <= WIPE_SECS);
+        if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
+            if let Some(f) = r.fights.last_mut() {
+                let recent = f.end_ts.is_none_or(|e| ts.saturating_sub(e) <= WIPE_SECS);
+                f.end_ts.get_or_insert(ts);
+                f.lost = wiped && recent;
+            }
+            r.lost = wiped;
+            r.end_ts = Some(ts);
+            r.hits = std::mem::take(&mut self.taken);
+            r.targets = std::mem::take(&mut self.history);
+            r.death_log = std::mem::take(&mut self.deaths_log);
+        }
         self.boss = None;
         self.target = None;
+        self.pending_kill = None;
+        self.dead_until = 0;
+        self.last_death = None;
+        self.fight_start = 0;
+        self.fight_dmg = 0;
+        self.fight_taken = 0;
+        self.fight_hits = 0;
+        self.fight_max_hit = 0;
+        self.fight_attacks.clear();
+        self.hits.clear();
+        self.taken_hits.clear();
+        self.taken.clear();
+        self.history.clear();
+        self.deaths_log.clear();
+        self.bosses.clear();
+        self.level_tokens.clear();
+        self.pending_tokens.clear();
+        self.reset_stage_tokens();
         self.stage.clear();
         self.class.clear();
         self.progress = 0.0;
         self.stage_no = None;
-        self.pending_kill = None;
-        self.dead_seen = None;
-        self.dead_until = 0;
-        self.level_tokens.clear();
-        self.pending_tokens.clear();
+    }
+
+    fn leave_world(&mut self, ts: u64) {
+        self.end_run(ts);
+        self.mode = Mode::Idle;
         self.location = None;
-        self.taken.clear();
-        self.history.clear();
-        self.deaths_log.clear();
-        self.fight_attacks.clear();
+        self.world = None;
+    }
+
+    pub fn log_rotated(&mut self) {
+        self.leave_world(self.last_ts);
         self.changed = true;
     }
 
@@ -371,10 +405,14 @@ impl GameState {
         let seq = self.seq;
         match ev {
             Event::BossFight { name } => {
+                if self.mode == Mode::Lobby {
+                    return;
+                }
                 self.bosses.insert(name.clone());
                 let just_ended = self.runs.last().is_some_and(|r| {
                     r.fights.iter().rev().any(|f| {
                         f.name == name
+                            && f.kill.is_some()
                             && f.end_ts
                                 .is_some_and(|e| ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
                     })
@@ -419,10 +457,14 @@ impl GameState {
                         attacks: Vec::new(),
                         deaths: 0,
                         kill: None,
+                        lost: false,
                     });
                 }
             }
             Event::BossDead { name } => {
+                if let Some(k) = self.pending_kill.take() {
+                    self.record_kill(k);
+                }
                 self.pending_kill = Some(KillSummary {
                     ts,
                     boss: name.clone(),
@@ -445,26 +487,7 @@ impl GameState {
             Event::NonStrikeTotal(n) => {
                 if let Some(mut k) = self.pending_kill.take() {
                     k.non_strike = n;
-                    let chained = self.dead_seen.as_ref().is_some_and(|(boss, ts)| {
-                        *boss == k.boss && k.ts.saturating_sub(*ts) <= KILL_DEDUPE_SECS
-                    });
-                    self.dead_seen = Some((k.boss.clone(), k.ts));
-                    let dupe = chained
-                        && self.last_kill.as_ref().is_some_and(|p| {
-                            p.boss == k.boss && p.strike + p.non_strike >= k.strike + k.non_strike
-                        });
-                    if !dupe {
-                        if let Some(f) = self.runs.last_mut().and_then(|r| {
-                            r.fights
-                                .iter_mut()
-                                .rev()
-                                .find(|f| f.name == k.boss && f.kill.is_none())
-                        }) {
-                            f.kill = Some((k.strike, k.non_strike));
-                            f.end_ts.get_or_insert(k.ts);
-                        }
-                        self.last_kill = Some(k);
-                    }
+                    self.record_kill(k);
                 }
             }
             Event::DealtStrike(n) => {
@@ -496,7 +519,7 @@ impl GameState {
                     amount,
                     source,
                 });
-                if self.taken.len() > 500 {
+                if self.taken.len() > LOG_CAP {
                     self.taken.pop_front();
                 }
             }
@@ -511,7 +534,7 @@ impl GameState {
                         player,
                         boss: object,
                     });
-                    if self.history.len() > 500 {
+                    if self.history.len() > LOG_CAP {
                         self.history.pop_front();
                     }
                 }
@@ -531,44 +554,46 @@ impl GameState {
                 }
                 self.stage = name.clone();
                 self.progress = progress;
-                self.class = class.clone();
+                if !class.is_empty() {
+                    self.class = class;
+                }
+                let class = self.class.clone();
+                let stage_no = self.stage_no;
                 let run = self.open_run(ts);
                 run.stage = name;
                 run.class = class;
+                if stage_no.is_some() {
+                    run.stage_no = stage_no;
+                }
             }
             Event::Intermission => {
                 self.mode = Mode::Intermission;
                 self.boss = None;
                 self.target = None;
+                if let Some(f) = self.open_fight() {
+                    f.end_ts = Some(ts);
+                }
             }
             Event::Lobby => {
+                self.end_run(ts);
                 self.mode = Mode::Lobby;
-                self.boss = None;
-                self.target = None;
-                self.progress = 0.0;
-                self.stage_no = None;
-                self.level_tokens.clear();
-                self.pending_tokens.clear();
-                self.close_run(ts);
             }
             Event::RoomLeft => {
-                self.mode = Mode::Idle;
-                self.boss = None;
-                self.target = None;
-                self.stage.clear();
-                self.class.clear();
-                self.progress = 0.0;
-                self.stage_no = None;
-                self.level_tokens.clear();
-                self.pending_tokens.clear();
-                self.location = None;
-                self.close_run(ts);
+                self.leave_world(ts);
+            }
+            Event::RoomEnter(name) => {
+                if !name.starts_with("Ecliptica") {
+                    self.leave_world(ts);
+                }
+                self.world = Some(name);
             }
             Event::TokenSpawn { rune, chance } => {
                 self.pending_tokens.push((rune, chance));
             }
             Event::SessionSave => {
-                if self.mode == Mode::Stage && !self.level_tokens.is_empty() && !self.stage_boss_seen
+                if self.mode == Mode::Stage
+                    && !self.level_tokens.is_empty()
+                    && !self.stage_boss_seen
                 {
                     self.tokens_got += 1;
                     self.last_save = Some(ts);
@@ -579,9 +604,12 @@ impl GameState {
             }
             Event::StageProgress(n) => {
                 self.stage_no = Some(n);
-                self.open_run(ts).stage_no = Some(n);
+                if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
+                    r.stage_no = Some(n);
+                }
             }
             Event::PlayerDead => {
+                self.last_death = Some(ts);
                 if ts >= self.dead_until {
                     if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
                         r.deaths += 1;
@@ -597,6 +625,35 @@ impl GameState {
                 self.dead_until = ts + DEATH_HOLD;
             }
         }
+    }
+
+    fn record_kill(&mut self, k: KillSummary) {
+        let chained = self.dead_seen.as_ref().is_some_and(|(boss, ts)| {
+            *boss == k.boss && k.ts.saturating_sub(*ts) <= KILL_DEDUPE_SECS
+        });
+        self.dead_seen = Some((k.boss.clone(), k.ts));
+        let dupe = chained
+            && self.last_kill.as_ref().is_some_and(|p| {
+                p.boss == k.boss && p.strike + p.non_strike >= k.strike + k.non_strike
+            });
+        if dupe {
+            return;
+        }
+        if let Some(f) = self
+            .runs
+            .last_mut()
+            .filter(|r| r.end_ts.is_none())
+            .and_then(|r| {
+                r.fights
+                    .iter_mut()
+                    .rev()
+                    .find(|f| f.name == k.boss && f.kill.is_none())
+            })
+        {
+            f.kill = Some((k.strike, k.non_strike));
+            f.end_ts.get_or_insert(k.ts);
+        }
+        self.last_kill = Some(k);
     }
 
     pub fn feed(&mut self, raw: &str) -> Option<u64> {
@@ -740,7 +797,7 @@ mod tests {
         feed_at(&mut gs, "08:20:49", "ECLIPTICA - now in lobby");
         let run = &gs.runs[0];
         assert!(run.end_ts.is_some());
-        assert!(run.lost_fight().is_none());
+        assert!(run.fights.last().filter(|f| f.lost).is_none());
         assert_eq!(run.stage, "Hall of Beginnings");
         assert_eq!(run.class, "Spellhammer");
         assert_eq!(run.fights.len(), 1);
@@ -830,6 +887,7 @@ mod tests {
             attacks: Vec::new(),
             deaths: 0,
             kill: None,
+            lost: false,
         };
         let run = Run {
             fights: vec![
@@ -973,7 +1031,11 @@ mod tests {
             "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0",
         );
         assert_eq!(gs.tokens_got, 3);
-        feed_at(&mut gs, "04:06:56", "Boss Kakarot dead, personal damage dealt: ");
+        feed_at(
+            &mut gs,
+            "04:06:56",
+            "Boss Kakarot dead, personal damage dealt: ",
+        );
         feed_at(&mut gs, "04:06:58", SAVE);
         assert_eq!(gs.tokens_shown(), Some((3, 3)));
         feed_at(&mut gs, "04:07:04", "ECLIPTICA - now in intermission");
@@ -1031,7 +1093,10 @@ mod tests {
             "03:59:35",
             "[Behaviour] Joining wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)",
         );
-        assert!(gs.location.as_deref().is_some_and(|l| l.ends_with("~region(use)")));
+        assert!(gs
+            .location
+            .as_deref()
+            .is_some_and(|l| l.ends_with("~region(use)")));
         feed_at(&mut gs, "04:40:00", "[Behaviour] OnLeftRoom");
         assert_eq!(gs.location, None);
     }
@@ -1385,13 +1450,278 @@ mod tests {
         assert_eq!(gs.runs[0].deaths, 2);
         assert_eq!(gs.deaths_log.len(), 2);
         assert!(gs.deaths_log[0].1 < gs.deaths_log[1].1);
-        assert!(gs.runs[0].lost_fight().is_none());
-        feed_at(&mut gs, "08:26:00", "ECLIPTICA - now in lobby");
+        assert!(gs.runs[0].fights.last().filter(|f| f.lost).is_none());
+        feed_at(&mut gs, "08:25:57", "ECLIPTICA - now in lobby");
+        assert!(gs.runs[0].lost);
         assert_eq!(
-            gs.runs[0].lost_fight().map(|f| f.name.as_str()),
+            gs.runs[0]
+                .fights
+                .last()
+                .filter(|f| f.lost)
+                .map(|f| f.name.as_str()),
             Some("Yuki")
         );
-        gs.log_rotated();
+        assert_eq!(gs.runs[0].death_log.len(), 2);
         assert!(gs.deaths_log.is_empty());
+    }
+
+    const DEAD: &str = "Local controller dead, switching off.";
+    const LOBBY: &str = "ECLIPTICA - now in lobby";
+
+    fn kill_at(gs: &mut GameState, t: &str, boss: &str, strike: u64) {
+        feed_at(gs, t, &format!("Boss {boss} dead, personal damage dealt: "));
+        feed_at(gs, t, &format!("STRIKE DMG: {strike}"));
+        feed_at(gs, t, "NON-STRIKE DMG: 0");
+    }
+
+    #[test]
+    fn wipe_with_kill_triple_marks_run_lost() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "04:12:36", HALL);
+        feed_at(
+            &mut gs,
+            "05:40:45",
+            "ECLIPTICA - now fighting boss: MephielPhase2(Clone) on phase: 0.8",
+        );
+        for t in [
+            "05:46:03", "05:46:04", "05:46:05", "05:46:06", "05:46:07", "05:46:08",
+        ] {
+            feed_at(&mut gs, t, DEAD);
+        }
+        kill_at(&mut gs, "05:46:08", "MephielPhase2", 5113);
+        feed_at(&mut gs, "05:46:08", LOBBY);
+        kill_at(&mut gs, "05:46:08", "MephielPhase2", 0);
+        let run = &gs.runs[0];
+        assert!(run.lost);
+        assert_eq!(run.end_ts, run.fights[0].end_ts);
+        assert_eq!(run.fights[0].kill, Some((5113, 0)));
+        assert!(run.fights[0].lost);
+        assert_eq!(
+            run.fights
+                .last()
+                .filter(|f| f.lost)
+                .map(|f| f.name.as_str()),
+            Some("MephielPhase2")
+        );
+        assert_eq!(gs.mode, Mode::Lobby);
+        assert_eq!(gs.last_kill.as_ref().map(|k| k.strike), Some(5113));
+        feed_at(&mut gs, "05:50:00", HALL);
+        assert_eq!(gs.runs.len(), 2);
+        assert!(gs.last_kill.is_none());
+    }
+
+    #[test]
+    fn kill_long_after_death_is_a_win() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "04:00:00", HALL);
+        feed_at(
+            &mut gs,
+            "04:05:00",
+            "ECLIPTICA - now fighting boss: Melon(Clone) on phase: 0.9",
+        );
+        feed_at(&mut gs, "04:06:00", DEAD);
+        kill_at(&mut gs, "04:21:15", "Melon", 8738);
+        feed_at(&mut gs, "04:21:15", LOBBY);
+        assert!(!gs.runs[0].lost);
+        assert!(gs.runs[0].fights.last().filter(|f| f.lost).is_none());
+        assert_eq!(gs.runs[0].fights[0].kill, Some((8738, 0)));
+    }
+
+    #[test]
+    fn death_after_boss_kill_loses_run_not_fight() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "04:00:00", HALL);
+        feed_at(
+            &mut gs,
+            "04:05:00",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        kill_at(&mut gs, "04:08:00", "Nan", 1000);
+        feed_at(&mut gs, "04:08:05", "ECLIPTICA - now in intermission");
+        feed_at(&mut gs, "04:12:00", DEAD);
+        feed_at(&mut gs, "04:12:01", LOBBY);
+        assert!(gs.runs[0].lost);
+        assert!(gs.runs[0].fights.last().filter(|f| f.lost).is_none());
+        assert!(!gs.runs[0].fights[0].lost);
+    }
+
+    #[test]
+    fn end_run_clears_live_state() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "04:00:00", "Advancing Stage Progress to: 1");
+        spawn_level(&mut gs, "04:00:01", HALL);
+        feed_at(&mut gs, "04:00:20", SAVE);
+        feed_at(
+            &mut gs,
+            "04:05:00",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        feed_at(&mut gs, "04:05:01", "ownership of Nan transferred to Alice");
+        feed_at(&mut gs, "04:05:02", "Dealing 100 STRIKE damage");
+        feed_at(
+            &mut gs,
+            "04:05:03",
+            "damage has been taken: 40, from source: (Nan) slam",
+        );
+        feed_at(&mut gs, "04:05:04", DEAD);
+        kill_at(&mut gs, "04:08:00", "Nan", 1000);
+        assert!(gs.last_kill.is_some());
+        feed_at(&mut gs, "04:08:30", LOBBY);
+        assert_eq!(gs.mode, Mode::Lobby);
+        assert!(gs.boss.is_none() && gs.target.is_none());
+        assert_eq!(gs.fight_dmg, 0);
+        assert_eq!(gs.fight_taken, 0);
+        assert_eq!(gs.fight_hits, 0);
+        assert_eq!(gs.fight_max_hit, 0);
+        assert!(gs.fight_attacks.is_empty());
+        assert!(gs.taken.is_empty() && gs.history.is_empty() && gs.deaths_log.is_empty());
+        assert!(gs.stage.is_empty() && gs.class.is_empty());
+        assert_eq!(gs.progress, 0.0);
+        assert!(gs.stage_no.is_none());
+        assert!(gs.level_tokens.is_empty());
+        assert_eq!(gs.tokens_got, 0);
+        assert!(!gs.is_dead(gs.last_ts));
+        assert_eq!(gs.rolling_dps(gs.last_ts), 0);
+        let run = &gs.runs[0];
+        assert_eq!(run.hits.len(), 1);
+        assert_eq!(run.targets.len(), 1);
+        assert_eq!(run.death_log.len(), 1);
+        assert_eq!(run.stage_no, Some(1));
+        feed_at(&mut gs, "04:09:00", "ownership of Nan transferred to Bob");
+        assert!(gs.target.is_none());
+        assert!(gs.history.is_empty());
+    }
+
+    #[test]
+    fn other_world_and_quit_end_the_run() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "13:24:21",
+            "[Behaviour] Entering Room: Ecliptica - Demo Playtest",
+        );
+        assert!(gs.in_ecliptica());
+        feed_at(&mut gs, "13:25:04", HALL);
+        feed_at(&mut gs, "13:26:04", "[Behaviour] OnLeftRoom");
+        assert!(!gs.in_ecliptica());
+        assert!(gs.runs[0].end_ts.is_some());
+        assert!(!gs.runs[0].lost);
+        feed_at(&mut gs, "13:26:05", "[Behaviour] Entering Room: Sky Dream");
+        assert!(!gs.in_ecliptica());
+        assert_eq!(gs.mode, Mode::Idle);
+        feed_at(
+            &mut gs,
+            "13:30:00",
+            "[Behaviour] Entering Room: Ecliptica - Demo Playtest",
+        );
+        feed_at(&mut gs, "13:31:00", HALL);
+        feed_at(&mut gs, "13:31:10", "[Behaviour] Entering Room: Sky Dream");
+        assert_eq!(gs.runs.len(), 2);
+        assert!(gs.runs[1].end_ts.is_some());
+        assert_eq!(gs.mode, Mode::Idle);
+        feed_at(
+            &mut gs,
+            "13:40:00",
+            "[Behaviour] Entering Room: Ecliptica - Demo Playtest",
+        );
+        feed_at(&mut gs, "13:41:00", HALL);
+        feed_at(
+            &mut gs,
+            "13:42:00",
+            "VRCApplication: HandleApplicationQuit at 6480.239",
+        );
+        assert_eq!(gs.runs.len(), 3);
+        assert!(gs.runs[2].end_ts.is_some());
+        assert!(gs.world.is_none());
+        assert_eq!(gs.mode, Mode::Idle);
+    }
+
+    #[test]
+    fn stage_progress_after_lobby_opens_no_run() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:01", HALL);
+        feed_at(&mut gs, "09:30:00", LOBBY);
+        feed_at(&mut gs, "09:30:05", "Advancing Stage Progress to: 2");
+        assert_eq!(gs.runs.len(), 1);
+        assert_eq!(gs.runs[0].stage_no, None);
+    }
+
+    #[test]
+    fn empty_class_keeps_previous() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:01", HALL);
+        feed_at(
+            &mut gs,
+            "09:20:00",
+            "ECLIPTICA - now in stage: Stage_ProtoColony on phase: 0.1220348 as class: ",
+        );
+        assert_eq!(gs.class, "Spellhammer");
+        assert_eq!(gs.runs[0].class, "Spellhammer");
+        assert_eq!(gs.stage, "ProtoColony");
+    }
+
+    #[test]
+    fn refight_after_unfinished_fight_is_kept() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:01", HALL);
+        feed_at(
+            &mut gs,
+            "09:12:00",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        feed_at(&mut gs, "09:12:30", "ECLIPTICA - now in intermission");
+        feed_at(
+            &mut gs,
+            "09:12:40",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        assert_eq!(gs.boss.as_deref(), Some("Nan"));
+        assert_eq!(gs.runs[0].fights.len(), 2);
+        kill_at(&mut gs, "09:15:00", "Nan", 500);
+        feed_at(
+            &mut gs,
+            "09:15:03",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        assert!(gs.boss.is_none());
+        assert_eq!(gs.runs[0].fights.len(), 2);
+    }
+
+    #[test]
+    fn boss_dead_without_totals_still_records_kill() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:01", HALL);
+        feed_at(
+            &mut gs,
+            "09:12:00",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        feed_at(
+            &mut gs,
+            "09:13:00",
+            "Boss Nan dead, personal damage dealt: ",
+        );
+        feed_at(&mut gs, "09:13:00", "STRIKE DMG: 700");
+        feed_at(
+            &mut gs,
+            "09:13:30",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0",
+        );
+        kill_at(&mut gs, "09:14:00", "Kakarot", 900);
+        assert_eq!(gs.runs[0].fights[0].kill, Some((700, 0)));
+        assert_eq!(gs.runs[0].fights[1].kill, Some((900, 0)));
+    }
+
+    #[test]
+    fn intermission_closes_the_fight() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:01", HALL);
+        feed_at(
+            &mut gs,
+            "09:12:00",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        let t = feed_at(&mut gs, "09:12:30", "ECLIPTICA - now in intermission");
+        assert_eq!(gs.runs[0].fights[0].end_ts, Some(t));
     }
 }

@@ -1,10 +1,10 @@
+use crate::discord::Link;
 use crate::log::{self, Filter, Row};
 use crate::names::{boss_name, phase_name, stage_name};
 use crate::state::{
     base_name, describe_source, fmt_clock, generic_attacker, merge_tallies, phase_num, BossFight,
     GameState, Mode, Tally,
 };
-use crate::discord::Link;
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Foundation::RECT;
@@ -230,7 +230,7 @@ impl Info {
                 "The attacks that hurt most this fight, with how often they hit"
             }
             (Info::Vr, _) => "SteamVR wrist overlay: green when attached, red when failing",
-            (Info::LogDot, _) => "VRChat output log: green when found, amber when missing",
+            (Info::LogDot, _) => "VRChat log: green while VRChat runs and its log is open",
             (Info::Version, _) => "Running version; a new release shows here when available",
         }
     }
@@ -254,7 +254,9 @@ impl Hit {
         match self {
             Hit::Pin if c.topmost => "Kept above other windows; click to let them cover it",
             Hit::Pin => "Other windows can cover the HUD; click to keep it on top",
-            Hit::Discord if c.discord_on => "Showing this run as your Discord status; click to stop",
+            Hit::Discord if c.discord_on => {
+                "Showing this run as your Discord status; click to stop"
+            }
             Hit::Discord => "Click to show your run as your Discord status, with a join link",
             Hit::Log if c.log_open => "Close the event log window",
             Hit::Log => "Open the event log window",
@@ -343,8 +345,18 @@ impl LogHit {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Env {
+    NoVrchat,
+    NotInWorld,
+    InWorld,
+}
+
 pub struct Frame {
     pub now: u64,
+    pub env: Env,
+    pub pages: usize,
+    pub view_page: usize,
     pub flash_t: f32,
     pub taken_flash_t: f32,
     pub dead_pulse: f32,
@@ -376,6 +388,10 @@ pub struct Frame {
 impl Frame {
     fn live(&self) -> bool {
         !self.run_sel && !self.group_sel && self.view_phase.is_none()
+    }
+
+    fn empty(&self) -> bool {
+        self.live() && (self.env != Env::InWorld || self.view_run.is_none())
     }
 }
 
@@ -671,11 +687,14 @@ impl Renderer {
             GLYPH_CLOSE,
         );
 
-        let (status, status_color) = match gs.mode {
-            Mode::Idle => ("waiting for a run".to_string(), DIM),
-            Mode::Lobby => ("in lobby".to_string(), AMBER),
-            Mode::Intermission => ("intermission".to_string(), ACCENT),
-            Mode::Stage => (
+        let in_world = f.env == Env::InWorld;
+        let (status, status_color) = match (f.env, &gs.mode) {
+            (Env::NoVrchat, _) => ("VRChat is not running".to_string(), DIM),
+            (Env::NotInWorld, _) => ("waiting for you to join Ecliptica".to_string(), DIM),
+            (_, Mode::Idle) => ("in Ecliptica, waiting for a run".to_string(), DIM),
+            (_, Mode::Lobby) => ("in lobby".to_string(), AMBER),
+            (_, Mode::Intermission) => ("intermission".to_string(), ACCENT),
+            (_, Mode::Stage) => (
                 format!(
                     "{}   {}   {}",
                     stage_name(&gs.stage),
@@ -686,7 +705,8 @@ impl Renderer {
             ),
         };
         self.text(M, 28, W, F_BODY, status_color, DT_LEFT, &status);
-        if gs.is_dead(now) {
+        if !in_world {
+        } else if gs.is_dead(now) {
             let color = mix(mix(BG, DANGER, 0.45), DANGER, f.dead_pulse);
             self.text(M, 28, W, F_BODY, color, DT_RIGHT, "DEAD");
         } else if let Some((got, total)) = gs.tokens_shown() {
@@ -705,13 +725,13 @@ impl Renderer {
             };
             self.text_rect(M, 28, W, 18, F_TINY, color, DT_RIGHT | DT_VCENTER, &txt);
         }
-        if gs.mode == Mode::Stage {
+        if in_world && gs.mode == Mode::Stage {
             self.bar(M, 47, W, 4, f.progress_shown, GOOD);
         }
 
         self.arrow(
             RUN_PREV_HIT,
-            f.view_run.is_some_and(|i| i > 0),
+            f.view_page > 0,
             hov(Hit::RunPrev),
             prs(Hit::RunPrev),
             GLYPH_PREV,
@@ -724,9 +744,12 @@ impl Renderer {
             GLYPH_NEXT,
         );
         let (run_label, run_color) = match f.view_run {
-            None => ("no runs yet".to_string(), DIM),
-            Some(i) if f.live() => {
-                let mut s = format!("RUN {}/{}", i + 1, gs.runs.len());
+            None => (
+                format!("RUN {}/{}   not started", f.view_page + 1, f.pages),
+                DIM,
+            ),
+            Some(_) if f.live() => {
+                let mut s = format!("RUN {}/{}", f.view_page + 1, f.pages);
                 if let Some(n) = gs.stage_no {
                     s.push_str(&format!("   stage {n}"));
                 }
@@ -734,12 +757,12 @@ impl Renderer {
             }
             Some(i) => {
                 let r = &gs.runs[i];
-                let lost = r.lost_fight().is_some();
+                let lost = r.lost;
                 let mut s = format!(
                     "{} {}/{}   {}   {}",
                     if lost { "LOST" } else { "RUN" },
                     i + 1,
-                    gs.runs.len(),
+                    f.pages,
                     &fmt_clock(r.start_ts)[..5],
                     stage_name(&r.stage)
                 );
@@ -824,8 +847,9 @@ impl Renderer {
             );
             self.text_rect(266, 86, 42, 20, F_TINY, DIM, DT_CENTER | DT_VCENTER, &idx);
         }
+        let dash = "-".to_string();
         if f.live() {
-            match (&gs.boss, &gs.target) {
+            match (gs.boss.as_ref().filter(|_| !f.empty()), &gs.target) {
                 (Some(boss), target) => {
                     let pn = phase_num(boss);
                     let shown = if pn > 1 {
@@ -864,15 +888,6 @@ impl Renderer {
                 }
                 (None, _) => {
                     self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss active");
-                    let lost = gs.runs.last().and_then(|r| r.lost_fight().map(|f| (r, f)));
-                    if let Some((r, fight)) = lost {
-                        let mut line =
-                            format!("last run lost to {}", boss_name(base_name(&fight.name)));
-                        if r.deaths > 0 {
-                            line.push_str(&format!("   {}", fmt_run_deaths(r.deaths)));
-                        }
-                        self.text(M + 12, 140, W - 24, F_BODY, DANGER, DT_LEFT, &line);
-                    }
                 }
             }
         } else {
@@ -910,12 +925,9 @@ impl Renderer {
                             &chip,
                         );
                     }
-                    let lost = viewed_run
-                        .and_then(|r| r.lost_fight())
-                        .is_some_and(|f| f.start_ts == h.last.start_ts && f.name == h.last.name);
                     let (res, color) = match (h.last.kill, h.last.end_ts) {
+                        _ if h.last.lost => ("lost", DANGER),
                         (Some(_), _) => ("killed", GOOD),
-                        (None, Some(_)) if lost => ("lost", DANGER),
                         (None, Some(_)) => ("unfinished", DIM),
                         (None, None) => ("in progress", AMBER),
                     };
@@ -949,13 +961,16 @@ impl Renderer {
             r.text(x, y + 16, col, F_BOSS, color, DT_LEFT, value);
         };
         if f.live() {
-            stat(self, 192, 0, "DPS 10s", &fmt_anim(f.dps_shown), AMBER);
+            let in_fight = gs.boss.is_some() && !f.empty();
+            let or_dash = |s: String| if in_fight { s } else { dash.clone() };
+            let live = |s: String| if f.empty() { dash.clone() } else { s };
+            stat(self, 192, 0, "DPS 10s", &live(fmt_anim(f.dps_shown)), AMBER);
             stat(
                 self,
                 192,
                 1,
                 "FIGHT DPS",
-                &fmt_anim(f.fight_dps_shown),
+                &or_dash(fmt_anim(f.fight_dps_shown)),
                 AMBER,
             );
             stat(
@@ -963,13 +978,13 @@ impl Renderer {
                 192,
                 2,
                 "FIGHT DMG",
-                &group_digits(gs.fight_dmg),
+                &or_dash(group_digits(gs.fight_dmg)),
                 AMBER,
             );
-            if gs.boss.is_some() {
+            if in_fight {
                 self.bar(M + 12, 233, W - 24, 3, f.dps_frac_shown, ACCENT);
             }
-            match &gs.last_kill {
+            match gs.last_kill.as_ref().filter(|_| !f.empty()) {
                 Some(k) => {
                     let line = format!(
                         "last kill  {}   {} strike + {} other",
@@ -1022,12 +1037,8 @@ impl Renderer {
         let card = mix(CARD, DANGER, 0.22 * (1.0 - ease_out_cubic(f.taken_flash_t)));
         self.rround(M, 286, W, 276, 8, card);
         self.text(M + 12, 292, W - 24, F_LABEL, DIM, DT_LEFT, "DAMAGE TAKEN");
-        let live_deaths = gs
-            .runs
-            .last()
-            .filter(|r| r.end_ts.is_none())
-            .map_or(0, |r| r.deaths);
-        if f.live() && live_deaths > 0 {
+        let live_deaths = gs.live_run().map_or(0, |r| r.deaths);
+        if f.live() && !f.empty() && live_deaths > 0 {
             self.text(
                 M + 12,
                 292,
@@ -1043,11 +1054,18 @@ impl Renderer {
             r.text(x, y, col, F_LABEL, DIM, DT_LEFT, label);
             r.text(x, y + 15, col, F_BODY, TEXT, DT_LEFT, value);
         };
-        let dash = "-".to_string();
         if f.live() {
-            let in_fight = gs.boss.is_some();
+            let in_fight = gs.boss.is_some() && !f.empty();
             let or_dash = |s: String| if in_fight { s } else { dash.clone() };
-            stat(self, 312, 0, "TAKEN 10s", &fmt_anim(f.taken_shown), DANGER);
+            let live = |s: String| if f.empty() { dash.clone() } else { s };
+            stat(
+                self,
+                312,
+                0,
+                "TAKEN 10s",
+                &live(fmt_anim(f.taken_shown)),
+                DANGER,
+            );
             stat(
                 self,
                 308,
@@ -1087,7 +1105,7 @@ impl Renderer {
             if in_fight {
                 self.bar_on(M + 12, 396, W - 24, 3, f.taken_frac_shown, DANGER, BG);
             }
-            match gs.taken.back() {
+            match gs.taken.back().filter(|_| !f.empty()) {
                 Some(hit) => {
                     let (who, attack) = describe_source(&hit.source, hit.amount);
                     let line = format!("last hit  {}   {who}   {attack}", hit.amount);
@@ -1331,9 +1349,9 @@ impl Renderer {
         }
     }
 
-    pub fn draw_log(&mut self, gs: &GameState, lv: &LogView) {
+    pub fn draw_log(&mut self, src: Option<log::Source<'_>>, lv: &LogView) {
         self.fill(0, 0, LOG_W, LOG_H, BG);
-        let rows = log::timeline(gs, lv.filter);
+        let rows = log::timeline(src, lv.filter);
         self.text_rect(
             14,
             LOG_TAB_Y,
@@ -1683,6 +1701,9 @@ mod tests {
     fn frame() -> Frame {
         Frame {
             now: 0,
+            env: Env::InWorld,
+            pages: 1,
+            view_page: 0,
             flash_t: 1.0,
             taken_flash_t: 1.0,
             dead_pulse: 0.0,
@@ -1756,8 +1777,15 @@ mod tests {
         assert!(end(124, "LOG") <= lx + lw);
         assert!(lx + lw <= dx);
         assert!(end(dx + 18, "DISCORD") <= dx + dw);
-        for badge in ["update v2026.12.31.10", "v2026.12.31.10-beta", "update failed"] {
-            assert!(LOGICAL_W - 14 - text_w(&r, F_TINY, badge) >= UPDATE_HIT.0, "{badge}");
+        for badge in [
+            "update v2026.12.31.10",
+            "v2026.12.31.10-beta",
+            "update failed",
+        ] {
+            assert!(
+                LOGICAL_W - 14 - text_w(&r, F_TINY, badge) >= UPDATE_HIT.0,
+                "{badge}"
+            );
         }
     }
 
@@ -1906,6 +1934,29 @@ mod tests {
         assert_eq!(pix(&r, 300, 397), BG);
         assert_eq!(pix(&r, 30, 449), DANGER);
 
+        for env in [Env::NotInWorld, Env::NoVrchat] {
+            let away = Frame { env, ..frame() };
+            r.draw_main(&mut gs, &away);
+            assert_eq!(pix(&r, 100, 49), BG);
+            assert_eq!(pix(&r, 100, 234), CARD);
+            assert_eq!(pix(&r, 100, 397), CARD);
+            assert_eq!(pix(&r, 30, 449), CARD);
+        }
+        gs.feed(&format!("{P}ECLIPTICA - now in lobby"));
+        let ended = Frame {
+            view_run: None,
+            view_group: None,
+            pages: 2,
+            view_page: 1,
+            ..frame()
+        };
+        r.draw_main(&mut gs, &ended);
+        assert_eq!(pix(&r, 100, 49), BG);
+        assert_eq!(pix(&r, 100, 234), CARD);
+        assert_eq!(pix(&r, 100, 397), CARD);
+        assert_eq!(pix(&r, 30, 449), CARD);
+        r.draw_main(&mut gs, &frame());
+
         let flashing = Frame {
             taken_flash_t: 0.0,
             hover: Some(Hit::Log),
@@ -1994,7 +2045,12 @@ mod tests {
         };
         assert!(Hit::Pin.tip(ctx).contains("keep it on top"));
         assert!(Hit::Discord.tip(ctx).starts_with("Click to show"));
-        assert!(Hit::Discord.tip(TipCtx { discord_on: true, ..ctx }).ends_with("click to stop"));
+        assert!(Hit::Discord
+            .tip(TipCtx {
+                discord_on: true,
+                ..ctx
+            })
+            .ends_with("click to stop"));
         assert!(Hit::Discord.tip(ctx).chars().count() <= 70);
         assert!(Hit::Target.tip(ctx).contains("unmute"));
         assert!(Hit::Log.tip(ctx).starts_with("Close"));
@@ -2018,7 +2074,7 @@ mod tests {
             tip: None,
             thumb: None,
         };
-        r.draw_log(&gs, &lv);
+        r.draw_log(log::live(&gs), &lv);
         assert_eq!(pix(&r, 0, 0), BG);
         let (_, _, ax, aw) = LOG_TABS[0];
         assert_eq!(pix(&r, ax + aw / 2, LOG_TAB_Y + 2), ACCENT);
@@ -2033,13 +2089,13 @@ mod tests {
         gs.feed("2026.09.07 09:13:00 Debug      -  ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0");
         gs.feed("2026.09.07 09:13:01 Debug      -  ownership of Yuki transferred to Alice");
         lv.filter = Filter::Targets;
-        r.draw_log(&gs, &lv);
+        r.draw_log(log::live(&gs), &lv);
         assert_eq!(pix(&r, tx + 3, ty + 3), BG);
         let (bx, by, _, _) = LOG_BODY;
         assert_eq!(pix(&r, bx + 1, by + 12), ACCENT);
         lv.filter = Filter::All;
         lv.scroll = log::max_scroll(42, r.body_h());
-        r.draw_log(&gs, &lv);
+        r.draw_log(log::live(&gs), &lv);
         assert_eq!(pix(&r, tx + 3, ty + 3), CARD);
         assert_eq!(pix(&r, tx + 3, LOG_H - 12), CARD_HI);
         assert_eq!(pix(&r, bx + 1, by + 12), DANGER);

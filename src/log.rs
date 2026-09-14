@@ -1,4 +1,5 @@
-use crate::state::{BossFight, GameState, TakenEntry, TargetEntry};
+use crate::state::{BossFight, GameState, Run, TakenEntry, TargetEntry};
+use std::collections::VecDeque;
 
 pub const ROW_H: i32 = 24;
 
@@ -29,17 +30,41 @@ impl Row<'_> {
     }
 }
 
-pub fn timeline(gs: &GameState, filter: Filter) -> Vec<Row<'_>> {
-    let mut hits = gs.taken.iter().rev().peekable();
-    let mut targets = gs.history.iter().rev().peekable();
-    let mut deaths = gs.deaths_log.iter().rev().peekable();
-    let mut fights = gs
-        .runs
-        .iter()
-        .flat_map(|r| r.fights.iter())
-        .rev()
-        .peekable();
-    let mut out = Vec::with_capacity(gs.taken.len() + gs.history.len() + 8);
+#[derive(Clone, Copy)]
+pub struct Source<'a> {
+    pub fights: &'a [BossFight],
+    pub hits: &'a VecDeque<TakenEntry>,
+    pub targets: &'a VecDeque<TargetEntry>,
+    pub deaths: &'a VecDeque<(u64, u64)>,
+}
+
+pub fn live(gs: &GameState) -> Option<Source<'_>> {
+    gs.live_run().map(|r| Source {
+        fights: &r.fights,
+        hits: &gs.taken,
+        targets: &gs.history,
+        deaths: &gs.deaths_log,
+    })
+}
+
+pub fn of_run(r: &Run) -> Source<'_> {
+    Source {
+        fights: &r.fights,
+        hits: &r.hits,
+        targets: &r.targets,
+        deaths: &r.death_log,
+    }
+}
+
+pub fn timeline(src: Option<Source<'_>>, filter: Filter) -> Vec<Row<'_>> {
+    let Some(src) = src else {
+        return Vec::new();
+    };
+    let mut hits = src.hits.iter().rev().peekable();
+    let mut targets = src.targets.iter().rev().peekable();
+    let mut deaths = src.deaths.iter().rev().peekable();
+    let mut fights = src.fights.iter().rev().peekable();
+    let mut out = Vec::with_capacity(src.hits.len() + src.targets.len() + 8);
     loop {
         let h = (filter != Filter::Targets)
             .then(|| hits.peek().map(|e| Row::Hit(e)))
@@ -174,7 +199,7 @@ mod tests {
     fn timeline_newest_first_ties_by_seq() {
         let gs = built();
         assert_eq!(
-            shape(&timeline(&gs, Filter::All)),
+            shape(&timeline(live(&gs), Filter::All)),
             "d tBob h7 tAlice fYuki h1"
         );
     }
@@ -182,8 +207,38 @@ mod tests {
     #[test]
     fn timeline_filters() {
         let gs = built();
-        assert_eq!(shape(&timeline(&gs, Filter::Damage)), "d h7 fYuki h1");
-        assert_eq!(shape(&timeline(&gs, Filter::Targets)), "tBob tAlice fYuki");
+        assert_eq!(shape(&timeline(live(&gs), Filter::Damage)), "d h7 fYuki h1");
+        assert_eq!(
+            shape(&timeline(live(&gs), Filter::Targets)),
+            "tBob tAlice fYuki"
+        );
+    }
+
+    #[test]
+    fn timeline_is_scoped_to_one_run() {
+        let mut gs = built();
+        feed(&mut gs, "10:02:00", "ECLIPTICA - now in lobby");
+        assert!(timeline(live(&gs), Filter::All).is_empty());
+        assert_eq!(
+            shape(&timeline(Some(of_run(&gs.runs[0])), Filter::All)),
+            "d tBob h7 tAlice fYuki h1"
+        );
+        feed(
+            &mut gs,
+            "10:05:00",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Blade",
+        );
+        feed(
+            &mut gs,
+            "10:05:01",
+            "damage has been taken: 9, from source: ",
+        );
+        assert_eq!(shape(&timeline(live(&gs), Filter::All)), "h9");
+        assert_eq!(
+            shape(&timeline(Some(of_run(&gs.runs[0])), Filter::Targets)),
+            "tBob tAlice fYuki"
+        );
+        assert!(timeline(None, Filter::All).is_empty());
     }
 
     #[test]
@@ -194,7 +249,7 @@ mod tests {
             "10:00:05",
             "ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0",
         );
-        assert!(timeline(&gs, Filter::All).is_empty());
+        assert!(timeline(live(&gs), Filter::All).is_empty());
         gs.log_rotated();
         feed(
             &mut gs,
@@ -206,7 +261,7 @@ mod tests {
             "11:00:01",
             "damage has been taken: 3, from source: ",
         );
-        assert_eq!(shape(&timeline(&gs, Filter::All)), "h3 fNan");
+        assert_eq!(shape(&timeline(live(&gs), Filter::All)), "h3 fNan");
     }
 
     #[test]
