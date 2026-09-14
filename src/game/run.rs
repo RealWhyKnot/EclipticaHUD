@@ -34,36 +34,29 @@ pub struct Tally {
     pub hits: u32,
 }
 
-pub fn tally(list: &mut Vec<Tally>, who: &str, attack: &str, amount: u64) {
+fn add_tally(list: &mut Vec<Tally>, who: &str, attack: &str, total: u64, hits: u32) {
     match list.iter_mut().find(|t| t.who == who && t.attack == attack) {
         Some(t) => {
-            t.total += amount;
-            t.hits += 1;
+            t.total += total;
+            t.hits += hits;
         }
         None => list.push(Tally {
             who: who.to_string(),
             attack: attack.to_string(),
-            total: amount,
-            hits: 1,
+            total,
+            hits,
         }),
     }
 }
 
+pub fn tally(list: &mut Vec<Tally>, who: &str, attack: &str, amount: u64) {
+    add_tally(list, who, attack, amount, 1);
+}
+
 pub fn merge_tallies<'a>(groups: impl Iterator<Item = &'a [Tally]>) -> Vec<Tally> {
-    let mut out: Vec<Tally> = Vec::new();
-    for g in groups {
-        for t in g {
-            match out
-                .iter_mut()
-                .find(|o| o.who == t.who && o.attack == t.attack)
-            {
-                Some(o) => {
-                    o.total += t.total;
-                    o.hits += t.hits;
-                }
-                None => out.push(t.clone()),
-            }
-        }
+    let mut out = Vec::new();
+    for t in groups.flatten() {
+        add_tally(&mut out, &t.who, &t.attack, t.total, t.hits);
     }
     out
 }
