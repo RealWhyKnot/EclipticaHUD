@@ -6,7 +6,7 @@ mod hud;
 mod vrchat;
 
 mod game;
-mod render;
+
 mod scan;
 
 mod ui;

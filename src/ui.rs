@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::app::WINDOW_STEPS;
-use crate::render::{Hit, LogHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
+use crate::hud::render::{Hit, LogHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
 use crate::update;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::*;

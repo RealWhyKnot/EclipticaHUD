@@ -1,11 +1,11 @@
 use crate::discord::{self, Link, Presence};
 use crate::game::run::{base_name, Run};
 use crate::game::state::GameState;
-use crate::hud::timeline::{self, Filter};
-use crate::render::{
+use crate::hud::render::{
     tip_ready, Env, Frame, Hit, Info, LogHit, LogView, Renderer, LOGICAL_H, LOGICAL_W, LOG_H,
     LOG_W, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE,
 };
+use crate::hud::timeline::{self, Filter};
 use crate::update::{self, Badge};
 use crate::vr::VrOverlay;
 use crate::vrchat::log::{all_logs, log_dir, open_shared, LogWatch};
@@ -754,7 +754,7 @@ impl App {
             thumb: self.log_thumb(),
             dragging: self.log.drag.is_some(),
             thumb_t: self.log.thumb_t,
-            slide: -(1.0 - crate::render::ease_out_cubic(slide_t)) * timeline::ROW_H as f32,
+            slide: -(1.0 - crate::hud::render::ease_out_cubic(slide_t)) * timeline::ROW_H as f32,
         };
         let (sel, page, env) = (self.sel_run, self.viewed_page(), self.env());
         let src = Self::source(&self.gs, sel, page, env);
@@ -912,7 +912,8 @@ impl App {
             );
             log_anim |= self.log.slide_at.is_some() && timed(self.log.slide_at, SLIDE_MS) < 1.0;
             let fade = timed(self.log.opened_at, FADE_MS);
-            self.log.alpha = (crate::render::ease_out_cubic(fade) * self.alpha_byte() as f32) as u8;
+            self.log.alpha =
+                (crate::hud::render::ease_out_cubic(fade) * self.alpha_byte() as f32) as u8;
             log_anim |= fade < 1.0;
             log_anim |= log_tip_pending;
             let log_tip = self.log_tip();
@@ -949,7 +950,7 @@ impl App {
     }
 }
 
-const LOG_BODY_Y: i32 = crate::render::LOG_BODY.1;
+const LOG_BODY_Y: i32 = crate::hud::render::LOG_BODY.1;
 
 #[cfg(test)]
 mod tests {
