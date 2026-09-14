@@ -1,16 +1,13 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod discord;
-mod hud;
-mod vrchat;
-
 mod game;
-
-mod scan;
-
+mod hud;
 mod process;
+mod scan;
 mod update;
 mod vr;
+mod vrchat;
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
