@@ -950,12 +950,11 @@ mod tests {
             "04:02:02",
             "ECLIPTICA - now in stage: Stage_BalboaRuins on phase: 0.19 as class: Nekomancer",
         );
-        feed(&mut gs, "04:02:03", "Advancing Stage Progress to: 2");
         let now = feed(&mut gs, "04:02:26", "ECLIPTICA saving SESSION ID 2505");
         let a = activity(&gs, now, 1_800_000_000).unwrap();
         assert!(a.starts_with("{\"type\":5,"), "{a}");
         assert!(a.contains("\"details\":\"Balboa Ruins | Primal\""), "{a}");
-        assert!(a.contains("\"state\":\"Stage 2\""), "{a}");
+        assert!(a.contains("\"state\":\"Stage 1\""), "{a}");
         let b = activity(&gs, now, 1_799_999_985).unwrap();
         assert!(b.contains("\"state\":\"Tokens 1/3\""), "{b}");
         assert!(a.contains(&format!(

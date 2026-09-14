@@ -8,7 +8,10 @@ pub enum Event {
     },
     StrikeTotal(u64),
     NonStrikeTotal(u64),
-    DealtStrike(u64),
+    Dealt {
+        n: u64,
+        strike: bool,
+    },
     DamageTaken {
         amount: u64,
         source: String,
@@ -22,7 +25,7 @@ pub enum Event {
         progress: f32,
         class: String,
     },
-    StageProgress(u32),
+    EnemyActivity,
     Intermission,
     Lobby,
     RoomLeft,
@@ -43,11 +46,11 @@ impl Event {
             Event::BossDead { .. } => "boss_dead",
             Event::StrikeTotal(_) => "strike_total",
             Event::NonStrikeTotal(_) => "non_strike_total",
-            Event::DealtStrike(_) => "dealt_strike",
+            Event::Dealt { .. } => "dealt",
             Event::DamageTaken { .. } => "damage_taken",
             Event::Ownership { .. } => "ownership",
             Event::Stage { .. } => "stage",
-            Event::StageProgress(_) => "stage_progress",
+            Event::EnemyActivity => "enemy_activity",
             Event::Intermission => "intermission",
             Event::Lobby => "lobby",
             Event::RoomLeft => "room_left",
@@ -108,8 +111,16 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
         });
     }
     if let Some(rest) = msg.strip_prefix("Dealing ") {
-        let n = rest.strip_suffix(" STRIKE damage")?.parse().ok()?;
-        return Some(Event::DealtStrike(n));
+        let (n, kind) = rest.split_once(' ')?;
+        let strike = match kind.trim_end() {
+            "STRIKE damage" => true,
+            "NON-STRIKE damage" => false,
+            _ => return None,
+        };
+        return Some(Event::Dealt {
+            n: n.parse().ok()?,
+            strike,
+        });
     }
     if let Some(rest) = msg.strip_prefix("damage has been taken: ") {
         let (amount, source) = rest.split_once(", from source:")?;
@@ -142,9 +153,6 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
             return Some(Event::Lobby);
         }
         return None;
-    }
-    if let Some(rest) = msg.strip_prefix("Advancing Stage Progress to: ") {
-        return Some(Event::StageProgress(rest.trim().parse().ok()?));
     }
     if let Some(rest) = msg.strip_prefix("Boss ") {
         let name = rest
@@ -188,6 +196,12 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
     }
     if let Some(rest) = msg.strip_prefix("NON-STRIKE DMG: ") {
         return Some(Event::NonStrikeTotal(rest.trim().parse().ok()?));
+    }
+    if msg.starts_with("Initializing Enemy POOL ID")
+        || msg.starts_with("Retiring Enemy POOL ID")
+        || msg.starts_with("Backup Active, swapping")
+    {
+        return Some(Event::EnemyActivity);
     }
     None
 }
@@ -241,8 +255,19 @@ mod tests {
     fn damage_lines() {
         assert_eq!(
             parse_msg("Dealing 140 STRIKE damage"),
-            Some(Event::DealtStrike(140))
+            Some(Event::Dealt {
+                n: 140,
+                strike: true
+            })
         );
+        assert_eq!(
+            parse_msg("Dealing 5 NON-STRIKE damage"),
+            Some(Event::Dealt {
+                n: 5,
+                strike: false
+            })
+        );
+        assert_eq!(parse_msg("Dealing 5 MAGIC damage"), None);
         assert_eq!(
             parse_msg("damage has been taken: 12, from source: (Khepri) attack_Claws2"),
             Some(Event::DamageTaken {
@@ -371,20 +396,22 @@ mod tests {
     }
 
     #[test]
-    fn stage_progress() {
-        assert_eq!(
-            parse_msg("Advancing Stage Progress to: 5"),
-            Some(Event::StageProgress(5))
-        );
-        assert_eq!(parse_msg("Advancing Stage Event: 4"), None);
-        assert_eq!(parse_msg("Advancing Stage Progress to: x"), None);
+    fn enemy_activity() {
+        for line in [
+            "Retiring Enemy POOL ID19",
+            "Initializing Enemy POOL ID0 as ENEMY ID 45",
+            "Backup Active, swapping...",
+        ] {
+            assert_eq!(parse_msg(line), Some(Event::EnemyActivity), "{line}");
+        }
+        assert_eq!(parse_msg("No backup active, creating new."), None);
     }
 
     #[test]
     fn non_events() {
-        assert_eq!(parse_msg("Retiring Enemy POOL ID19"), None);
+        assert_eq!(parse_msg("Advancing Stage Progress to: 5"), None);
         assert_eq!(parse_msg("2.5"), None);
-        assert_eq!(parse_msg("Backup Active, swapping..."), None);
+        assert_eq!(parse_msg("Tracking boss as defeated in-run."), None);
     }
 
     #[test]

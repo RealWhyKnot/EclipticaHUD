@@ -103,6 +103,7 @@ pub struct Run {
     pub fights: Vec<BossFight>,
     pub deaths: u32,
     pub lost: bool,
+    pub won: bool,
     pub hits: VecDeque<TakenEntry>,
     pub targets: VecDeque<TargetEntry>,
     pub death_log: VecDeque<(u64, u64)>,
@@ -319,6 +320,7 @@ const DEATH_HOLD: u64 = 3;
 const WIPE_SECS: u64 = 3;
 const LOG_CAP: usize = 500;
 const BOSS_SAVE_LEAD: u64 = 8;
+const WAVE_IDLE_SECS: u64 = 20;
 
 #[derive(Default)]
 pub struct GameState {
@@ -349,6 +351,7 @@ pub struct GameState {
     pub tokens_got: u32,
     last_save: Option<u64>,
     stage_boss_seen: bool,
+    wave_last_activity: u64,
     pub location: Option<String>,
     pub world: Option<String>,
     pub window: u64,
@@ -427,6 +430,10 @@ impl GameState {
                 f.end_ts.get_or_insert(ts);
                 f.lost = wiped && recent;
             }
+            r.won = !wiped
+                && r.fights
+                    .last()
+                    .is_some_and(|f| base_name(&f.name) == "JimBringer" && f.kill.is_some());
             r.lost = wiped;
             r.end_ts = Some(ts);
             r.hits = std::mem::take(&mut self.taken);
@@ -469,6 +476,20 @@ impl GameState {
     pub fn log_rotated(&mut self) {
         self.leave_world(self.last_ts);
         self.changed = true;
+    }
+
+    fn touch_wave(&mut self, ts: u64) {
+        if self.mode == Mode::Stage {
+            self.wave_last_activity = ts;
+        }
+    }
+
+    pub fn wave_idle(&self, now: u64) -> bool {
+        self.pre_boss() && now.saturating_sub(self.wave_last_activity) >= WAVE_IDLE_SECS
+    }
+
+    pub fn tokens_missing(&self) -> Option<(u32, u32)> {
+        self.tokens_shown().filter(|(got, total)| got < total)
     }
 
     fn reset_stage_tokens(&mut self) {
@@ -578,7 +599,8 @@ impl GameState {
                     self.record_kill(k);
                 }
             }
-            Event::DealtStrike(n) => {
+            Event::Dealt { n, .. } => {
+                self.touch_wave(ts);
                 self.hits.push_back((ts, n));
                 if self.boss.is_some() {
                     self.fight_dmg += n;
@@ -590,6 +612,7 @@ impl GameState {
                 }
             }
             Event::DamageTaken { amount, source } => {
+                self.touch_wave(ts);
                 self.taken_hits.push_back((ts, amount));
                 if self.pre_boss() {
                     let s = &mut self.stage_stats;
@@ -621,6 +644,7 @@ impl GameState {
                 }
             }
             Event::Ownership { object, player } => {
+                self.touch_wave(ts);
                 if self.bosses.contains(&object) {
                     self.target = Some(player.clone());
                     self.target_since = ts;
@@ -642,6 +666,7 @@ impl GameState {
                 class,
             } => {
                 self.mode = Mode::Stage;
+                self.wave_last_activity = ts;
                 if !self.pending_tokens.is_empty() {
                     self.level_tokens = std::mem::take(&mut self.pending_tokens);
                     self.reset_stage_tokens();
@@ -649,7 +674,9 @@ impl GameState {
                     self.level_tokens.clear();
                     self.reset_stage_tokens();
                 }
-                if self.stage_stats.start_ts == 0 || self.stage != name || self.boss.is_some() {
+                let fresh =
+                    self.stage_stats.start_ts == 0 || self.stage != name || self.boss.is_some();
+                if fresh {
                     self.close_stage(ts);
                     self.stage_stats = StageStats {
                         start_ts: ts,
@@ -662,13 +689,13 @@ impl GameState {
                     self.class = class;
                 }
                 let class = self.class.clone();
-                let stage_no = self.stage_no;
                 let run = self.open_run(ts);
                 run.stage = name;
                 run.class = class;
-                if stage_no.is_some() {
-                    run.stage_no = stage_no;
+                if fresh {
+                    run.stage_no = Some(run.stages.len() as u32 + 1);
                 }
+                self.stage_no = run.stage_no;
             }
             Event::Intermission => {
                 self.close_stage(ts);
@@ -707,12 +734,7 @@ impl GameState {
             Event::RoomJoin(location) => {
                 self.location = Some(location);
             }
-            Event::StageProgress(n) => {
-                self.stage_no = Some(n);
-                if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
-                    r.stage_no = Some(n);
-                }
-            }
+            Event::EnemyActivity => self.touch_wave(ts),
             Event::PlayerDead => {
                 self.last_death = Some(ts);
                 if ts >= self.dead_until {
@@ -1074,6 +1096,38 @@ mod tests {
     }
 
     #[test]
+    fn stray_phase1_before_kill_triple_ignored() {
+        let mut gs = GameState::default();
+        feed_at(
+            &mut gs,
+            "05:38:15",
+            "ECLIPTICA - now fighting boss: Bravera(Clone) on phase: 0.9",
+        );
+        feed_at(
+            &mut gs,
+            "05:42:52",
+            "ECLIPTICA - now fighting boss: BraveraPhase2(Clone) on phase: 0.9",
+        );
+        feed_at(
+            &mut gs,
+            "05:42:53",
+            "ECLIPTICA - now fighting boss: Bravera(Clone) on phase: 0.9",
+        );
+        feed_at(
+            &mut gs,
+            "05:42:53",
+            "Boss Bravera dead, personal damage dealt: ",
+        );
+        feed_at(&mut gs, "05:42:53", "STRIKE DMG: 18620");
+        feed_at(&mut gs, "05:42:53", "NON-STRIKE DMG: 0");
+        assert_eq!(gs.boss.as_deref(), Some("BraveraPhase2"));
+        let run = &gs.runs[0];
+        assert_eq!(run.fights.len(), 2);
+        assert_eq!(run.fights[0].kill, Some((18620, 0)));
+        assert_eq!(run.groups(), vec![0..2]);
+    }
+
+    #[test]
     fn boss_flap_after_lobby_ignored() {
         let mut gs = GameState::default();
         feed_at(
@@ -1237,22 +1291,119 @@ mod tests {
     #[test]
     fn stage_counter() {
         let mut gs = GameState::default();
-        feed_at(&mut gs, "09:10:00", "Advancing Stage Progress to: 1");
-        feed_at(
-            &mut gs,
-            "09:10:01",
-            "ECLIPTICA - now in stage: Stage_Hallow on phase: 0 as class: Spellhammer",
-        );
+        feed_at(&mut gs, "09:10:01", HALL);
         assert_eq!(gs.stage_no, Some(1));
         assert_eq!(gs.runs.len(), 1);
         assert_eq!(gs.runs[0].stage_no, Some(1));
-        feed_at(&mut gs, "09:20:00", "Advancing Stage Progress to: 2");
+        feed_at(
+            &mut gs,
+            "09:12:00",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        kill_at(&mut gs, "09:15:00", "Nan", 500);
+        feed_at(&mut gs, "09:15:10", "ECLIPTICA - now in intermission");
+        assert_eq!(gs.stage_no, Some(1));
+        const HALLOW: &str =
+            "ECLIPTICA - now in stage: Stage_Hallow on phase: 0.1 as class: Spellhammer";
+        feed_at(&mut gs, "09:20:00", HALLOW);
+        assert_eq!(gs.stage_no, Some(2));
+        assert_eq!(gs.runs[0].stage_no, Some(2));
+        feed_at(&mut gs, "09:20:30", HALLOW);
         assert_eq!(gs.runs[0].stage_no, Some(2));
         feed_at(&mut gs, "09:30:00", "ECLIPTICA - now in lobby");
         assert!(gs.stage_no.is_none());
         assert_eq!(gs.runs[0].stage_no, Some(2));
         gs.log_rotated();
         assert!(gs.stage_no.is_none());
+    }
+
+    #[test]
+    fn wave_idle_after_twenty_quiet_seconds() {
+        let mut gs = GameState::default();
+        spawn_level(&mut gs, "14:13:32", HALL);
+        let t = feed_at(
+            &mut gs,
+            "14:13:40",
+            "Initializing Enemy POOL ID1 as ENEMY ID 8",
+        );
+        assert!(!gs.wave_idle(t + 19));
+        assert!(gs.wave_idle(t + 20));
+        feed_at(&mut gs, "14:13:45", SAVE);
+        assert_eq!(gs.tokens_missing(), Some((1, 3)));
+        let t = feed_at(&mut gs, "14:14:10", "Dealing 40 NON-STRIKE damage");
+        assert_eq!(gs.stage_stats.dmg, 40);
+        assert!(!gs.wave_idle(t + 19));
+        assert!(gs.wave_idle(t + 20));
+        let t = feed_at(
+            &mut gs,
+            "14:14:40",
+            "damage has been taken: 7, from source: machinegunShooter1",
+        );
+        assert!(!gs.wave_idle(t + 19));
+        let t = feed_at(
+            &mut gs,
+            "14:14:50",
+            "ownership of Crab transferred to WhyKnot",
+        );
+        assert!(!gs.wave_idle(t + 19));
+        assert!(gs.wave_idle(t + 20));
+        feed_at(&mut gs, "14:15:20", SAVE);
+        feed_at(&mut gs, "14:15:21", SAVE);
+        assert_eq!(gs.tokens_missing(), None);
+        assert_eq!(gs.tokens_shown(), Some((3, 3)));
+        let t = feed_at(
+            &mut gs,
+            "14:16:26",
+            "ECLIPTICA - now fighting boss: NX-Obsidian(Clone) on phase: 0.34",
+        );
+        assert!(!gs.wave_idle(t + 60));
+        feed_at(&mut gs, "14:16:30", "Dealing 25 NON-STRIKE damage");
+        feed_at(&mut gs, "14:16:31", "Dealing 30 STRIKE damage");
+        assert_eq!(gs.fight_dmg, 55);
+        assert_eq!(gs.runs[0].fights[0].dmg, 55);
+        kill_at(&mut gs, "14:18:26", "NX-Obsidian", 6625);
+        assert!(!gs.wave_idle(t + 180));
+        feed_at(&mut gs, "14:18:35", "ECLIPTICA - now in intermission");
+        assert!(!gs.wave_idle(t + 200));
+        spawn_level(
+            &mut gs,
+            "14:20:00",
+            "ECLIPTICA - now in stage: Stage_ProtoColony on phase: 0.4 as class: Spellhammer",
+        );
+        let t = gs.stage_stats.start_ts;
+        assert_eq!(gs.tokens_missing(), Some((0, 3)));
+        assert!(!gs.wave_idle(t + 19));
+        assert!(gs.wave_idle(t + 20));
+    }
+
+    #[test]
+    fn jim_kill_then_lobby_is_a_win() {
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:01", HALL);
+        feed_at(
+            &mut gs,
+            "09:12:00",
+            "ECLIPTICA - now fighting boss: JimBringer(Clone) on phase: 1",
+        );
+        feed_at(
+            &mut gs,
+            "09:14:00",
+            "ECLIPTICA - now fighting boss: JimBringerPhase2(Clone) on phase: 1",
+        );
+        kill_at(&mut gs, "09:16:00", "JimBringerPhase2", 900);
+        feed_at(&mut gs, "09:16:01", LOBBY);
+        assert!(gs.runs[0].won);
+        assert!(!gs.runs[0].lost);
+        let mut gs = GameState::default();
+        feed_at(&mut gs, "09:10:01", HALL);
+        feed_at(
+            &mut gs,
+            "09:12:00",
+            "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+        );
+        kill_at(&mut gs, "09:16:00", "Nan", 900);
+        feed_at(&mut gs, "09:16:01", LOBBY);
+        assert!(!gs.runs[0].won);
     }
 
     #[test]
@@ -1691,7 +1842,6 @@ mod tests {
     #[test]
     fn end_run_clears_live_state() {
         let mut gs = GameState::default();
-        feed_at(&mut gs, "04:00:00", "Advancing Stage Progress to: 1");
         spawn_level(&mut gs, "04:00:01", HALL);
         feed_at(&mut gs, "04:00:20", SAVE);
         feed_at(
@@ -1780,16 +1930,6 @@ mod tests {
     }
 
     #[test]
-    fn stage_progress_after_lobby_opens_no_run() {
-        let mut gs = GameState::default();
-        feed_at(&mut gs, "09:10:01", HALL);
-        feed_at(&mut gs, "09:30:00", LOBBY);
-        feed_at(&mut gs, "09:30:05", "Advancing Stage Progress to: 2");
-        assert_eq!(gs.runs.len(), 1);
-        assert_eq!(gs.runs[0].stage_no, None);
-    }
-
-    #[test]
     fn empty_class_keeps_previous() {
         let mut gs = GameState::default();
         feed_at(&mut gs, "09:10:01", HALL);
@@ -1858,7 +1998,6 @@ mod tests {
     #[test]
     fn stage_stats_before_the_boss() {
         let mut gs = GameState::default();
-        feed_at(&mut gs, "09:10:00", "Advancing Stage Progress to: 2");
         feed_at(&mut gs, "09:10:01", HALL);
         assert!(gs.pre_boss());
         feed_at(&mut gs, "09:10:05", "Dealing 40 STRIKE damage");

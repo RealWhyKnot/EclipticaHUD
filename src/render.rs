@@ -394,6 +394,7 @@ pub struct Frame {
     pub window: u64,
     pub flash_t: f32,
     pub taken_flash_t: f32,
+    pub warn_t: f32,
     pub dead_pulse: f32,
     pub hover: Option<Hit>,
     pub pressed: Option<Hit>,
@@ -817,10 +818,16 @@ impl Renderer {
             }
             Some(i) => {
                 let r = &gs.runs[i];
-                let lost = r.lost;
+                let (tag, color) = if r.lost {
+                    ("LOST", DANGER)
+                } else if r.won {
+                    ("WON", GOOD)
+                } else {
+                    ("RUN", TEXT)
+                };
                 let mut s = format!(
                     "{} {}/{}   {}   {}",
-                    if lost { "LOST" } else { "RUN" },
+                    tag,
                     i + 1,
                     f.pages,
                     &fmt_clock(r.start_ts)[..5],
@@ -1405,6 +1412,22 @@ impl Renderer {
             ucolor
         };
         self.text(M, fy, W, F_TINY, ucolor, DT_RIGHT, &utext);
+        if f.warn_t < 1.0 {
+            let (got, total) = gs.tokens_shown().unwrap_or((0, 0));
+            let t = f.warn_t;
+            let slide_in = ease_out_cubic((t / 0.08).min(1.0));
+            let slide_out = ease_out_cubic(((t - 0.88) / 0.12).max(0.0));
+            let y = (lerp(-140.0, 96.0, slide_in) - slide_out * 236.0) as i32;
+            let pulse = 0.5 + 0.5 * (t * std::f32::consts::TAU * 3.0).sin();
+            self.rround(M, y, W, 128, 10, mix(AMBER, TEXT, pulse * 0.6));
+            self.rround(M + 3, y + 3, W - 6, 122, 8, mix(BG, AMBER, 0.18));
+            let vc = DT_CENTER | DT_VCENTER;
+            self.text_rect(M, y + 14, W, 40, F_BIG, AMBER, vc, "COLLECT YOUR TOKENS");
+            let line = format!("{got}/{total} picked up");
+            self.text_rect(M, y + 58, W, 28, F_BOSS, TEXT, vc, &line);
+            let hint = "grab the rest before you summon the boss";
+            self.text_rect(M, y + 88, W, 24, F_BODY, DIM, vc, hint);
+        }
         if let Some(hit) = f.tip {
             let ctx = TipCtx {
                 live: f.live(),
@@ -1909,6 +1932,7 @@ mod tests {
             window: 10,
             flash_t: 1.0,
             taken_flash_t: 1.0,
+            warn_t: 1.0,
             dead_pulse: 0.0,
             hover: Some(Hit::Close),
             pressed: None,
@@ -2172,6 +2196,16 @@ mod tests {
         assert_eq!(pix(&r, 100, 397), DANGER);
         assert_eq!(pix(&r, 300, 397), BG);
         assert_eq!(pix(&r, 30, 449), DANGER);
+        assert_eq!(pix(&r, 20, 160), CARD);
+        let warned = Frame {
+            warn_t: 0.5,
+            ..frame()
+        };
+        r.draw_main(&mut gs, &warned);
+        assert_eq!(pix(&r, 20, 160), mix(BG, AMBER, 0.18));
+        assert!(text_w(&r, F_BIG, "COLLECT YOUR TOKENS") <= LOGICAL_W - 28);
+        r.draw_main(&mut gs, &frame());
+        assert_eq!(pix(&r, 20, 160), CARD);
 
         for env in [Env::NotInWorld, Env::NoVrchat] {
             let away = Frame { env, ..frame() };

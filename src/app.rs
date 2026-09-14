@@ -19,6 +19,7 @@ const FADE_MS: f32 = 200.0;
 const SLIDE_MS: f32 = 160.0;
 const THUMB_HOLD_MS: u128 = 900;
 const DEAD_PULSE_MS: f32 = 1100.0;
+const WARN_MS: f32 = 5000.0;
 const WHEEL_DELTA: i32 = 120;
 const ANIM_MS: u32 = 16;
 const STALE_SECS: u64 = 120;
@@ -84,6 +85,8 @@ pub struct App {
     pub alpha: u8,
     pub settings_open: bool,
     flash_at: Option<Instant>,
+    warn_at: Option<Instant>,
+    warned_stage: u64,
     last_target_since: u64,
     progress_shown: f32,
     dps_peak: u64,
@@ -106,13 +109,16 @@ pub struct App {
     badge: Badge,
 }
 
-fn blip() {
+static BLIP: &[u8] = include_bytes!("../assets/target.wav");
+static TOKENS: &[u8] = include_bytes!("../assets/tokens.wav");
+
+fn play(wav: &'static [u8]) {
+    let _ = wav;
     #[cfg(not(test))]
     unsafe {
-        static BLIP: &[u8] = include_bytes!("../assets/target.wav");
         use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
         PlaySoundW(
-            BLIP.as_ptr() as _,
+            wav.as_ptr() as _,
             std::ptr::null_mut(),
             SND_ASYNC | SND_MEMORY | SND_NODEFAULT,
         );
@@ -215,6 +221,8 @@ impl App {
             alpha: MAX_ALPHA,
             settings_open: false,
             flash_at: None,
+            warn_at: None,
+            warned_stage: 0,
             last_target_since: 0,
             progress_shown: 0.0,
             dps_peak: 0,
@@ -695,6 +703,7 @@ impl App {
             window: self.gs.win(),
             flash_t: timed(self.flash_at, FLASH_MS),
             taken_flash_t: timed(self.taken_flash_at, TAKEN_FLASH_MS),
+            warn_t: timed(self.warn_at, WARN_MS),
             dead_pulse: self.dead_pulse(),
             hover: self.hover,
             pressed: self.pressed,
@@ -782,8 +791,19 @@ impl App {
             if self.gs.target.is_some() {
                 self.flash_at = Some(Instant::now());
                 if self.sound_on {
-                    blip();
+                    play(BLIP);
                 }
+            }
+        }
+        let stage_key = self.gs.stage_stats.start_ts;
+        if self.warned_stage != stage_key
+            && self.gs.wave_idle(now)
+            && self.gs.tokens_missing().is_some()
+        {
+            self.warned_stage = stage_key;
+            self.warn_at = Some(Instant::now());
+            if self.sound_on {
+                play(TOKENS);
             }
         }
         let taken_seq = self.gs.taken.back().map_or(0, |e| e.seq);
@@ -842,6 +862,7 @@ impl App {
         );
         anim |= self.flash_at.is_some() && timed(self.flash_at, FLASH_MS) < 1.0;
         anim |= self.taken_flash_at.is_some() && timed(self.taken_flash_at, TAKEN_FLASH_MS) < 1.0;
+        anim |= self.warn_at.is_some() && timed(self.warn_at, WARN_MS) < 1.0;
         let dead = env == Env::InWorld && self.gs.is_dead(now);
         if dead && self.dead_since.is_none() {
             self.dead_since = Some(Instant::now());
@@ -1219,6 +1240,92 @@ mod tests {
         assert!(app.run_prev());
         assert!(!app.hit_enabled(Hit::Info(Info::LastHit)));
         assert!(app.hit_enabled(Hit::Info(Info::Result)));
+    }
+
+    #[test]
+    fn killed_boss_moves_to_previous_page() {
+        let mut app = headless();
+        app.gs.feed(&format!("{P}{STAGE_A}"));
+        assert_eq!(app.group_pages(), 1);
+        assert!(app.viewed_group().is_none());
+        assert!(!app.hit_enabled(Hit::FightPrev));
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Despair(Clone) on phase: 0"
+        ));
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: DespairPhase2(Clone) on phase: 0"
+        ));
+        assert_eq!(app.group_pages(), 1);
+        assert!(app
+            .viewed_group()
+            .is_some_and(|(i, g)| i == 0 && g.len() == 2));
+        assert!(!app.hit_enabled(Hit::FightPrev));
+        app.gs.feed(&format!(
+            "{P}Boss DespairPhase2 dead, personal damage dealt: "
+        ));
+        app.gs.feed(&format!("{P}STRIKE DMG: 100"));
+        app.gs.feed(&format!("{P}NON-STRIKE DMG: 0"));
+        app.gs.feed(&format!("{P}ECLIPTICA - now in intermission"));
+        app.gs.feed(&format!("{P}{STAGE_B}"));
+        assert_eq!(app.group_pages(), 2);
+        assert!(app.is_live());
+        assert!(app.viewed_group().is_none());
+        assert!(app.hit_enabled(Hit::FightPrev));
+        assert!(app.group_prev());
+        assert!(app
+            .viewed_group()
+            .is_some_and(|(i, g)| i == 0 && g.len() == 2));
+        assert!(!app.group_prev());
+        assert!(app.group_next());
+        assert!(app.is_live());
+        app.gs.feed(&format!(
+            "{P}ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0"
+        ));
+        assert_eq!(app.group_pages(), 2);
+        assert!(app.viewed_group().is_some_and(|(i, _)| i == 1));
+        assert!(app.group_prev());
+        assert!(app.viewed_group().is_some_and(|(i, _)| i == 0));
+        assert!(app.group_next());
+        assert!(app.is_live());
+    }
+
+    #[test]
+    fn token_warning_once_per_quiet_stage() {
+        let mut app = headless();
+        for _ in 0..3 {
+            app.gs.feed(&format!("{P}spawn token, False, 0"));
+        }
+        let t = app.gs.feed(&format!("{P}{STAGE_A}")).unwrap();
+        app.gs.feed(&format!("{P}ECLIPTICA saving SESSION ID 2505"));
+        app.last_ts = t + 10;
+        app.tick();
+        assert!(app.warn_at.is_none());
+        app.last_ts = t + 20;
+        let tick = app.tick();
+        assert!(app.warn_at.is_some());
+        assert_eq!(tick.timer_ms, Some(ANIM_MS));
+        app.warn_at = None;
+        app.last_ts = t + 40;
+        app.tick();
+        assert!(app.warn_at.is_none());
+        const P2: &str = "2026.09.07 09:20:00 Debug      -  ";
+        app.gs.feed(&format!("{P2}ECLIPTICA - now in intermission"));
+        for _ in 0..3 {
+            app.gs.feed(&format!("{P2}spawn token, False, 0"));
+        }
+        let t = app.gs.feed(&format!("{P2}{STAGE_B}")).unwrap();
+        app.last_ts = t + 20;
+        app.tick();
+        assert!(app.warn_at.is_some());
+        app.warn_at = None;
+        for _ in 0..3 {
+            app.gs
+                .feed(&format!("{P2}ECLIPTICA saving SESSION ID 2505"));
+        }
+        app.warned_stage = 0;
+        app.last_ts = t + 60;
+        app.tick();
+        assert!(app.warn_at.is_none());
     }
 
     #[test]
