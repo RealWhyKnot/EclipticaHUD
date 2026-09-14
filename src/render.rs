@@ -284,7 +284,7 @@ impl Hit {
             Hit::WindowDown => "Shorter window for the live DPS and damage taken",
             Hit::WindowUp => "Longer window for the live DPS and damage taken",
             Hit::Discord if c.discord_on && c.vrcx => {
-                "VRCX's presence hides this status; click to turn it off and restart VRCX"
+                "VRCX's presence hides this status; the HUD is switching it off"
             }
             Hit::Discord if c.discord_on => {
                 "Showing this run as your Discord status; click to stop"

@@ -366,6 +366,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_TIMER if wp == TIMER_ID => {
             if let Some(app) = app_mut(hwnd) {
                 let tick = app.tick();
+                if app.vrcx_dirty {
+                    app.vrcx_dirty = false;
+                    save_vrcx_taken(app.vrcx_taken);
+                }
                 if tick.redraw {
                     InvalidateRect(hwnd, std::ptr::null(), 0);
                 }
@@ -487,14 +491,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                                 sync_topmost(hwnd);
                             }
                             Hit::Discord => {
-                                if app.vrcx_conflict() {
-                                    app.take_over_vrcx();
-                                } else {
-                                    app.activate(hit);
-                                    save_discord(app.discord_on);
-                                    if !app.discord_on {
-                                        app.release_vrcx();
-                                    }
+                                app.activate(hit);
+                                save_discord(app.discord_on);
+                                if !app.discord_on {
+                                    app.release_vrcx();
                                 }
                                 save_vrcx_taken(app.vrcx_taken);
                             }

@@ -23,6 +23,7 @@ const WHEEL_DELTA: i32 = 120;
 const ANIM_MS: u32 = 16;
 const STALE_SECS: u64 = 120;
 const VRC_CHECK_SECS: u64 = 2;
+const VRCX_RETRY_SECS: u64 = 60;
 const SCALE_STEP: f32 = 0.1;
 const ALPHA_STEP: u8 = 10;
 pub const WINDOW_STEPS: [u64; 12] = [3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30];
@@ -81,6 +82,8 @@ pub struct App {
     pub vrcx_running: bool,
     pub vrcx_presence: Option<bool>,
     pub vrcx_taken: bool,
+    pub vrcx_dirty: bool,
+    vrcx_restart_at: Option<Instant>,
     vrc_checked: Option<Instant>,
     last_env: Option<Env>,
     pub dpi: u32,
@@ -216,6 +219,8 @@ impl App {
             vrcx_running: false,
             vrcx_presence: None,
             vrcx_taken: false,
+            vrcx_dirty: false,
+            vrcx_restart_at: None,
             vrc_checked: None,
             last_env: None,
             dpi,
@@ -295,6 +300,8 @@ impl App {
             return false;
         }
         self.vrcx_taken = true;
+        self.vrcx_dirty = true;
+        self.vrcx_restart_at = Some(Instant::now());
         self.vrcx_presence = Some(false);
         if cfg!(not(test)) {
             crate::vrcx::restart();
@@ -307,6 +314,7 @@ impl App {
             return;
         }
         self.vrcx_taken = false;
+        self.vrcx_dirty = true;
         if crate::vrcx::set_presence(true) {
             self.vrcx_presence = Some(true);
             if cfg!(not(test)) && self.vrcx_running {
@@ -826,6 +834,13 @@ impl App {
         }
         let env = self.env();
         let env_changed = self.last_env.is_some_and(|e| e != env);
+        if self.vrcx_conflict()
+            && self
+                .vrcx_restart_at
+                .is_none_or(|t| t.elapsed().as_secs() >= VRCX_RETRY_SECS)
+        {
+            self.take_over_vrcx();
+        }
         self.last_env = Some(env);
         let now = self.now();
         if self.gs.target_since != self.last_target_since {
