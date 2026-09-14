@@ -4,6 +4,8 @@ pub const LOGICAL_W: i32 = 360;
 pub const LOGICAL_H: i32 = 600;
 pub const LOG_W: i32 = 420;
 pub const LOG_H: i32 = 560;
+pub const M: i32 = 14;
+pub const W: i32 = LOGICAL_W - 2 * M;
 
 pub const CLOSE_HIT: (i32, i32, i32, i32) = (324, 0, 36, 36);
 pub const CLOSE_BTN: (i32, i32, i32, i32) = (328, 8, 24, 24);

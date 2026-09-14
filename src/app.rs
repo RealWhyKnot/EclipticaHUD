@@ -731,7 +731,7 @@ impl App {
             run_sel: self.sel_run.is_some(),
             group_sel: self.sel_group.is_some(),
         };
-        self.renderer.draw_main(&mut self.gs, &frame);
+        self.renderer.draw_main(&self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
         self.vr.submit(
             &self.rgba,

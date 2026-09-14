@@ -274,7 +274,7 @@ fn draw_smoke_bars() {
     gs.feed(&format!("{P}Local controller dead, switching off."));
     let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
     let f = frame();
-    r.draw_main(&mut gs, &f);
+    r.draw_main(&gs, &f);
     assert_eq!(pix(&r, 0, 0), BG);
     assert_eq!(pix(&r, 100, 49), GOOD);
     assert_eq!(pix(&r, 300, 49), CARD);
@@ -290,15 +290,15 @@ fn draw_smoke_bars() {
         warn_t: 0.5,
         ..frame()
     };
-    r.draw_main(&mut gs, &warned);
+    r.draw_main(&gs, &warned);
     assert_eq!(pix(&r, 20, 160), mix(BG, AMBER, 0.18));
     assert!(text_w(&r, F_BIG, "COLLECT YOUR TOKENS") <= LOGICAL_W - 28);
-    r.draw_main(&mut gs, &frame());
+    r.draw_main(&gs, &frame());
     assert_eq!(pix(&r, 20, 160), CARD);
 
     for env in [Env::NotInWorld, Env::NoVrchat] {
         let away = Frame { env, ..frame() };
-        r.draw_main(&mut gs, &away);
+        r.draw_main(&gs, &away);
         assert_eq!(pix(&r, 100, 49), BG);
         assert_eq!(pix(&r, 100, 234), CARD);
         assert_eq!(pix(&r, 100, 397), CARD);
@@ -312,23 +312,23 @@ fn draw_smoke_bars() {
         view_page: 1,
         ..frame()
     };
-    r.draw_main(&mut gs, &ended);
+    r.draw_main(&gs, &ended);
     assert_eq!(pix(&r, 100, 49), BG);
     assert_eq!(pix(&r, 100, 234), CARD);
     assert_eq!(pix(&r, 100, 397), CARD);
     assert_eq!(pix(&r, 30, 449), CARD);
-    r.draw_main(&mut gs, &frame());
+    r.draw_main(&gs, &frame());
     let settings = Frame {
         settings_open: true,
         scale: 2.0,
         alpha: 30,
         ..frame()
     };
-    r.draw_main(&mut gs, &settings);
+    r.draw_main(&gs, &settings);
     assert_eq!(pix(&r, 120, 100), CARD_HI);
     assert_eq!(pix(&r, 120, 150), CARD_HI);
     assert_eq!(pix(&r, 120, 250), CARD_HI);
-    r.draw_main(&mut gs, &frame());
+    r.draw_main(&gs, &frame());
     assert_eq!(pix(&r, 120, 100), CARD);
     assert_eq!(pix(&r, 120, 250), CARD);
 
@@ -340,7 +340,7 @@ fn draw_smoke_bars() {
     pre.feed(&format!(
         "{P}damage has been taken: 12, from source: machinegunShooter1"
     ));
-    r.draw_main(&mut pre, &frame());
+    r.draw_main(&pre, &frame());
     assert_eq!(pix(&r, 100, 234), CARD);
     assert_eq!(pix(&r, 100, 397), CARD);
     pre.feed(&format!(
@@ -350,7 +350,7 @@ fn draw_smoke_bars() {
     pre.feed(&format!("{P}STRIKE DMG: 300"));
     pre.feed(&format!("{P}NON-STRIKE DMG: 0"));
     pre.feed(&format!("{P}ECLIPTICA - now in intermission"));
-    r.draw_main(&mut pre, &frame());
+    r.draw_main(&pre, &frame());
     assert_eq!(pix(&r, 100, 234), CARD);
 
     let flashing = Frame {
@@ -359,7 +359,7 @@ fn draw_smoke_bars() {
         pressed: Some(Hit::RunPrev),
         ..frame()
     };
-    r.draw_main(&mut gs, &flashing);
+    r.draw_main(&gs, &flashing);
     assert_ne!(pix(&r, 20, 300), CARD);
     assert_eq!(pix(&r, 304, 11), CARD_HI);
 
@@ -368,7 +368,7 @@ fn draw_smoke_bars() {
         group_sel: true,
         ..frame()
     };
-    r.draw_main(&mut gs, &group);
+    r.draw_main(&gs, &group);
     assert_eq!(pix(&r, 300, 397), CARD);
     assert_eq!(pix(&r, 30, 419), DANGER);
 
@@ -376,7 +376,7 @@ fn draw_smoke_bars() {
         tip: Some(Hit::Log),
         ..frame()
     };
-    r.draw_main(&mut gs, &tipped);
+    r.draw_main(&gs, &tipped);
     assert_eq!(pix(&r, 300, 45), CARD_HI);
     assert!(!tip_ready(None));
     assert!(!tip_ready(Some(std::time::Instant::now())));

@@ -10,8 +10,6 @@ const SEG_COLORS: [u32; 4] = [DANGER, AMBER, ACCENT, DIM];
 
 impl Renderer {
     pub(super) fn breakdown(&self, y0: i32, tallies: &[Tally], total: u64) {
-        const M: i32 = 14;
-        const W: i32 = LOGICAL_W - 2 * M;
         if tallies.is_empty() {
             self.text_rect(
                 M + 12,

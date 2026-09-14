@@ -54,6 +54,14 @@ impl Frame {
         !self.run_sel && !self.group_sel
     }
 
+    pub(super) fn hov(&self, h: Hit) -> bool {
+        self.hover == Some(h)
+    }
+
+    pub(super) fn prs(&self, h: Hit) -> bool {
+        self.pressed == Some(h)
+    }
+
     pub(super) fn empty(&self) -> bool {
         self.live() && (self.env != Env::InWorld || self.view_run.is_none())
     }
