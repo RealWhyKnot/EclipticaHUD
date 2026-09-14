@@ -13,6 +13,7 @@ const SEND_GAP: Duration = Duration::from_secs(15);
 const POLL: Duration = Duration::from_millis(250);
 const REPLY_WAIT: Duration = Duration::from_secs(5);
 const JOIN_WAIT: Duration = Duration::from_secs(45);
+const CYCLE_SECS: u64 = 15;
 const TEXT_MAX: usize = 128;
 
 const BOSS_ART: &[&str] = &[
@@ -215,10 +216,24 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
             since = None;
             "In the lobby".to_string()
         }
-        Mode::Intermission => match gs.stage_no {
-            Some(n) => format!("Intermission after stage {n}"),
-            None => "Intermission".to_string(),
-        },
+        Mode::Intermission => {
+            if let Some(r) = run {
+                let mut facts = vec![
+                    format!("{} bosses down", r.kills()),
+                    format!("{} damage dealt", short(r.dmg())),
+                    format!("{} damage taken", short(r.taken())),
+                ];
+                if r.deaths > 0 {
+                    facts.push(format!("{} deaths", r.deaths));
+                }
+                facts.push(format!("{}m in the run", now.saturating_sub(r.start_ts) / 60));
+                state.push(pick(&facts, unix_now));
+            }
+            match gs.stage_no {
+                Some(n) => format!("Intermission after stage {n}"),
+                None => "Intermission".to_string(),
+            }
+        }
         Mode::Stage => match gs.boss.as_deref() {
             Some(boss) => {
                 let base = base_name(boss);
@@ -237,22 +252,37 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
             }
             None => {
                 large_text = stage_name(&gs.stage).to_string();
-                if let Some(n) = gs.stage_no {
-                    state.push(format!("Stage {n}"));
-                }
+                let s = &gs.stage_stats;
+                let mut facts = Vec::new();
                 if let Some((got, total)) = gs.tokens_shown() {
-                    state.push(format!("Tokens {got}/{total}"));
+                    facts.push(format!("Tokens {got}/{total}"));
                 }
+                if let Some(n) = gs.stage_no {
+                    facts.push(format!("Stage {n}"));
+                }
+                facts.push(format!("{} DPS clearing", short(gs.stage_dps(now))));
+                facts.push(format!("{} damage dealt", short(s.dmg)));
+                facts.push(format!("{} damage taken", short(s.taken)));
+                facts.push(format!("{} hits taken", s.hits));
+                if let Some(d) = run.map(|r| r.deaths).filter(|d| *d > 0) {
+                    facts.push(format!("{d} deaths"));
+                }
+                if s.start_ts > 0 {
+                    facts.push(format!("Clearing for {}m", now.saturating_sub(s.start_ts) / 60));
+                }
+                state.push(pick(&facts, unix_now));
                 format!("{} | {}", stage_name(&gs.stage), phase_name(gs.progress))
             }
         },
     };
-    if let Some(d) = run.map(|r| r.deaths).filter(|d| *d > 0) {
-        state.push(if d == 1 {
-            "1 death".to_string()
-        } else {
-            format!("{d} deaths")
-        });
+    if gs.boss.is_some() {
+        if let Some(d) = run.map(|r| r.deaths).filter(|d| *d > 0) {
+            state.push(if d == 1 {
+                "1 death".to_string()
+            } else {
+                format!("{d} deaths")
+            });
+        }
     }
     if gs.is_dead(now) {
         state.insert(0, "Dead".to_string());
@@ -301,6 +331,10 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
         }
     }
     Some(format!("{{{}}}", fields.join(",")))
+}
+
+fn pick(facts: &[String], unix_now: u64) -> String {
+    facts[(unix_now / CYCLE_SECS) as usize % facts.len()].clone()
 }
 
 fn frame(op: u32, body: &str) -> Vec<u8> {
@@ -805,6 +839,49 @@ mod tests {
     }
 
     #[test]
+    fn stage_and_intermission_cycle_facts() {
+        let mut gs = GameState::default();
+        for _ in 0..3 {
+            feed(&mut gs, "04:02:02", "spawn token, False, 0");
+        }
+        feed(
+            &mut gs,
+            "04:02:02",
+            "ECLIPTICA - now in stage: Stage_BalboaRuins on phase: 0.19 as class: Nekomancer",
+        );
+        feed(&mut gs, "04:02:10", "Dealing 300 STRIKE damage");
+        let now = feed(
+            &mut gs,
+            "04:02:12",
+            "damage has been taken: 8, from source: machinegunShooter1",
+        );
+        let states: Vec<String> = (0..8)
+            .map(|i| json_str(&activity(&gs, now, i * CYCLE_SECS).unwrap(), "state").unwrap())
+            .collect();
+        assert!(states.contains(&"Tokens 0/3".to_string()), "{states:?}");
+        assert!(states.contains(&"300 damage dealt".to_string()), "{states:?}");
+        assert!(states.contains(&"8 damage taken".to_string()), "{states:?}");
+        assert!(states.contains(&"1 hits taken".to_string()), "{states:?}");
+        assert!(states.iter().any(|s| s.ends_with(" DPS clearing")), "{states:?}");
+        assert_ne!(states[0], states[1]);
+        feed(
+            &mut gs,
+            "04:03:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.19",
+        );
+        feed(&mut gs, "04:03:01", "Boss Kakarot dead, personal damage dealt: ");
+        feed(&mut gs, "04:03:01", "STRIKE DMG: 900");
+        feed(&mut gs, "04:03:01", "NON-STRIKE DMG: 0");
+        let now = feed(&mut gs, "04:03:05", "ECLIPTICA - now in intermission");
+        let states: Vec<String> = (0..5)
+            .map(|i| json_str(&activity(&gs, now, i * CYCLE_SECS).unwrap(), "state").unwrap())
+            .collect();
+        assert!(states.contains(&"1 bosses down".to_string()), "{states:?}");
+        assert!(states.contains(&"300 damage dealt".to_string()), "{states:?}");
+        assert!(states.contains(&"1m in the run".to_string()), "{states:?}");
+    }
+
+    #[test]
     fn joining_the_world_shows_the_lobby() {
         let mut gs = GameState::default();
         feed(&mut gs, "03:59:35", "[Behaviour] Entering Room: Sky Dream");
@@ -835,7 +912,9 @@ mod tests {
         let now = feed(&mut gs, "04:02:26", "ECLIPTICA saving SESSION ID 2505");
         let a = activity(&gs, now, 1_800_000_000).unwrap();
         assert!(a.contains("\"details\":\"Balboa Ruins | Primal\""), "{a}");
-        assert!(a.contains("\"state\":\"Stage 2 | Tokens 1/3\""), "{a}");
+        assert!(a.contains("\"state\":\"Stage 2\""), "{a}");
+        let b = activity(&gs, now, 1_799_999_985).unwrap();
+        assert!(b.contains("\"state\":\"Tokens 1/3\""), "{b}");
         assert!(a.contains(&format!(
             "\"timestamps\":{{\"start\":{}}}",
             1_800_000_000 - (now - start)
