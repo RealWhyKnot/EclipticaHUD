@@ -210,14 +210,14 @@ impl Info {
             (Info::Result, _) => {
                 "killed, lost (run ended with it alive) or unfinished, plus fight time"
             }
-            (Info::Dealt(0), true) => "Damage you dealt in the last 10 seconds, per second",
+            (Info::Dealt(0), true) => "Damage you are dealing per second right now",
             (Info::Dealt(0), false) => "All damage you dealt in this fight, across phases",
             (Info::Dealt(1), true) => "Your fight damage divided by the fight time so far",
             (Info::Dealt(1), false) => "Your fight damage divided by the fight time",
             (Info::Dealt(2), true) => "All damage you dealt this fight, across phases",
             (Info::Dealt(2), false) => "How long the fight lasted",
             (Info::Dealt(_), _) => "",
-            (Info::DealtBar, _) => "Your DPS right now against your best 10 seconds this fight",
+            (Info::DealtBar, _) => "Your DPS right now against your best moment this fight",
             (Info::LastKill, true) => "What the game credited you with on your last boss kill",
             (Info::LastKill, false) => "What the game credited you with when this boss died",
             (Info::TakenTitle, true) => "Damage you took; the right side counts deaths in this run",
@@ -1042,7 +1042,7 @@ impl Renderer {
             let in_fight = gs.boss.is_some() && !f.empty();
             let or_dash = |s: String| if in_fight { s } else { dash.clone() };
             let live = |s: String| if f.empty() { dash.clone() } else { s };
-            stat(self, 192, 0, "DPS 10s", &live(fmt_anim(f.dps_shown)), AMBER);
+            stat(self, 192, 0, "DPS", &live(fmt_anim(f.dps_shown)), AMBER);
             stat(
                 self,
                 192,

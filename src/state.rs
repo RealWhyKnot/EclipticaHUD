@@ -250,7 +250,8 @@ pub enum Mode {
     Stage,
 }
 
-const DPS_WINDOW: u64 = 10;
+const DPS_WINDOW: u64 = 3;
+const TAKEN_WINDOW: u64 = 10;
 const KILL_DEDUPE_SECS: u64 = 30;
 const DEATH_HOLD: u64 = 3;
 const WIPE_SECS: u64 = 3;
@@ -666,10 +667,14 @@ impl GameState {
     }
 
     pub fn rolling_dps(&mut self, now: u64) -> u64 {
-        while self.hits.front().is_some_and(|h| h.0 + DPS_WINDOW < now) {
+        while self.hits.front().is_some_and(|h| h.0 + DPS_WINDOW <= now) {
             self.hits.pop_front();
         }
-        self.hits.iter().map(|h| h.1).sum::<u64>() / DPS_WINDOW
+        let span = self
+            .hits
+            .front()
+            .map_or(1, |h| (now.saturating_sub(h.0) + 1).clamp(1, DPS_WINDOW));
+        self.hits.iter().map(|h| h.1).sum::<u64>() / span
     }
 
     pub fn fight_dps(&self, now: u64) -> u64 {
@@ -683,11 +688,11 @@ impl GameState {
         while self
             .taken_hits
             .front()
-            .is_some_and(|h| h.0 + DPS_WINDOW < now)
+            .is_some_and(|h| h.0 + TAKEN_WINDOW < now)
         {
             self.taken_hits.pop_front();
         }
-        self.taken_hits.iter().map(|h| h.1).sum::<u64>() / DPS_WINDOW
+        self.taken_hits.iter().map(|h| h.1).sum::<u64>() / TAKEN_WINDOW
     }
 
     pub fn fight_taken_rate(&self, now: u64) -> u64 {
@@ -1146,7 +1151,9 @@ mod tests {
         gs.feed(&format!("{P}Dealing 100 STRIKE damage"));
         gs.feed(&format!("{P}Dealing 50 STRIKE damage"));
         assert_eq!(gs.fight_dmg, 150);
-        assert_eq!(gs.rolling_dps(t0), 15);
+        assert_eq!(gs.rolling_dps(t0), 150);
+        assert_eq!(gs.rolling_dps(t0 + 2), 50);
+        assert_eq!(gs.rolling_dps(t0 + 3), 0);
         assert_eq!(gs.rolling_dps(t0 + 60), 0);
         assert_eq!(gs.fight_dps(t0 + 10), 15);
         gs.feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
