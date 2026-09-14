@@ -79,6 +79,58 @@ impl App {
     }
 
     pub fn tick(&mut self) -> Tick {
+        let rotated = self.pump_log();
+        let (env, env_changed) = self.poll_env();
+        let now = self.now();
+        self.cue_effects(now);
+        let services_changed = self.poll_services(now);
+        let anim = self.animate(env, now);
+        let dead = self.dead_since.is_some();
+        let tip = self.tip();
+        let tip_changed = tip != self.last_tip;
+        self.last_tip = tip;
+        let redraw = tip_changed
+            || self.gs.changed
+            || anim
+            || (env == Env::InWorld && self.gs.boss.is_some())
+            || services_changed
+            || env_changed
+            || dead != self.was_dead;
+        self.was_dead = dead;
+
+        let changed = self.gs.changed;
+        self.gs.changed = false;
+        let (log_anim, redraw_log) = if self.log.visible {
+            self.tick_log(rotated, env_changed, changed)
+        } else {
+            (false, false)
+        };
+        self.primed = true;
+        if redraw {
+            self.render();
+        } else {
+            self.vr.submit(
+                &self.rgba,
+                self.renderer.width as u32,
+                self.renderer.height as u32,
+                false,
+                env == Env::InWorld,
+                self.alpha as f32 / 100.0,
+                self.scale,
+            );
+        }
+        let want: u32 = if anim || log_anim { ANIM_MS } else { 1000 };
+        let timer_ms = (want != self.timer_ms).then_some(want);
+        self.timer_ms = want;
+        Tick {
+            redraw,
+            redraw_log,
+            timer_ms,
+            quit: update::restart_pending(),
+        }
+    }
+
+    fn pump_log(&mut self) -> bool {
         let gs = &mut self.gs;
         let mut newest = 0u64;
         let rotated = self.watch.poll(|line| {
@@ -93,6 +145,10 @@ impl App {
             self.last_ts = newest;
             self.last_ts_at = Instant::now();
         }
+        rotated
+    }
+
+    fn poll_env(&mut self) -> (Env, bool) {
         if cfg!(not(test))
             && self
                 .vrc_checked
@@ -104,7 +160,10 @@ impl App {
         let env = self.env();
         let env_changed = self.last_env.is_some_and(|e| e != env);
         self.last_env = Some(env);
-        let now = self.now();
+        (env, env_changed)
+    }
+
+    fn cue_effects(&mut self, now: u64) {
         if self.gs.target_since != self.last_target_since {
             self.last_target_since = self.gs.target_since;
             if self.gs.target.is_some() {
@@ -138,6 +197,22 @@ impl App {
             self.dps_peak = 0;
             self.taken_peak = 0;
         }
+    }
+
+    fn poll_services(&mut self, now: u64) -> bool {
+        self.feed_presence(now);
+        let link = discord::link();
+        let link_changed = link != self.link;
+        self.link = link;
+        let badge = update::badge();
+        let badge_changed = badge != self.badge;
+        if badge_changed {
+            self.badge = badge;
+        }
+        link_changed || badge_changed
+    }
+
+    fn animate(&mut self, env: Env, now: u64) -> bool {
         let rolling = self.gs.rolling_dps(now);
         self.dps_peak = self.dps_peak.max(rolling);
         let dps_target = if self.gs.boss.is_some() && self.dps_peak > 0 {
@@ -152,17 +227,7 @@ impl App {
         } else {
             0.0
         };
-        self.feed_presence(now);
-        let link = discord::link();
-        let link_changed = link != self.link;
-        self.link = link;
-        let badge = update::badge();
-        let badge_changed = badge != self.badge;
-        if badge_changed {
-            self.badge = badge;
-        }
         let tip_pending = self.hover.is_some() && self.tip().is_none();
-        let log_tip_pending = self.log.hover.is_some() && self.log_tip().is_none();
         let mut anim = approach(&mut self.progress_shown, self.gs.progress, 0.002);
         anim |= tip_pending;
         anim |= approach(&mut self.dps_frac_shown, dps_target, 0.002);
@@ -188,82 +253,45 @@ impl App {
         } else if !dead {
             self.dead_since = None;
         }
-        anim |= dead;
-        let tip = self.tip();
-        let tip_changed = tip != self.last_tip;
-        self.last_tip = tip;
-        let redraw = tip_changed
-            || self.gs.changed
-            || anim
-            || (env == Env::InWorld && self.gs.boss.is_some())
-            || badge_changed
-            || link_changed
-            || env_changed
-            || dead != self.was_dead;
-        self.was_dead = dead;
+        anim | dead
+    }
 
-        let changed = self.gs.changed;
-        self.gs.changed = false;
-        let mut log_anim = false;
-        let mut redraw_log = false;
-        if self.log.visible {
-            let rows = self.log_rows();
-            if rows != self.log.rows {
-                if rows > self.log.rows && self.primed && self.log.scroll_shown < 1.0 {
-                    self.log.slide_at = Some(Instant::now());
-                }
-                self.log.rows = rows;
-                self.log_clamp();
+    fn tick_log(&mut self, rotated: bool, env_changed: bool, changed: bool) -> (bool, bool) {
+        let log_tip_pending = self.log.hover.is_some() && self.log_tip().is_none();
+        let rows = self.log_rows();
+        if rows != self.log.rows {
+            if rows > self.log.rows && self.primed && self.log.scroll_shown < 1.0 {
+                self.log.slide_at = Some(Instant::now());
             }
-            log_anim |= approach_rate(&mut self.log.scroll_shown, self.log.scroll, 0.5, 0.4);
-            let thumb_lit = self.log.drag.is_some()
-                || matches!(self.log.hover, Some(LogHit::Thumb | LogHit::Track))
-                || self
-                    .log
-                    .thumb_seen
-                    .is_some_and(|t| t.elapsed().as_millis() < THUMB_HOLD_MS);
-            log_anim |= approach(
-                &mut self.log.thumb_t,
-                if thumb_lit { 1.0 } else { 0.0 },
-                0.01,
-            );
-            log_anim |= self.log.slide_at.is_some() && timed(self.log.slide_at, SLIDE_MS) < 1.0;
-            let fade = timed(self.log.opened_at, FADE_MS);
-            self.log.alpha =
-                (crate::hud::render::ease_out_cubic(fade) * self.alpha_byte() as f32) as u8;
-            log_anim |= fade < 1.0;
-            log_anim |= log_tip_pending;
-            let log_tip = self.log_tip();
-            let log_tip_changed = log_tip != self.last_log_tip;
-            self.last_log_tip = log_tip;
-            redraw_log = changed || log_anim || rotated || log_tip_changed || env_changed;
-            if redraw_log {
-                self.render_log();
-            }
+            self.log.rows = rows;
+            self.log_clamp();
         }
-        self.primed = true;
-        if redraw {
-            self.render();
-        } else {
-            self.vr.submit(
-                &self.rgba,
-                self.renderer.width as u32,
-                self.renderer.height as u32,
-                false,
-                env == Env::InWorld,
-                self.alpha as f32 / 100.0,
-                self.scale,
-            );
+        let mut log_anim = approach_rate(&mut self.log.scroll_shown, self.log.scroll, 0.5, 0.4);
+        let thumb_lit = self.log.drag.is_some()
+            || matches!(self.log.hover, Some(LogHit::Thumb | LogHit::Track))
+            || self
+                .log
+                .thumb_seen
+                .is_some_and(|t| t.elapsed().as_millis() < THUMB_HOLD_MS);
+        log_anim |= approach(
+            &mut self.log.thumb_t,
+            if thumb_lit { 1.0 } else { 0.0 },
+            0.01,
+        );
+        log_anim |= self.log.slide_at.is_some() && timed(self.log.slide_at, SLIDE_MS) < 1.0;
+        let fade = timed(self.log.opened_at, FADE_MS);
+        self.log.alpha =
+            (crate::hud::render::ease_out_cubic(fade) * self.alpha_byte() as f32) as u8;
+        log_anim |= fade < 1.0;
+        log_anim |= log_tip_pending;
+        let log_tip = self.log_tip();
+        let log_tip_changed = log_tip != self.last_log_tip;
+        self.last_log_tip = log_tip;
+        let redraw_log = changed || log_anim || rotated || log_tip_changed || env_changed;
+        if redraw_log {
+            self.render_log();
         }
-        let want: u32 = if anim || log_anim { ANIM_MS } else { 1000 };
-        let timer_ms = (want != self.timer_ms).then_some(want);
-        self.timer_ms = want;
-        Tick {
-            redraw,
-            redraw_log,
-            timer_ms,
-            quit: update::restart_pending(),
-        }
+        (log_anim, redraw_log)
     }
 
     pub fn nudge_timer(&mut self) {
