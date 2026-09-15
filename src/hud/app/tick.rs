@@ -92,7 +92,7 @@ impl App {
         let redraw = tip_changed
             || self.gs.changed
             || anim
-            || (env == Env::InWorld && self.gs.boss.is_some())
+            || (env == Env::InWorld && self.gs.live_run().is_some())
             || services_changed
             || env_changed
             || dead != self.was_dead;

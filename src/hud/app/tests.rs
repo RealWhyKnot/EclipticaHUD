@@ -427,6 +427,25 @@ fn timer_settles_after_animation() {
 }
 
 #[test]
+fn live_run_redraws_every_tick() {
+    fn settled(app: &mut App) -> Tick {
+        for _ in 0..200 {
+            if app.tick().timer_ms.is_none() && app.timer_ms == 1000 {
+                return app.tick();
+            }
+        }
+        panic!("animation never settled");
+    }
+    let mut app = headless();
+    app.gs.feed(&format!("{P}{STAGE_A}"));
+    assert!(settled(&mut app).redraw);
+    app.gs.feed(&format!("{P}ECLIPTICA - now in intermission"));
+    assert!(settled(&mut app).redraw);
+    app.gs.feed(&format!("{P}ECLIPTICA - now in lobby"));
+    assert!(!settled(&mut app).redraw);
+}
+
+#[test]
 fn tooltip_after_hover_delay() {
     let mut app = headless();
     app.tick();
