@@ -44,7 +44,7 @@ fn kill_echo_chain_outlives_window() {
 }
 
 #[test]
-fn jim_kill_then_lobby_is_a_win() {
+fn jim_ending_stays_unlabelled() {
     let mut gs = GameState::default();
     feed_at(&mut gs, "09:10:01", HALL);
     feed_at(
@@ -58,9 +58,9 @@ fn jim_kill_then_lobby_is_a_win() {
         "ECLIPTICA - now fighting boss: JimBringerPhase2(Clone) on phase: 1",
     );
     kill_at(&mut gs, "09:16:00", "JimBringerPhase2", 900);
-    feed_at(&mut gs, "09:16:01", LOBBY);
-    assert!(gs.runs[0].won);
-    assert!(!gs.runs[0].lost);
+    feed_at(&mut gs, "09:16:00", LOBBY);
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Lobby));
+    assert!(!gs.runs[0].fights[1].lost);
     let mut gs = GameState::default();
     feed_at(&mut gs, "09:10:01", HALL);
     feed_at(
@@ -69,8 +69,8 @@ fn jim_kill_then_lobby_is_a_win() {
         "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
     );
     kill_at(&mut gs, "09:16:00", "Nan", 900);
-    feed_at(&mut gs, "09:16:01", LOBBY);
-    assert!(!gs.runs[0].won);
+    feed_at(&mut gs, "09:16:00", LOBBY);
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Lost));
 }
 
 #[test]

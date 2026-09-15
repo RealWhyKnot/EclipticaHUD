@@ -16,7 +16,6 @@ pub enum Mode {
 }
 
 pub const DEFAULT_WINDOW: u64 = 10;
-const WAVE_IDLE_SECS: u64 = 20;
 
 #[derive(Default)]
 pub struct GameState {
@@ -47,12 +46,14 @@ pub struct GameState {
     pub tokens_got: u32,
     last_save: Option<u64>,
     stage_boss_seen: bool,
-    wave_last_activity: u64,
+    alive: HashSet<u32>,
+    clear_ts: Option<u64>,
+    last_clear: Option<u64>,
+    pub token_alerts: u64,
     pub location: Option<String>,
     pub world: Option<String>,
     pub window: u64,
     pub stage_stats: StageStats,
-    last_death: Option<u64>,
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
     dead_seen: Option<(String, u64)>,
@@ -96,16 +97,33 @@ impl GameState {
         self.mode == Mode::Stage && self.boss.is_none() && self.stage_stats.start_ts != 0
     }
 
+    pub fn stage_clear(&self) -> Option<u64> {
+        self.clear_ts.filter(|_| self.pre_boss())
+    }
+
+    fn stage_end(&self, now: u64) -> u64 {
+        self.stage_clear().unwrap_or(now)
+    }
+
+    pub fn stage_secs(&self, now: u64) -> u64 {
+        self.stage_end(now)
+            .saturating_sub(self.stage_stats.start_ts)
+    }
+
     pub fn stage_dps(&self, now: u64) -> u64 {
-        per_sec(self.stage_stats.dmg, self.stage_stats.start_ts, now)
+        per_sec(
+            self.stage_stats.dmg,
+            self.stage_stats.start_ts,
+            self.stage_end(now),
+        )
     }
 
     pub fn stage_taken_rate(&self, now: u64) -> u64 {
-        per_sec(self.stage_stats.taken, self.stage_stats.start_ts, now)
-    }
-
-    pub fn wave_idle(&self, now: u64) -> bool {
-        self.pre_boss() && now.saturating_sub(self.wave_last_activity) >= WAVE_IDLE_SECS
+        per_sec(
+            self.stage_stats.taken,
+            self.stage_stats.start_ts,
+            self.stage_end(now),
+        )
     }
 
     pub fn tokens_missing(&self) -> Option<(u32, u32)> {

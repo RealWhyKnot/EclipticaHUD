@@ -1,13 +1,12 @@
 use super::{GameState, Mode};
 use crate::game::event::Event;
 use crate::game::run::{
-    base_name, continues, phase_num, tally, BossFight, KillSummary, StageStats, TakenEntry,
+    base_name, continues, phase_num, tally, BossFight, KillSummary, RunEnd, StageStats, TakenEntry,
     TargetEntry, KILL_DEDUPE_SECS,
 };
 use crate::game::source::describe_source;
 
 const DEATH_HOLD: u64 = 3;
-const WIPE_SECS: u64 = 3;
 const LOG_CAP: usize = 500;
 const BOSS_SAVE_LEAD: u64 = 8;
 
@@ -39,7 +38,7 @@ impl GameState {
             } => self.stage(ts, name, progress, class),
             Event::Intermission => self.intermission(ts),
             Event::Lobby => {
-                self.end_run(ts);
+                self.end_run(ts, RunEnd::Lobby);
                 self.mode = Mode::Lobby;
             }
             Event::RoomLeft => self.leave_world(ts),
@@ -60,7 +59,8 @@ impl GameState {
                 }
             }
             Event::RoomJoin(location) => self.location = Some(location),
-            Event::EnemyActivity => self.touch_wave(ts),
+            Event::EnemySpawn(id) => self.enemy_spawn(id),
+            Event::EnemyRetire(id) => self.enemy_retire(ts, id),
             Event::PlayerDead => self.player_dead(ts),
         }
     }
@@ -87,7 +87,7 @@ impl GameState {
         if self.boss.as_deref() == Some(&name) || echo {
             return;
         }
-        self.close_stage(ts);
+        self.close_stage(self.last_clear.unwrap_or(ts));
         self.boss = Some(name.clone());
         if !self.stage_boss_seen {
             self.stage_boss_seen = true;
@@ -143,7 +143,6 @@ impl GameState {
     }
 
     fn dealt(&mut self, ts: u64, n: u64) {
-        self.touch_wave(ts);
         self.hits.push_back((ts, n));
         if self.boss.is_some() {
             self.fight_dmg += n;
@@ -156,7 +155,6 @@ impl GameState {
     }
 
     fn damage_taken(&mut self, ts: u64, amount: u64, source: String) {
-        self.touch_wave(ts);
         self.taken_hits.push_back((ts, amount));
         if self.pre_boss() {
             let s = &mut self.stage_stats;
@@ -189,7 +187,6 @@ impl GameState {
     }
 
     fn ownership(&mut self, ts: u64, object: String, player: String) {
-        self.touch_wave(ts);
         if !self.bosses.contains(&object) {
             return;
         }
@@ -209,7 +206,6 @@ impl GameState {
 
     fn stage(&mut self, ts: u64, name: String, progress: f32, class: String) {
         self.mode = Mode::Stage;
-        self.wave_last_activity = ts;
         if !self.pending_tokens.is_empty() {
             self.level_tokens = std::mem::take(&mut self.pending_tokens);
             self.reset_stage_tokens();
@@ -251,7 +247,6 @@ impl GameState {
     }
 
     fn player_dead(&mut self, ts: u64) {
-        self.last_death = Some(ts);
         if ts >= self.dead_until {
             if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
                 r.deaths += 1;
@@ -300,32 +295,34 @@ impl GameState {
     }
 
     fn close_stage(&mut self, ts: u64) {
+        let end = self.clear_ts.take().unwrap_or(ts);
+        self.last_clear = None;
+        self.alive.clear();
         if self.stage_stats.start_ts == 0 {
             return;
         }
         let mut done = std::mem::take(&mut self.stage_stats);
-        done.end_ts = Some(ts);
+        done.end_ts = Some(end);
         if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
             r.stages.push(done);
         }
     }
 
-    fn end_run(&mut self, ts: u64) {
+    fn end_run(&mut self, ts: u64, how: RunEnd) {
+        let in_fight = self.mode == Mode::Stage && self.stage_boss_seen;
         self.close_stage(ts);
-        let wiped = self
-            .last_death
-            .is_some_and(|d| ts.saturating_sub(d) <= WIPE_SECS);
         if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
+            let mut end = how;
             if let Some(f) = r.fights.last_mut() {
-                let recent = f.end_ts.is_none_or(|e| ts.saturating_sub(e) <= WIPE_SECS);
+                let running = f.end_ts.is_none_or(|e| e == ts);
                 f.end_ts.get_or_insert(ts);
-                f.lost = wiped && recent;
+                if how == RunEnd::Lobby && in_fight && running && base_name(&f.name) != "JimBringer"
+                {
+                    f.lost = true;
+                    end = RunEnd::Lost;
+                }
             }
-            r.won = !wiped
-                && r.fights
-                    .last()
-                    .is_some_and(|f| base_name(&f.name) == "JimBringer" && f.kill.is_some());
-            r.lost = wiped;
+            r.end = Some(end);
             r.end_ts = Some(ts);
             r.hits = std::mem::take(&mut self.taken);
             r.targets = std::mem::take(&mut self.history);
@@ -335,7 +332,6 @@ impl GameState {
         self.target = None;
         self.pending_kill = None;
         self.dead_until = 0;
-        self.last_death = None;
         self.fight_start = 0;
         self.fight_dmg = 0;
         self.fight_taken = 0;
@@ -358,7 +354,7 @@ impl GameState {
     }
 
     fn leave_world(&mut self, ts: u64) {
-        self.end_run(ts);
+        self.end_run(ts, RunEnd::Left);
         self.mode = Mode::Idle;
         self.location = None;
         self.world = None;
@@ -369,9 +365,20 @@ impl GameState {
         self.changed = true;
     }
 
-    fn touch_wave(&mut self, ts: u64) {
-        if self.mode == Mode::Stage {
-            self.wave_last_activity = ts;
+    fn enemy_spawn(&mut self, id: u32) {
+        if self.pre_boss() {
+            self.alive.insert(id);
+            self.clear_ts = None;
+        }
+    }
+
+    fn enemy_retire(&mut self, ts: u64, id: u32) {
+        if self.pre_boss() && self.alive.remove(&id) && self.alive.is_empty() {
+            self.clear_ts = Some(ts);
+            self.last_clear = Some(ts);
+            if self.tokens_missing().is_some() {
+                self.token_alerts += 1;
+            }
         }
     }
 

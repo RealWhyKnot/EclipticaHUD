@@ -28,7 +28,7 @@ fn death_clusters_count_once() {
     assert!(gs.deaths_log[0].1 < gs.deaths_log[1].1);
     assert!(gs.runs[0].fights.last().filter(|f| f.lost).is_none());
     feed_at(&mut gs, "08:25:57", "ECLIPTICA - now in lobby");
-    assert!(gs.runs[0].lost);
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Lost));
     assert_eq!(
         gs.runs[0]
             .fights
@@ -59,7 +59,7 @@ fn wipe_with_kill_triple_marks_run_lost() {
     feed_at(&mut gs, "05:46:08", LOBBY);
     kill_at(&mut gs, "05:46:08", "MephielPhase2", 0);
     let run = &gs.runs[0];
-    assert!(run.lost);
+    assert_eq!(run.end, Some(RunEnd::Lost));
     assert_eq!(run.end_ts, run.fights[0].end_ts);
     assert_eq!(run.fights[0].kill, Some((5113, 0)));
     assert!(run.fights[0].lost);
@@ -78,24 +78,24 @@ fn wipe_with_kill_triple_marks_run_lost() {
 }
 
 #[test]
-fn kill_long_after_death_is_a_win() {
+fn lobby_in_the_kill_second_is_a_loss_without_death_lines() {
     let mut gs = GameState::default();
-    feed_at(&mut gs, "04:00:00", HALL);
+    feed_at(&mut gs, "16:58:12", HALL);
     feed_at(
         &mut gs,
-        "04:05:00",
-        "ECLIPTICA - now fighting boss: Melon(Clone) on phase: 0.9",
+        "17:02:18",
+        "ECLIPTICA - now fighting boss: Pandora(Clone) on phase: 0.9276195",
     );
-    feed_at(&mut gs, "04:06:00", DEAD);
-    kill_at(&mut gs, "04:21:15", "Melon", 8738);
-    feed_at(&mut gs, "04:21:15", LOBBY);
-    assert!(!gs.runs[0].lost);
-    assert!(gs.runs[0].fights.last().filter(|f| f.lost).is_none());
-    assert_eq!(gs.runs[0].fights[0].kill, Some((8738, 0)));
+    kill_at(&mut gs, "17:06:44", "Pandora", 16582);
+    feed_at(&mut gs, "17:06:44", LOBBY);
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Lost));
+    assert!(gs.runs[0].fights[0].lost);
+    assert_eq!(gs.runs[0].fights[0].kill, Some((16582, 0)));
+    assert_eq!(gs.runs[0].group(0).unwrap().result(), "lost");
 }
 
 #[test]
-fn death_after_boss_kill_loses_run_not_fight() {
+fn lobby_from_intermission_is_not_a_loss() {
     let mut gs = GameState::default();
     feed_at(&mut gs, "04:00:00", HALL);
     feed_at(
@@ -107,7 +107,6 @@ fn death_after_boss_kill_loses_run_not_fight() {
     feed_at(&mut gs, "04:08:05", "ECLIPTICA - now in intermission");
     feed_at(&mut gs, "04:12:00", DEAD);
     feed_at(&mut gs, "04:12:01", LOBBY);
-    assert!(gs.runs[0].lost);
-    assert!(gs.runs[0].fights.last().filter(|f| f.lost).is_none());
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Lobby));
     assert!(!gs.runs[0].fights[0].lost);
 }

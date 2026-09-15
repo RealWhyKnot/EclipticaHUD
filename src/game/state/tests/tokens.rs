@@ -102,3 +102,43 @@ fn token_left_long_before_boss_is_kept() {
     );
     assert_eq!(gs.tokens_shown(), Some((1, 3)));
 }
+
+#[test]
+fn alert_when_enemies_clear_with_tokens_missing() {
+    let mut gs = GameState::default();
+    spawn_level(&mut gs, "01:09:15", HALL);
+    for id in 0..20 {
+        feed_at(&mut gs, "01:09:15", &format!("Retiring Enemy POOL ID{id}"));
+    }
+    let pool = [
+        ("01:09:24", "Initializing Enemy POOL ID0 as ENEMY ID 1"),
+        ("01:09:47", "Initializing Enemy POOL ID1 as ENEMY ID 0"),
+        ("01:09:51", "Retiring Enemy POOL ID0"),
+        ("01:09:51", "Initializing Enemy POOL ID0 as ENEMY ID 0"),
+        ("01:09:59", "Initializing Enemy POOL ID2 as ENEMY ID 2"),
+        ("01:10:05", "Retiring Enemy POOL ID0"),
+        ("01:10:11", "Initializing Enemy POOL ID0 as ENEMY ID 0"),
+        ("01:10:13", "Retiring Enemy POOL ID1"),
+        ("01:10:29", "Retiring Enemy POOL ID0"),
+    ];
+    for (t, line) in pool {
+        feed_at(&mut gs, t, line);
+    }
+    assert_eq!(gs.token_alerts, 0);
+    assert_eq!(gs.stage_clear(), None);
+    let clear = feed_at(&mut gs, "01:10:34", "Retiring Enemy POOL ID2");
+    assert_eq!(gs.stage_clear(), Some(clear));
+    assert_eq!(gs.stage_secs(clear + 600), 79);
+    assert_eq!(gs.token_alerts, 1);
+    for t in ["01:10:35", "01:10:40", "01:10:52"] {
+        feed_at(&mut gs, t, SAVE);
+    }
+    assert_eq!(gs.tokens_missing(), None);
+    feed_at(
+        &mut gs,
+        "01:11:00",
+        "Initializing Enemy POOL ID5 as ENEMY ID 0",
+    );
+    feed_at(&mut gs, "01:11:05", "Retiring Enemy POOL ID5");
+    assert_eq!(gs.token_alerts, 1);
+}

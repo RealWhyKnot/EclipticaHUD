@@ -342,40 +342,42 @@ fn killed_boss_moves_to_previous_page() {
 }
 
 #[test]
-fn token_warning_once_per_quiet_stage() {
+fn token_warning_when_enemies_clear_with_tokens_missing() {
     let mut app = headless();
-    for _ in 0..3 {
-        app.gs.feed(&format!("{P}spawn token, False, 0"));
-    }
-    let t = app.gs.feed(&format!("{P}{STAGE_A}")).unwrap();
-    app.gs.feed(&format!("{P}ECLIPTICA saving SESSION ID 2505"));
-    app.last_ts = t + 10;
+    let feed = |app: &mut App, msg: &str| app.gs.feed(&format!("{P}{msg}"));
+    let spawn_stage = |app: &mut App, stage: &str| {
+        for _ in 0..3 {
+            feed(app, "spawn token, False, 0");
+        }
+        feed(app, stage);
+    };
+    spawn_stage(&mut app, STAGE_B);
+    feed(&mut app, "Initializing Enemy POOL ID0 as ENEMY ID 1");
+    feed(&mut app, "Retiring Enemy POOL ID0");
     app.tick();
     assert!(app.warn_at.is_none());
-    app.last_ts = t + 20;
+    spawn_stage(&mut app, STAGE_A);
+    feed(&mut app, "ECLIPTICA saving SESSION ID 2505");
+    feed(&mut app, "Initializing Enemy POOL ID0 as ENEMY ID 1");
+    app.tick();
+    assert!(app.warn_at.is_none());
+    feed(&mut app, "Retiring Enemy POOL ID0");
     let tick = app.tick();
     assert!(app.warn_at.is_some());
     assert_eq!(tick.timer_ms, Some(ANIM_MS));
     app.warn_at = None;
-    app.last_ts = t + 40;
     app.tick();
     assert!(app.warn_at.is_none());
-    const P2: &str = "2026.09.07 09:20:00 Debug      -  ";
-    app.gs.feed(&format!("{P2}ECLIPTICA - now in intermission"));
-    for _ in 0..3 {
-        app.gs.feed(&format!("{P2}spawn token, False, 0"));
-    }
-    let t = app.gs.feed(&format!("{P2}{STAGE_B}")).unwrap();
-    app.last_ts = t + 20;
+    feed(&mut app, "Initializing Enemy POOL ID3 as ENEMY ID 1");
+    feed(&mut app, "Retiring Enemy POOL ID3");
     app.tick();
     assert!(app.warn_at.is_some());
     app.warn_at = None;
-    for _ in 0..3 {
-        app.gs
-            .feed(&format!("{P2}ECLIPTICA saving SESSION ID 2505"));
+    feed(&mut app, "Initializing Enemy POOL ID3 as ENEMY ID 1");
+    for _ in 0..2 {
+        feed(&mut app, "ECLIPTICA saving SESSION ID 2505");
     }
-    app.warned_stage = 0;
-    app.last_ts = t + 60;
+    feed(&mut app, "Retiring Enemy POOL ID3");
     app.tick();
     assert!(app.warn_at.is_none());
 }

@@ -25,7 +25,8 @@ pub enum Event {
         progress: f32,
         class: String,
     },
-    EnemyActivity,
+    EnemySpawn(u32),
+    EnemyRetire(u32),
     Intermission,
     Lobby,
     RoomLeft,
@@ -50,7 +51,8 @@ impl Event {
             Event::DamageTaken { .. } => "damage_taken",
             Event::Ownership { .. } => "ownership",
             Event::Stage { .. } => "stage",
-            Event::EnemyActivity => "enemy_activity",
+            Event::EnemySpawn(_) => "enemy_spawn",
+            Event::EnemyRetire(_) => "enemy_retire",
             Event::Intermission => "intermission",
             Event::Lobby => "lobby",
             Event::RoomLeft => "room_left",
@@ -197,11 +199,12 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
     if let Some(rest) = msg.strip_prefix("NON-STRIKE DMG: ") {
         return Some(Event::NonStrikeTotal(rest.trim().parse().ok()?));
     }
-    if msg.starts_with("Initializing Enemy POOL ID")
-        || msg.starts_with("Retiring Enemy POOL ID")
-        || msg.starts_with("Backup Active, swapping")
-    {
-        return Some(Event::EnemyActivity);
+    if let Some(rest) = msg.strip_prefix("Initializing Enemy POOL ID") {
+        let (id, _) = rest.split_once(" as ENEMY ID ")?;
+        return Some(Event::EnemySpawn(id.parse().ok()?));
+    }
+    if let Some(rest) = msg.strip_prefix("Retiring Enemy POOL ID") {
+        return Some(Event::EnemyRetire(rest.trim().parse().ok()?));
     }
     None
 }
@@ -400,14 +403,20 @@ mod tests {
     }
 
     #[test]
-    fn enemy_activity() {
-        for line in [
-            "Retiring Enemy POOL ID19",
-            "Initializing Enemy POOL ID0 as ENEMY ID 45",
-            "Backup Active, swapping...",
-        ] {
-            assert_eq!(parse_msg(line), Some(Event::EnemyActivity), "{line}");
-        }
+    fn enemy_pool() {
+        assert_eq!(
+            parse_msg("Retiring Enemy POOL ID19"),
+            Some(Event::EnemyRetire(19))
+        );
+        assert_eq!(
+            parse_msg("Initializing Enemy POOL ID0 as ENEMY ID 45"),
+            Some(Event::EnemySpawn(0))
+        );
+        assert_eq!(
+            parse_msg("Initializing Enemy POOL IDx as ENEMY ID 45"),
+            None
+        );
+        assert_eq!(parse_msg("Backup Active, swapping..."), None);
         assert_eq!(parse_msg("No backup active, creating new."), None);
     }
 

@@ -25,7 +25,7 @@ fn run_lifecycle() {
     feed_at(&mut gs, "08:20:10", "NON-STRIKE DMG: 55");
     feed_at(&mut gs, "08:20:49", "ECLIPTICA - now in lobby");
     let run = &gs.runs[0];
-    assert!(run.end_ts.is_some());
+    assert_eq!(run.end, Some(RunEnd::Lobby));
     assert!(run.fights.last().filter(|f| f.lost).is_none());
     assert_eq!(run.stage, "Hall of Beginnings");
     assert_eq!(run.class, "Spellhammer");
@@ -165,7 +165,7 @@ fn other_world_and_quit_end_the_run() {
     feed_at(&mut gs, "13:26:04", "[Behaviour] OnLeftRoom");
     assert!(!gs.in_ecliptica());
     assert!(gs.runs[0].end_ts.is_some());
-    assert!(!gs.runs[0].lost);
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Left));
     feed_at(&mut gs, "13:26:05", "[Behaviour] Entering Room: Sky Dream");
     assert!(!gs.in_ecliptica());
     assert_eq!(gs.mode, Mode::Idle);

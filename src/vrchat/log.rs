@@ -41,6 +41,17 @@ pub fn open_shared(path: &Path) -> std::io::Result<File> {
         .open(path)
 }
 
+pub fn read_lines(path: &Path, mut f: impl FnMut(&str)) -> std::io::Result<()> {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(open_shared(path)?);
+    let mut raw = Vec::new();
+    while reader.read_until(b'\n', &mut raw)? > 0 {
+        f(String::from_utf8_lossy(&raw).trim_end_matches(['\r', '\n']));
+        raw.clear();
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub struct LogWatch {
     dir: Option<PathBuf>,

@@ -30,62 +30,57 @@ fn stage_counter() {
 }
 
 #[test]
-fn wave_idle_after_twenty_quiet_seconds() {
+fn enemy_pool_clear_stops_the_stage_clock() {
     let mut gs = GameState::default();
     spawn_level(&mut gs, "14:13:32", HALL);
-    let t = feed_at(
+    let start = gs.stage_stats.start_ts;
+    feed_at(&mut gs, "14:13:32", "Retiring Enemy POOL ID4");
+    assert_eq!(gs.stage_clear(), None);
+    feed_at(
         &mut gs,
         "14:13:40",
         "Initializing Enemy POOL ID1 as ENEMY ID 8",
     );
-    assert!(!gs.wave_idle(t + 19));
-    assert!(gs.wave_idle(t + 20));
-    feed_at(&mut gs, "14:13:45", SAVE);
-    assert_eq!(gs.tokens_missing(), Some((1, 3)));
-    let t = feed_at(&mut gs, "14:14:10", "Dealing 40 NON-STRIKE damage");
-    assert_eq!(gs.stage_stats.dmg, 40);
-    assert!(!gs.wave_idle(t + 19));
-    assert!(gs.wave_idle(t + 20));
-    let t = feed_at(
+    feed_at(
         &mut gs,
-        "14:14:40",
-        "damage has been taken: 7, from source: machinegunShooter1",
+        "14:13:50",
+        "Initializing Enemy POOL ID2 as ENEMY ID 8",
     );
-    assert!(!gs.wave_idle(t + 19));
-    let t = feed_at(
+    feed_at(&mut gs, "14:14:10", "Dealing 580 NON-STRIKE damage");
+    feed_at(&mut gs, "14:14:20", "Retiring Enemy POOL ID1");
+    assert_eq!(gs.stage_clear(), None);
+    assert_eq!(gs.stage_secs(start + 50), 50);
+    let clear = feed_at(&mut gs, "14:14:30", "Retiring Enemy POOL ID2");
+    assert_eq!(gs.stage_clear(), Some(clear));
+    assert_eq!(gs.stage_secs(clear + 100), 58);
+    assert_eq!(gs.stage_dps(clear + 100), 10);
+    feed_at(&mut gs, "14:14:40", "Retiring Enemy POOL ID2");
+    assert_eq!(gs.stage_clear(), Some(clear));
+    feed_at(
         &mut gs,
-        "14:14:50",
-        "ownership of Crab transferred to WhyKnot",
+        "14:14:45",
+        "Initializing Enemy POOL ID0 as ENEMY ID 3",
     );
-    assert!(!gs.wave_idle(t + 19));
-    assert!(gs.wave_idle(t + 20));
-    feed_at(&mut gs, "14:15:20", SAVE);
-    feed_at(&mut gs, "14:15:21", SAVE);
-    assert_eq!(gs.tokens_missing(), None);
-    assert_eq!(gs.tokens_shown(), Some((3, 3)));
-    let t = feed_at(
+    assert_eq!(gs.stage_clear(), None);
+    assert_eq!(gs.stage_secs(start + 80), 80);
+    let clear = feed_at(&mut gs, "14:14:52", "Retiring Enemy POOL ID0");
+    assert_eq!(gs.stage_secs(clear + 30), 80);
+    feed_at(
+        &mut gs,
+        "14:16:25",
+        "Initializing Enemy POOL ID0 as ENEMY ID 47",
+    );
+    assert_eq!(gs.stage_clear(), None);
+    feed_at(
         &mut gs,
         "14:16:26",
         "ECLIPTICA - now fighting boss: NX-Obsidian(Clone) on phase: 0.34",
     );
-    assert!(!gs.wave_idle(t + 60));
-    feed_at(&mut gs, "14:16:30", "Dealing 25 NON-STRIKE damage");
-    feed_at(&mut gs, "14:16:31", "Dealing 30 STRIKE damage");
-    assert_eq!(gs.fight_dmg, 55);
-    assert_eq!(gs.runs[0].fights[0].dmg, 55);
-    kill_at(&mut gs, "14:18:26", "NX-Obsidian", 6625);
-    assert!(!gs.wave_idle(t + 180));
-    feed_at(&mut gs, "14:18:35", "ECLIPTICA - now in intermission");
-    assert!(!gs.wave_idle(t + 200));
-    spawn_level(
-        &mut gs,
-        "14:20:00",
-        "ECLIPTICA - now in stage: Stage_ProtoColony on phase: 0.4 as class: Spellhammer",
-    );
-    let t = gs.stage_stats.start_ts;
-    assert_eq!(gs.tokens_missing(), Some((0, 3)));
-    assert!(!gs.wave_idle(t + 19));
-    assert!(gs.wave_idle(t + 20));
+    assert_eq!(gs.stage_clear(), None);
+    assert_eq!(gs.runs[0].stages[0].end_ts, Some(clear));
+    feed_at(&mut gs, "14:16:30", "Retiring Enemy POOL ID0");
+    assert_eq!(gs.stage_clear(), None);
+    assert_eq!(gs.token_alerts, 2);
 }
 
 #[test]

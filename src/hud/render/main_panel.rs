@@ -7,7 +7,7 @@ use super::Renderer;
 use crate::discord::Link;
 use crate::game::event::fmt_clock;
 use crate::game::names::{boss_name, phase_name, stage_name};
-use crate::game::run::{base_name, merge_tallies, phase_num, BossFight, Run, Tally};
+use crate::game::run::{base_name, merge_tallies, phase_num, FightGroup, Run, RunEnd, Tally};
 use crate::game::source::describe_source;
 use crate::game::state::{GameState, Mode};
 use crate::update::{Badge, VERSION};
@@ -139,48 +139,12 @@ impl LiveTaken {
     }
 }
 
-struct HistView<'a> {
-    fights: &'a [BossFight],
-    name: &'a str,
-    start: u64,
-    dmg: u64,
-    taken: u64,
-    hits: u32,
-    kill: Option<(u64, u64)>,
-    last: &'a BossFight,
-    n_phases: usize,
-}
-
-impl<'a> HistView<'a> {
-    fn of(f: &Frame, gs: &'a GameState) -> Option<Self> {
-        let run = &gs.runs[f.view_run?];
-        let group = run.groups().get(f.view_group?)?.clone();
-        let fights = &run.fights[group];
-        let last = &fights[fights.len() - 1];
-        Some(HistView {
-            fights,
-            name: base_name(&last.name),
-            start: fights[0].start_ts,
-            dmg: fights.iter().map(|p| p.dmg).sum(),
-            taken: fights.iter().map(|p| p.taken).sum(),
-            hits: fights.iter().map(|p| p.hits).sum(),
-            kill: fights
-                .iter()
-                .filter_map(|p| p.kill)
-                .reduce(|a, b| (a.0 + b.0, a.1 + b.1)),
-            last,
-            n_phases: fights.len(),
-        })
-    }
-
-    fn duration(&self, now: u64) -> u64 {
-        self.last.end_ts.unwrap_or(now).saturating_sub(self.start)
-    }
-}
-
 impl Renderer {
     pub fn draw_main(&mut self, gs: &GameState, f: &Frame) {
-        let hist = HistView::of(f, gs);
+        let hist = f
+            .view_run
+            .zip(f.view_group)
+            .and_then(|(r, g)| gs.runs[r].group(g));
         self.fill(0, 0, LOGICAL_W, LOGICAL_H, BG);
         self.draw_titlebar(f);
         self.draw_status(f, gs);
@@ -335,12 +299,11 @@ impl Renderer {
             }
             Some(i) => {
                 let r = &gs.runs[i];
-                let (tag, color) = if r.lost {
-                    ("LOST", DANGER)
-                } else if r.won {
-                    ("WON", GOOD)
-                } else {
-                    ("RUN", TEXT)
+                let (tag, color) = match r.end {
+                    Some(RunEnd::Lost) => ("LOST", DANGER),
+                    Some(RunEnd::Lobby) => ("ENDED", TEXT),
+                    Some(RunEnd::Left) => ("LEFT", TEXT),
+                    None => ("RUN", TEXT),
                 };
                 let mut s = format!(
                     "{} {}/{}   {}   {}",
@@ -371,7 +334,7 @@ impl Renderer {
         );
     }
 
-    fn draw_boss_card(&self, f: &Frame, gs: &GameState, hist: Option<&HistView>) {
+    fn draw_boss_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
         let now = f.now;
         self.rround(M, 82, W, 96, 8, CARD);
         let card_label = if f.live() && !f.empty() && gs.pre_boss() {
@@ -406,7 +369,7 @@ impl Renderer {
             self.text_rect(266, 86, 42, 20, F_TINY, DIM, DT_CENTER | DT_VCENTER, &idx);
         }
         if !f.live() {
-            return self.draw_boss_history(f, hist);
+            return self.draw_boss_history(f, f.view_run.map(|i| &gs.runs[i]), hist);
         }
         match (gs.boss.as_ref().filter(|_| !f.empty()), &gs.target) {
             (Some(boss), target) => {
@@ -458,7 +421,7 @@ impl Renderer {
                     stage_name(&gs.stage),
                 );
                 self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "CLEARING");
-                let since = fmt_dur(now.saturating_sub(gs.stage_stats.start_ts));
+                let since = fmt_dur(gs.stage_secs(now));
                 self.text(M + 12, 128, W - 24, F_BOSS, AMBER, DT_LEFT, &since);
                 if let Some((got, total)) = gs.tokens_shown() {
                     self.text_rect(
@@ -507,9 +470,30 @@ impl Renderer {
         }
     }
 
-    fn draw_boss_history(&self, f: &Frame, hist: Option<&HistView>) {
+    fn draw_boss_history(&self, f: &Frame, run: Option<&Run>, hist: Option<&FightGroup>) {
         let Some(h) = hist else {
-            return self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss fights");
+            let Some(r) = run else {
+                return self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss fights");
+            };
+            self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, stage_name(&r.stage));
+            self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "RESULT");
+            let res = match r.end {
+                Some(RunEnd::Left) => "left before a boss",
+                Some(_) => "lobby before a boss",
+                None => "no boss yet",
+            };
+            self.text(M + 12, 128, W - 24, F_BOSS, DIM, DT_LEFT, res);
+            let dur = fmt_dur(r.end_ts.unwrap_or(f.now).saturating_sub(r.start_ts));
+            return self.text_rect(
+                M + 12,
+                128,
+                W - 24,
+                22,
+                F_TINY,
+                DIM,
+                DT_RIGHT | DT_VCENTER,
+                &dur,
+            );
         };
         self.text(
             M + 60,
@@ -525,11 +509,12 @@ impl Renderer {
             let hint = format!("{} phases", h.n_phases);
             self.text(M + 12, 114, W - 24, F_TINY, DIM, DT_RIGHT, &hint);
         }
-        let (res, color) = match (h.last.kill, h.last.end_ts) {
-            _ if h.last.lost => ("lost", DANGER),
-            (Some(_), _) => ("killed", GOOD),
-            (None, Some(_)) => ("unfinished", DIM),
-            (None, None) => ("in progress", AMBER),
+        let res = h.result();
+        let color = match res {
+            "lost" => DANGER,
+            "killed" => GOOD,
+            "unfinished" => DIM,
+            _ => AMBER,
         };
         self.text(M + 12, 128, W - 24, F_BOSS, color, DT_LEFT, res);
         let deaths: u32 = h.fights.iter().map(|p| p.deaths).sum();
@@ -549,7 +534,7 @@ impl Renderer {
         );
     }
 
-    fn draw_dealt_card(&self, f: &Frame, gs: &GameState, hist: Option<&HistView>) {
+    fn draw_dealt_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
         let now = f.now;
         self.rround(M, 186, W, 92, 8, CARD);
         if f.live() {
@@ -613,7 +598,7 @@ impl Renderer {
         } else if let Some(h) = hist {
             let dur = h.duration(now);
             self.stat(192, 0, "DMG", &group_digits(h.dmg), AMBER);
-            self.stat(192, 1, "DPS", &(h.dmg / dur.max(1)).to_string(), AMBER);
+            self.stat(192, 1, "DPS", &h.dps(now).to_string(), AMBER);
             self.stat(192, 2, "TIME", &fmt_dur(dur), AMBER);
             match h.kill {
                 Some((s, ns)) => {
@@ -687,7 +672,7 @@ impl Renderer {
         }
     }
 
-    fn draw_taken_card(&self, f: &Frame, gs: &GameState, hist: Option<&HistView>) {
+    fn draw_taken_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
         let now = f.now;
         let card = mix(CARD, DANGER, 0.22 * (1.0 - ease_out_cubic(f.taken_flash_t)));
         self.rround(M, 286, W, 276, 8, card);

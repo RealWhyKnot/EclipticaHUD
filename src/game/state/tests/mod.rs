@@ -7,7 +7,7 @@ mod stage;
 mod tokens;
 
 use crate::game::event::{fmt_clock, split_line};
-use crate::game::run::{merge_tallies, Tally};
+use crate::game::run::{merge_tallies, RunEnd, Tally};
 use crate::game::state::{GameState, Mode};
 
 const P: &str = "2026.09.07 09:12:28 Debug      -  ";

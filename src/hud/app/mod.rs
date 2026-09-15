@@ -17,8 +17,7 @@ use crate::hud::render::{
 use crate::hud::timeline::Filter;
 use crate::update::Badge;
 use crate::vr::VrOverlay;
-use crate::vrchat::log::{all_logs, log_dir, open_shared, LogWatch};
-use std::io::BufRead;
+use crate::vrchat::log::{all_logs, log_dir, read_lines, LogWatch};
 use std::path::Path;
 use std::time::Instant;
 use windows_sys::Win32::Foundation::HWND;
@@ -74,7 +73,7 @@ pub struct App {
     pub settings_open: bool,
     flash_at: Option<Instant>,
     warn_at: Option<Instant>,
-    warned_stage: u64,
+    token_alerts_seen: u64,
     last_target_since: u64,
     progress_shown: f32,
     dps_peak: u64,
@@ -119,21 +118,13 @@ fn backfill(gs: &mut GameState, dir: &Path) {
         return;
     };
     for path in old {
-        let Ok(file) = open_shared(path) else {
-            continue;
-        };
-        let mut reader = std::io::BufReader::new(file);
-        let mut raw = Vec::new();
-        loop {
-            raw.clear();
-            match reader.read_until(b'\n', &mut raw) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-            let line = String::from_utf8_lossy(&raw);
-            gs.feed(line.trim_end_matches(['\r', '\n']));
+        if read_lines(path, |line| {
+            gs.feed(line);
+        })
+        .is_ok()
+        {
+            gs.log_rotated();
         }
-        gs.log_rotated();
     }
 }
 
@@ -188,7 +179,7 @@ impl App {
             settings_open: false,
             flash_at: None,
             warn_at: None,
-            warned_stage: 0,
+            token_alerts_seen: 0,
             last_target_since: 0,
             progress_shown: 0.0,
             dps_peak: 0,

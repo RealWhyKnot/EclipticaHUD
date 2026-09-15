@@ -82,7 +82,7 @@ impl App {
         let rotated = self.pump_log();
         let (env, env_changed) = self.poll_env();
         let now = self.now();
-        self.cue_effects(now);
+        self.cue_effects();
         let services_changed = self.poll_services(now);
         let anim = self.animate(env, now);
         let dead = self.dead_since.is_some();
@@ -163,7 +163,7 @@ impl App {
         (env, env_changed)
     }
 
-    fn cue_effects(&mut self, now: u64) {
+    fn cue_effects(&mut self) {
         if self.gs.target_since != self.last_target_since {
             self.last_target_since = self.gs.target_since;
             if self.gs.target.is_some() {
@@ -173,15 +173,13 @@ impl App {
                 }
             }
         }
-        let stage_key = self.gs.stage_stats.start_ts;
-        if self.warned_stage != stage_key
-            && self.gs.wave_idle(now)
-            && self.gs.tokens_missing().is_some()
-        {
-            self.warned_stage = stage_key;
-            self.warn_at = Some(Instant::now());
-            if self.sound_on {
-                play(TOKENS);
+        if self.gs.token_alerts != self.token_alerts_seen {
+            self.token_alerts_seen = self.gs.token_alerts;
+            if self.primed {
+                self.warn_at = Some(Instant::now());
+                if self.sound_on {
+                    play(TOKENS);
+                }
             }
         }
         let taken_seq = self.gs.taken.back().map_or(0, |e| e.seq);

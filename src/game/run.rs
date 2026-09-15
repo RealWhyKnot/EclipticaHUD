@@ -75,6 +75,12 @@ pub struct BossFight {
     pub lost: bool,
 }
 
+impl BossFight {
+    pub fn secs(&self, now: u64) -> u64 {
+        self.end_ts.unwrap_or(now).saturating_sub(self.start_ts)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StageStats {
     pub start_ts: u64,
@@ -87,6 +93,19 @@ pub struct StageStats {
     pub deaths: u32,
 }
 
+impl StageStats {
+    pub fn secs(&self, now: u64) -> u64 {
+        self.end_ts.unwrap_or(now).saturating_sub(self.start_ts)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RunEnd {
+    Lost,
+    Lobby,
+    Left,
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct Run {
     pub start_ts: u64,
@@ -96,8 +115,7 @@ pub struct Run {
     pub stage_no: Option<u32>,
     pub fights: Vec<BossFight>,
     pub deaths: u32,
-    pub lost: bool,
-    pub won: bool,
+    pub end: Option<RunEnd>,
     pub hits: VecDeque<TakenEntry>,
     pub targets: VecDeque<TargetEntry>,
     pub death_log: VecDeque<(u64, u64)>,
@@ -143,12 +161,30 @@ impl Run {
     }
 
     pub fn active_secs(&self, now: u64) -> u64 {
-        let span = |start: u64, end: Option<u64>| end.unwrap_or(now).saturating_sub(start);
         self.fights
             .iter()
-            .map(|f| span(f.start_ts, f.end_ts))
-            .chain(self.stages.iter().map(|s| span(s.start_ts, s.end_ts)))
+            .map(|f| f.secs(now))
+            .chain(self.stages.iter().map(|s| s.secs(now)))
             .sum()
+    }
+
+    pub fn group(&self, i: usize) -> Option<FightGroup<'_>> {
+        let fights = &self.fights[self.groups().get(i)?.clone()];
+        let last = fights.last()?;
+        Some(FightGroup {
+            fights,
+            name: base_name(&last.name),
+            start: fights[0].start_ts,
+            dmg: fights.iter().map(|p| p.dmg).sum(),
+            taken: fights.iter().map(|p| p.taken).sum(),
+            hits: fights.iter().map(|p| p.hits).sum(),
+            kill: fights
+                .iter()
+                .filter_map(|p| p.kill)
+                .reduce(|a, b| (a.0 + b.0, a.1 + b.1)),
+            last,
+            n_phases: fights.len(),
+        })
     }
 
     pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
@@ -161,6 +197,37 @@ impl Run {
             }
         }
         out
+    }
+}
+
+pub struct FightGroup<'a> {
+    pub fights: &'a [BossFight],
+    pub name: &'a str,
+    pub start: u64,
+    pub dmg: u64,
+    pub taken: u64,
+    pub hits: u32,
+    pub kill: Option<(u64, u64)>,
+    pub last: &'a BossFight,
+    pub n_phases: usize,
+}
+
+impl FightGroup<'_> {
+    pub fn duration(&self, now: u64) -> u64 {
+        self.last.end_ts.unwrap_or(now).saturating_sub(self.start)
+    }
+
+    pub fn dps(&self, now: u64) -> u64 {
+        self.dmg / self.duration(now).max(1)
+    }
+
+    pub fn result(&self) -> &'static str {
+        match (self.last.kill, self.last.end_ts) {
+            _ if self.last.lost => "lost",
+            (Some(_), _) => "killed",
+            (None, Some(_)) => "unfinished",
+            (None, None) => "in progress",
+        }
     }
 }
 

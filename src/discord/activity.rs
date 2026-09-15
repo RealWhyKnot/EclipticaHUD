@@ -203,10 +203,7 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
                     facts.push(format!("{d} deaths"));
                 }
                 if s.start_ts > 0 {
-                    facts.push(format!(
-                        "Clearing for {}m",
-                        now.saturating_sub(s.start_ts) / 60
-                    ));
+                    facts.push(format!("Clearing for {}m", gs.stage_secs(now) / 60));
                 }
                 state.push(pick(&facts, unix_now));
                 format!("{} | {}", stage_name(&gs.stage), phase_name(gs.progress))
