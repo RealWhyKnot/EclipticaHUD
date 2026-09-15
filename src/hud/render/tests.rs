@@ -491,3 +491,58 @@ fn draw_log_smoke() {
     assert_eq!(pix(&r, tx + 3, LOG_H - 12), CARD_HI);
     assert_eq!(pix(&r, bx + 1, by + 12), DANGER);
 }
+
+#[test]
+fn past_run_tags_and_no_boss_page() {
+    let feed = |gs: &mut GameState, t: &str, m: &str| {
+        gs.feed(&format!("2026.09.15 {t} Debug      -  {m}"));
+    };
+    let mut gs = GameState::default();
+    feed(
+        &mut gs,
+        "01:09:15",
+        "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Thaumaturge",
+    );
+    feed(&mut gs, "01:10:00", "Dealing 1688 STRIKE damage");
+    feed(&mut gs, "01:22:49", "[Behaviour] OnLeftRoom");
+    feed(
+        &mut gs,
+        "01:30:00",
+        "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Thaumaturge",
+    );
+    feed(
+        &mut gs,
+        "01:32:00",
+        "ECLIPTICA - now fighting boss: DarkMouth(Clone) on phase: 0",
+    );
+    feed(
+        &mut gs,
+        "01:34:00",
+        "Boss DarkMouth dead, personal damage dealt: ",
+    );
+    feed(&mut gs, "01:34:00", "STRIKE DMG: 900");
+    feed(&mut gs, "01:34:00", "NON-STRIKE DMG: 0");
+    feed(&mut gs, "01:34:00", "ECLIPTICA - now in lobby");
+    let page = |i: usize| Frame {
+        pages: 3,
+        view_page: i,
+        view_run: Some(i),
+        view_group: gs.runs[i].groups().len().checked_sub(1),
+        group_pages: gs.runs[i].groups().len(),
+        run_sel: true,
+        ..frame()
+    };
+    let ink = |r: &Renderer, color: u32, y0: i32, y1: i32| {
+        (y0..y1)
+            .flat_map(|y| (0..LOGICAL_W).map(move |x| (x, y)))
+            .filter(|&(x, y)| pix(r, x, y) == color)
+            .count()
+    };
+    let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+    r.draw_main(&gs, &page(0));
+    assert_eq!(ink(&r, DANGER, 54, 78), 0);
+    assert!(ink(&r, AMBER, 200, 240) > 0);
+    r.draw_main(&gs, &page(1));
+    assert!(ink(&r, DANGER, 54, 78) > 0);
+    assert!(ink(&r, DANGER, 128, 150) > 0);
+}

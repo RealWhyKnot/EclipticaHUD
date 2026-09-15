@@ -338,15 +338,17 @@ impl Renderer {
     fn draw_boss_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
         let now = f.now;
         self.rround(M, 82, W, 96, 8, CARD);
+        let has_fights = f.view_run.is_some_and(|i| !gs.runs[i].fights.is_empty());
         let card_label = if f.live() && !f.empty() && gs.pre_boss() {
             "STAGE"
         } else if f.live() && !f.empty() && gs.mode == Mode::Intermission {
             "RUN"
+        } else if !f.live() && !has_fights {
+            "STAGE"
         } else {
             "BOSS"
         };
         self.text(M + 12, 88, W - 24, F_LABEL, DIM, DT_LEFT, card_label);
-        let has_fights = f.view_run.is_some_and(|i| !gs.runs[i].fights.is_empty());
         if has_fights {
             self.arrow(
                 FIGHT_PREV_HIT,
@@ -604,7 +606,8 @@ impl Renderer {
             match h.kill {
                 Some((s, ns)) => {
                     let line = format!(
-                        "kill  {} strike + {} other",
+                        "{}  {} strike + {} other",
+                        if h.last.lost { "dealt" } else { "kill" },
                         group_digits(s),
                         group_digits(ns)
                     );
@@ -622,6 +625,12 @@ impl Renderer {
                     );
                 }
             }
+        } else if let Some(r) = f.view_run.map(|i| &gs.runs[i]) {
+            let active = r.active_secs(r.end_ts.unwrap_or(now));
+            self.stat(192, 0, "DMG", &group_digits(r.dmg()), AMBER);
+            self.stat(192, 1, "DPS", &(r.dmg() / active.max(1)).to_string(), AMBER);
+            self.stat(192, 2, "CLEARING", &fmt_dur(active), AMBER);
+            self.text(M + 12, 242, W - 24, F_BODY, DIM, DT_LEFT, "no boss fight");
         } else {
             self.text(M + 12, 208, W - 24, F_BODY, DIM, DT_LEFT, "no data");
         }
@@ -766,6 +775,19 @@ impl Renderer {
             self.small_stat(356, 0, "AVG HIT", &big);
             let attacks = merge_tallies(h.fights.iter().map(|f| f.attacks.as_slice()));
             self.breakdown(400, &attacks, h.taken);
+        } else if let Some(r) = f.view_run.map(|i| &gs.runs[i]) {
+            let active = r.active_secs(r.end_ts.unwrap_or(now));
+            self.stat(312, 0, "TAKEN", &group_digits(r.taken()), DANGER);
+            self.stat(312, 1, "HITS", &r.hit_count().to_string(), DANGER);
+            self.stat(
+                312,
+                2,
+                "TAKEN/S",
+                &(r.taken() / active.max(1)).to_string(),
+                DANGER,
+            );
+            self.small_stat(356, 0, "AVG HIT", &avg_hit(r.taken(), r.hit_count()));
+            self.breakdown(400, &r.attacks(), r.taken());
         } else {
             self.text(M + 12, 324, W - 24, F_BODY, DIM, DT_LEFT, "no data");
         }
