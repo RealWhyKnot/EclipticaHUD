@@ -100,6 +100,7 @@ impl StageStats {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RunEnd {
+    Won,
     Lost,
     Lobby,
     Left,
@@ -228,6 +229,10 @@ impl FightGroup<'_> {
             (None, None) => "in progress",
         }
     }
+}
+
+pub fn final_phase(name: &str) -> bool {
+    base_name(name) == "JimBringer" && phase_num(name) == 3
 }
 
 pub fn continues(prev: &BossFight, name: &str) -> bool {

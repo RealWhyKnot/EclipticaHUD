@@ -1,4 +1,4 @@
-use crate::game::event::{parse_msg, split_line};
+use crate::game::event::{parse_msg, split_line, Event};
 use crate::game::run::{
     base_name, BossFight, KillSummary, Run, StageStats, TakenEntry, Tally, TargetEntry,
 };
@@ -47,6 +47,12 @@ pub struct GameState {
     last_save: Option<u64>,
     stage_boss_seen: bool,
     alive: HashSet<u32>,
+    summon_kinds: HashSet<u32>,
+    last_spawn: Option<(u32, u32, Option<u64>)>,
+    pool_reset_seen: bool,
+    pool_known: bool,
+    last_death: Option<u64>,
+    alive_since: Option<u64>,
     clear_ts: Option<u64>,
     last_clear: Option<u64>,
     pub token_alerts: u64,
@@ -144,7 +150,14 @@ impl GameState {
     pub fn feed(&mut self, raw: &str) -> Option<u64> {
         let line = split_line(raw)?;
         self.last_ts = self.last_ts.max(line.ts);
-        if let Some(ev) = parse_msg(line.msg) {
+        let ev = parse_msg(line.msg);
+        if !matches!(ev, Some(Event::PlayerDead))
+            && self.alive_since.is_none()
+            && self.last_death.is_some_and(|d| line.ts > d)
+        {
+            self.alive_since = Some(line.ts);
+        }
+        if let Some(ev) = ev {
             self.apply(line.ts, ev);
         }
         Some(line.ts)

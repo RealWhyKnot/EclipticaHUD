@@ -32,6 +32,7 @@ fn stage_counter() {
 #[test]
 fn enemy_pool_clear_stops_the_stage_clock() {
     let mut gs = GameState::default();
+    feed_at(&mut gs, "14:13:29", RESET);
     spawn_level(&mut gs, "14:13:32", HALL);
     let start = gs.stage_stats.start_ts;
     feed_at(&mut gs, "14:13:32", "Retiring Enemy POOL ID4");
@@ -174,4 +175,115 @@ fn stage_stats_before_the_boss() {
     assert_eq!(gs.runs[0].stages.len(), 2);
     assert_eq!(gs.runs[0].stages[1].dmg, 5);
     assert_eq!(gs.stage_stats.start_ts, 0);
+}
+
+#[test]
+fn player_summons_are_not_enemies() {
+    let mut gs = GameState::default();
+    feed_at(&mut gs, "04:21:30", RESET);
+    spawn_level(&mut gs, "04:21:36", HALL);
+    let line = |gs: &mut GameState, t: &str, m: &str| {
+        feed_at(gs, t, m);
+    };
+    line(
+        &mut gs,
+        "04:23:46",
+        "Initializing Enemy POOL ID1 as ENEMY ID 2",
+    );
+    line(&mut gs, "04:23:46", "Backup Active, swapping...");
+    line(
+        &mut gs,
+        "04:23:46",
+        "[Behaviour] No targets to encode on Roboorb(Clone)",
+    );
+    line(
+        &mut gs,
+        "04:23:52",
+        "Initializing Enemy POOL ID17 as ENEMY ID 87",
+    );
+    line(&mut gs, "04:23:52", "Dealing 47 STRIKE damage");
+    line(
+        &mut gs,
+        "04:23:52",
+        "[Behaviour] No targets to encode on Neko1(Clone)",
+    );
+    let clear = feed_at(&mut gs, "04:24:07", "Retiring Enemy POOL ID1");
+    assert_eq!(gs.stage_clear(), Some(clear));
+    line(
+        &mut gs,
+        "04:24:10",
+        "Initializing Enemy POOL ID19 as ENEMY ID 87",
+    );
+    assert_eq!(gs.stage_clear(), Some(clear));
+    line(
+        &mut gs,
+        "04:24:15",
+        "Initializing Enemy POOL ID18 as ENEMY ID 88",
+    );
+    assert_eq!(gs.stage_clear(), None);
+    line(
+        &mut gs,
+        "04:24:15",
+        "[Behaviour] No targets to encode on Neko2(Clone)",
+    );
+    assert_eq!(gs.stage_clear(), Some(clear));
+    line(
+        &mut gs,
+        "04:24:19",
+        "Initializing Enemy POOL ID0 as ENEMY ID 1",
+    );
+    line(
+        &mut gs,
+        "04:24:19",
+        "[Behaviour] No targets to encode on Fly(Clone)",
+    );
+    assert_eq!(gs.stage_clear(), None);
+    let clear = feed_at(&mut gs, "04:24:40", "Retiring Enemy POOL ID0");
+    line(&mut gs, "04:25:00", "Retiring Enemy POOL ID17");
+    line(
+        &mut gs,
+        "04:25:03",
+        "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+    );
+    assert_eq!(gs.runs[0].stages[0].end_ts, Some(clear));
+}
+
+#[test]
+fn stage_without_a_pool_reset_has_no_clear() {
+    let mut gs = GameState::default();
+    feed_at(
+        &mut gs,
+        "11:49:05",
+        "[Behaviour] Entering Room: Ecliptica - Demo Playtest",
+    );
+    spawn_level(&mut gs, "11:49:20", HALL);
+    feed_at(
+        &mut gs,
+        "11:49:25",
+        "Initializing Enemy POOL ID3 as ENEMY ID 1",
+    );
+    feed_at(&mut gs, "11:49:30", "Retiring Enemy POOL ID3");
+    assert_eq!(gs.stage_clear(), None);
+    assert_eq!(gs.token_alerts, 0);
+    feed_at(
+        &mut gs,
+        "11:52:00",
+        "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+    );
+    kill_at(&mut gs, "11:54:00", "Nan", 100);
+    feed_at(&mut gs, "11:54:10", "ECLIPTICA - now in intermission");
+    feed_at(&mut gs, "11:54:13", RESET);
+    spawn_level(
+        &mut gs,
+        "11:56:00",
+        "ECLIPTICA - now in stage: Stage_GMFuncFlat on phase: 0.1 as class: Spellhammer",
+    );
+    feed_at(
+        &mut gs,
+        "11:56:05",
+        "Initializing Enemy POOL ID3 as ENEMY ID 1",
+    );
+    let clear = feed_at(&mut gs, "11:56:30", "Retiring Enemy POOL ID3");
+    assert_eq!(gs.stage_clear(), Some(clear));
+    assert_eq!(gs.token_alerts, 1);
 }

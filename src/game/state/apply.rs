@@ -1,8 +1,9 @@
 use super::{GameState, Mode};
 use crate::game::event::Event;
+use crate::game::names::player_summon;
 use crate::game::run::{
-    base_name, continues, phase_num, tally, BossFight, KillSummary, RunEnd, StageStats, TakenEntry,
-    TargetEntry,
+    base_name, continues, final_phase, phase_num, tally, BossFight, KillSummary, RunEnd,
+    StageStats, TakenEntry, TargetEntry,
 };
 use crate::game::source::describe_source;
 
@@ -58,8 +59,9 @@ impl GameState {
                 }
             }
             Event::RoomJoin(location) => self.location = Some(location),
-            Event::EnemySpawn(id) => self.enemy_spawn(id),
-            Event::EnemyRetire(id) => self.enemy_retire(ts, id),
+            Event::EnemySpawn { slot, kind } => self.enemy_spawn(slot, kind),
+            Event::EnemyRetire(slot) => self.enemy_retire(ts, slot),
+            Event::EnemyName(name) => self.enemy_name(name),
             Event::PlayerDead => self.player_dead(ts),
         }
     }
@@ -211,6 +213,7 @@ impl GameState {
         if fresh {
             self.close_stage(ts);
             self.stage_boss_seen = false;
+            self.pool_known = std::mem::take(&mut self.pool_reset_seen);
             self.stage_stats = StageStats {
                 start_ts: ts,
                 ..Default::default()
@@ -242,7 +245,12 @@ impl GameState {
     }
 
     fn player_dead(&mut self, ts: u64) {
-        if ts >= self.dead_until {
+        let new = self
+            .last_death
+            .is_none_or(|_| self.alive_since.is_some_and(|a| a < ts));
+        self.last_death = Some(ts);
+        self.alive_since = None;
+        if new {
             if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
                 r.deaths += 1;
             }
@@ -301,10 +309,11 @@ impl GameState {
             if let Some(f) = r.fights.last_mut() {
                 let running = f.end_ts.is_none_or(|e| e == ts);
                 f.end_ts.get_or_insert(ts);
-                if how == RunEnd::Lobby && in_fight && running && base_name(&f.name) != "JimBringer"
-                {
+                if how == RunEnd::Lobby && in_fight && running {
                     f.lost = true;
                     end = RunEnd::Lost;
+                } else if f.kill.is_some() && final_phase(&f.name) {
+                    end = RunEnd::Won;
                 }
             }
             r.end = Some(end);
@@ -317,6 +326,8 @@ impl GameState {
         self.target = None;
         self.pending_kill = None;
         self.dead_until = 0;
+        self.last_death = None;
+        self.alive_since = None;
         self.fight_start = 0;
         self.fight_dmg = 0;
         self.fight_taken = 0;
@@ -340,6 +351,7 @@ impl GameState {
 
     fn leave_world(&mut self, ts: u64) {
         self.end_run(ts, RunEnd::Left);
+        self.pool_reset_seen = false;
         self.mode = Mode::Idle;
         self.location = None;
         self.world = None;
@@ -350,15 +362,36 @@ impl GameState {
         self.changed = true;
     }
 
-    fn enemy_spawn(&mut self, id: u32) {
-        if self.pre_boss() {
-            self.alive.insert(id);
-            self.clear_ts = None;
+    fn enemy_spawn(&mut self, slot: u32, kind: u32) {
+        self.last_spawn = None;
+        if !self.pre_boss() || !self.pool_known || self.summon_kinds.contains(&kind) {
+            return;
+        }
+        self.alive.insert(slot);
+        self.last_spawn = Some((slot, kind, self.clear_ts.take()));
+    }
+
+    fn enemy_name(&mut self, name: String) {
+        let Some((slot, kind, before)) = self.last_spawn.take() else {
+            return;
+        };
+        if player_summon(&name) {
+            self.summon_kinds.insert(kind);
+            if self.alive.remove(&slot) && self.alive.is_empty() {
+                self.clear_ts = before;
+            }
         }
     }
 
-    fn enemy_retire(&mut self, ts: u64, id: u32) {
-        if self.pre_boss() && self.alive.remove(&id) && self.alive.is_empty() {
+    fn enemy_retire(&mut self, ts: u64, slot: u32) {
+        self.last_spawn = None;
+        if !self.pre_boss() {
+            if matches!(self.mode, Mode::Idle | Mode::Lobby | Mode::Intermission) {
+                self.pool_reset_seen = true;
+            }
+            return;
+        }
+        if self.alive.remove(&slot) && self.alive.is_empty() {
             self.clear_ts = Some(ts);
             self.last_clear = Some(ts);
             if self.tokens_missing().is_some() {

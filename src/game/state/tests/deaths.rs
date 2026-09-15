@@ -22,6 +22,7 @@ fn death_clusters_count_once() {
     assert!(gs.is_dead(last));
     assert!(gs.is_dead(last + 1));
     assert!(!gs.is_dead(last + 2));
+    feed_at(&mut gs, "08:25:50", "Dealing 30 STRIKE damage");
     feed_at(&mut gs, "08:25:55", "Local controller dead, switching off.");
     assert_eq!(gs.runs[0].deaths, 2);
     assert_eq!(gs.deaths_log.len(), 2);
@@ -109,4 +110,23 @@ fn lobby_from_intermission_is_not_a_loss() {
     feed_at(&mut gs, "04:12:01", LOBBY);
     assert_eq!(gs.runs[0].end, Some(RunEnd::Lobby));
     assert!(!gs.runs[0].fights[0].lost);
+}
+
+#[test]
+fn death_gap_needs_other_log_lines() {
+    let mut gs = GameState::default();
+    feed_at(&mut gs, "05:40:00", HALL);
+    for t in ["05:46:03", "05:46:03", "05:46:04"] {
+        feed_at(&mut gs, t, DEAD);
+    }
+    for t in ["05:46:09", "05:46:09", "05:46:10"] {
+        feed_at(&mut gs, t, DEAD);
+    }
+    assert_eq!(gs.runs[0].deaths, 1);
+    feed_at(&mut gs, "05:46:10", "Dealing 30 STRIKE damage");
+    feed_at(&mut gs, "05:46:11", DEAD);
+    assert_eq!(gs.runs[0].deaths, 1);
+    feed_at(&mut gs, "05:46:12", "Dealing 30 STRIKE damage");
+    feed_at(&mut gs, "05:46:15", DEAD);
+    assert_eq!(gs.runs[0].deaths, 2);
 }

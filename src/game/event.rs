@@ -25,8 +25,12 @@ pub enum Event {
         progress: f32,
         class: String,
     },
-    EnemySpawn(u32),
+    EnemySpawn {
+        slot: u32,
+        kind: u32,
+    },
     EnemyRetire(u32),
+    EnemyName(String),
     Intermission,
     Lobby,
     RoomLeft,
@@ -51,8 +55,9 @@ impl Event {
             Event::DamageTaken { .. } => "damage_taken",
             Event::Ownership { .. } => "ownership",
             Event::Stage { .. } => "stage",
-            Event::EnemySpawn(_) => "enemy_spawn",
+            Event::EnemySpawn { .. } => "enemy_spawn",
             Event::EnemyRetire(_) => "enemy_retire",
+            Event::EnemyName(_) => "enemy_name",
             Event::Intermission => "intermission",
             Event::Lobby => "lobby",
             Event::RoomLeft => "room_left",
@@ -200,11 +205,18 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
         return Some(Event::NonStrikeTotal(rest.trim().parse().ok()?));
     }
     if let Some(rest) = msg.strip_prefix("Initializing Enemy POOL ID") {
-        let (id, _) = rest.split_once(" as ENEMY ID ")?;
-        return Some(Event::EnemySpawn(id.parse().ok()?));
+        let (slot, kind) = rest.split_once(" as ENEMY ID ")?;
+        return Some(Event::EnemySpawn {
+            slot: slot.parse().ok()?,
+            kind: kind.trim().parse().ok()?,
+        });
     }
     if let Some(rest) = msg.strip_prefix("Retiring Enemy POOL ID") {
         return Some(Event::EnemyRetire(rest.trim().parse().ok()?));
+    }
+    if let Some(rest) = msg.strip_prefix("[Behaviour] No targets to encode on ") {
+        let name = rest.trim_end().strip_suffix("(Clone)")?;
+        return Some(Event::EnemyName(name.to_string()));
     }
     None
 }
@@ -409,8 +421,16 @@ mod tests {
             Some(Event::EnemyRetire(19))
         );
         assert_eq!(
-            parse_msg("Initializing Enemy POOL ID0 as ENEMY ID 45"),
-            Some(Event::EnemySpawn(0))
+            parse_msg("Initializing Enemy POOL ID17 as ENEMY ID 87"),
+            Some(Event::EnemySpawn { slot: 17, kind: 87 })
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] No targets to encode on Neko1(Clone)"),
+            Some(Event::EnemyName("Neko1".into()))
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] No targets to encode on Ice Squid(Clone)"),
+            Some(Event::EnemyName("Ice Squid".into()))
         );
         assert_eq!(
             parse_msg("Initializing Enemy POOL IDx as ENEMY ID 45"),

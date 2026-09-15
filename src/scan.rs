@@ -245,6 +245,7 @@ fn run_line(i: usize, r: &Run, now: u64) -> String {
                 .last()
                 .map_or("?", |f| boss_name(base_name(&f.name)))
         ),
+        Some(RunEnd::Won) => "WON".to_string(),
         Some(RunEnd::Lobby) => "ENDED in lobby".to_string(),
         Some(RunEnd::Left) => "LEFT".to_string(),
         None => "LIVE".to_string(),

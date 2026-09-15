@@ -14,6 +14,11 @@ pub fn phase_name(x: f32) -> &'static str {
     }
 }
 
+pub fn player_summon(name: &str) -> bool {
+    name.strip_prefix("Neko")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 pub fn boss_name(internal: &str) -> &str {
     match internal {
         "DarkMouth" => "Darkmouth",

@@ -351,6 +351,7 @@ fn token_warning_when_enemies_clear_with_tokens_missing() {
         }
         feed(app, stage);
     };
+    feed(&mut app, "Retiring Enemy POOL ID0");
     spawn_stage(&mut app, STAGE_B);
     feed(&mut app, "Initializing Enemy POOL ID0 as ENEMY ID 1");
     feed(&mut app, "Retiring Enemy POOL ID0");

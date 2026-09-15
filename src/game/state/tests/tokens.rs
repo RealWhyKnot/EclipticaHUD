@@ -108,6 +108,9 @@ fn last_save_before_the_boss_is_the_summon() {
 #[test]
 fn alert_when_enemies_clear_with_tokens_missing() {
     let mut gs = GameState::default();
+    for id in 0..20 {
+        feed_at(&mut gs, "01:09:09", &format!("Retiring Enemy POOL ID{id}"));
+    }
     spawn_level(&mut gs, "01:09:15", HALL);
     for id in 0..20 {
         feed_at(&mut gs, "01:09:15", &format!("Retiring Enemy POOL ID{id}"));

@@ -22,6 +22,8 @@ const HALL: &str =
 
 const SAVE: &str = "ECLIPTICA saving SESSION ID 2505";
 
+const RESET: &str = "Retiring Enemy POOL ID0";
+
 fn spawn_level(gs: &mut GameState, t: &str, stage: &str) {
     for _ in 0..3 {
         feed_at(gs, t, "spawn token, False, 0");

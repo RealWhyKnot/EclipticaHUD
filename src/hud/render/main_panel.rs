@@ -300,6 +300,7 @@ impl Renderer {
             Some(i) => {
                 let r = &gs.runs[i];
                 let (tag, color) = match r.end {
+                    Some(RunEnd::Won) => ("WON", GOOD),
                     Some(RunEnd::Lost) => ("LOST", DANGER),
                     Some(RunEnd::Lobby) => ("ENDED", TEXT),
                     Some(RunEnd::Left) => ("LEFT", TEXT),

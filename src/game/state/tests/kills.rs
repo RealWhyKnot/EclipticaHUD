@@ -71,23 +71,44 @@ fn kill_echoes_never_replace_the_kill() {
 }
 
 #[test]
-fn jim_ending_stays_unlabelled() {
+fn jim_final_phase_kill_is_a_win() {
+    const BRINGER: &str =
+        "ECLIPTICA - now in stage: Stage_Bringer on phase: 1 as class: Spellhammer";
+    let jim = |gs: &mut GameState| {
+        feed_at(gs, "10:34:13", BRINGER);
+        feed_at(
+            gs,
+            "10:40:00",
+            "ECLIPTICA - now fighting boss: JimBringer(Clone) on phase: 1",
+        );
+        kill_at(gs, "10:48:00", "JimBringer", 9000);
+        feed_at(
+            gs,
+            "10:48:00",
+            "ECLIPTICA - now fighting boss: JimBringerPhase2(Clone) on phase: 1",
+        );
+        kill_at(gs, "10:56:27", "JimBringerPhase2", 0);
+        feed_at(
+            gs,
+            "10:56:27",
+            "ECLIPTICA - now fighting boss: JimBringerPhase3(Clone) on phase: 1",
+        );
+    };
     let mut gs = GameState::default();
-    feed_at(&mut gs, "09:10:01", HALL);
-    feed_at(
-        &mut gs,
-        "09:12:00",
-        "ECLIPTICA - now fighting boss: JimBringer(Clone) on phase: 1",
-    );
-    feed_at(
-        &mut gs,
-        "09:14:00",
-        "ECLIPTICA - now fighting boss: JimBringerPhase2(Clone) on phase: 1",
-    );
-    kill_at(&mut gs, "09:16:00", "JimBringerPhase2", 900);
-    feed_at(&mut gs, "09:16:00", LOBBY);
-    assert_eq!(gs.runs[0].end, Some(RunEnd::Lobby));
-    assert!(!gs.runs[0].fights[1].lost);
+    jim(&mut gs);
+    kill_at(&mut gs, "11:12:46", "JimBringerPhase3", 21059);
+    feed_at(&mut gs, "11:13:30", LOBBY);
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Won));
+    let mut gs = GameState::default();
+    jim(&mut gs);
+    kill_at(&mut gs, "11:12:46", "JimBringerPhase3", 21059);
+    feed_at(&mut gs, "11:12:46", LOBBY);
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Lost));
+    let mut gs = GameState::default();
+    jim(&mut gs);
+    kill_at(&mut gs, "11:12:46", "JimBringerPhase3", 21059);
+    feed_at(&mut gs, "11:14:00", "[Behaviour] OnLeftRoom");
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Won));
     let mut gs = GameState::default();
     feed_at(&mut gs, "09:10:01", HALL);
     feed_at(
@@ -98,6 +119,37 @@ fn jim_ending_stays_unlabelled() {
     kill_at(&mut gs, "09:16:00", "Nan", 900);
     feed_at(&mut gs, "09:16:00", LOBBY);
     assert_eq!(gs.runs[0].end, Some(RunEnd::Lost));
+}
+
+#[test]
+fn echoes_stop_at_the_next_stage_with_the_same_boss() {
+    let mut gs = GameState::default();
+    feed_at(&mut gs, "03:02:42", HALL);
+    feed_at(
+        &mut gs,
+        "03:06:01",
+        "ECLIPTICA - now fighting boss: DarkMouth(Clone) on phase: 0",
+    );
+    kill_at(&mut gs, "03:09:07", "DarkMouth", 4000);
+    feed_at(&mut gs, "03:10:47", "ECLIPTICA - now in intermission");
+    kill_at(&mut gs, "03:12:41", "DarkMouth", 0);
+    kill_at(&mut gs, "03:12:44", "DarkMouth", 0);
+    feed_at(
+        &mut gs,
+        "03:12:44",
+        "ECLIPTICA - now in stage: Stage_GMFuncFlat on phase: 0.1 as class: Spellhammer",
+    );
+    kill_at(&mut gs, "03:12:44", "DarkMouth", 0);
+    feed_at(
+        &mut gs,
+        "03:16:48",
+        "ECLIPTICA - now fighting boss: DarkMouth(Clone) on phase: 0.1",
+    );
+    assert_eq!(gs.boss.as_deref(), Some("DarkMouth"));
+    assert_eq!(gs.runs[0].fights[1].kill, None);
+    kill_at(&mut gs, "03:21:00", "DarkMouth", 5000);
+    assert_eq!(gs.runs[0].fights[0].kill, Some((4000, 0)));
+    assert_eq!(gs.runs[0].fights[1].kill, Some((5000, 0)));
 }
 
 #[test]
