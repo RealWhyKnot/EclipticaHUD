@@ -56,7 +56,6 @@ pub struct GameState {
     pub stage_stats: StageStats,
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
-    dead_seen: Option<(String, u64)>,
     dead_until: u64,
     last_ts: u64,
     seq: u64,
@@ -174,19 +173,27 @@ impl GameState {
         }
     }
 
-    fn windowed(deque: &mut VecDeque<(u64, u64)>, now: u64, window: u64) -> u64 {
+    fn activity_start(&self) -> u64 {
+        if self.boss.is_some() {
+            self.fight_start
+        } else if self.pre_boss() {
+            self.stage_stats.start_ts
+        } else {
+            0
+        }
+    }
+
+    fn windowed(deque: &mut VecDeque<(u64, u64)>, now: u64, window: u64, since: u64) -> u64 {
         while deque.front().is_some_and(|h| h.0 + window <= now) {
             deque.pop_front();
         }
-        let span = deque
-            .front()
-            .map_or(1, |h| (now.saturating_sub(h.0) + 1).clamp(1, window));
+        let span = (now.saturating_sub(since) + 1).clamp(1, window);
         deque.iter().map(|h| h.1).sum::<u64>() / span
     }
 
     pub fn rolling_dps(&mut self, now: u64) -> u64 {
-        let window = self.win();
-        Self::windowed(&mut self.hits, now, window)
+        let (window, since) = (self.win(), self.activity_start());
+        Self::windowed(&mut self.hits, now, window, since)
     }
 
     pub fn fight_dps(&self, now: u64) -> u64 {
@@ -197,8 +204,8 @@ impl GameState {
     }
 
     pub fn rolling_taken(&mut self, now: u64) -> u64 {
-        let window = self.win();
-        Self::windowed(&mut self.taken_hits, now, window)
+        let (window, since) = (self.win(), self.activity_start());
+        Self::windowed(&mut self.taken_hits, now, window, since)
     }
 
     pub fn fight_taken_rate(&self, now: u64) -> u64 {

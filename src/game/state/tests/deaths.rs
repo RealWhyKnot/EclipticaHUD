@@ -13,15 +13,15 @@ fn death_clusters_count_once() {
         "08:19:00",
         "ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0",
     );
-    for t in ["08:20:42", "08:20:42", "08:20:43", "08:20:44", "08:20:46"] {
+    for t in ["08:20:42", "08:20:42", "08:20:43", "08:20:44", "08:20:44"] {
         feed_at(&mut gs, t, "Local controller dead, switching off.");
     }
-    let last = feed_at(&mut gs, "08:20:48", "Local controller dead, switching off.");
+    let last = feed_at(&mut gs, "08:20:45", "Local controller dead, switching off.");
     assert_eq!(gs.runs[0].deaths, 1);
     assert_eq!(gs.runs[0].fights[0].deaths, 1);
     assert!(gs.is_dead(last));
-    assert!(gs.is_dead(last + 2));
-    assert!(!gs.is_dead(last + 3));
+    assert!(gs.is_dead(last + 1));
+    assert!(!gs.is_dead(last + 2));
     feed_at(&mut gs, "08:25:55", "Local controller dead, switching off.");
     assert_eq!(gs.runs[0].deaths, 2);
     assert_eq!(gs.deaths_log.len(), 2);

@@ -146,13 +146,18 @@ fn stage_stats_before_the_boss() {
         "09:11:06",
         "damage has been taken: 30, from source: (Nan) slam",
     );
+    feed_at(
+        &mut gs,
+        "09:11:07",
+        "damage has been taken: 10, from source: (Nan) slam",
+    );
     assert_eq!(gs.fight_dmg, 500);
     kill_at(&mut gs, "09:12:00", "Nan", 500);
     feed_at(&mut gs, "09:12:05", "ECLIPTICA - now in intermission");
     let run = gs.live_run().unwrap();
     assert_eq!(run.dmg(), 600);
-    assert_eq!(run.taken(), 46);
-    assert_eq!(run.hit_count(), 3);
+    assert_eq!(run.taken(), 56);
+    assert_eq!(run.hit_count(), 4);
     assert_eq!(run.max_hit(), 30);
     assert_eq!(run.kills(), 1);
     assert_eq!(run.attacks().len(), 2);

@@ -142,8 +142,8 @@ fn env_and_clock() {
     app.tick();
     let ts = app.last_ts;
     assert_eq!(app.now(), ts);
-    app.last_ts_at = Instant::now() - std::time::Duration::from_secs(STALE_SECS + 5);
-    assert_eq!(app.now(), ts);
+    app.last_ts_at = Instant::now() - std::time::Duration::from_secs(600);
+    assert_eq!(app.now(), ts + 600);
     app.last_ts_at = Instant::now() - std::time::Duration::from_secs(10);
     assert_eq!(app.now(), ts + 10);
     app.gs

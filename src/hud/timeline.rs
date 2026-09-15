@@ -68,7 +68,7 @@ pub fn timeline(src: Option<Source<'_>>, filter: Filter) -> Vec<Row<'_>> {
         .fights
         .iter()
         .enumerate()
-        .filter(|(i, f)| *i == 0 || !continues(&src.fights[i - 1], &f.name, f.start_ts))
+        .filter(|(i, f)| *i == 0 || !continues(&src.fights[i - 1], &f.name))
         .map(|(_, f)| f)
         .collect();
     let mut fights = starts.iter().rev().copied().peekable();

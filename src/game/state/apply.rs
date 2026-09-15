@@ -2,13 +2,12 @@ use super::{GameState, Mode};
 use crate::game::event::Event;
 use crate::game::run::{
     base_name, continues, phase_num, tally, BossFight, KillSummary, RunEnd, StageStats, TakenEntry,
-    TargetEntry, KILL_DEDUPE_SECS,
+    TargetEntry,
 };
 use crate::game::source::describe_source;
 
-const DEATH_HOLD: u64 = 3;
+const DEATH_HOLD: u64 = 2;
 const LOG_CAP: usize = 500;
-const BOSS_SAVE_LEAD: u64 = 8;
 
 impl GameState {
     pub fn apply(&mut self, ts: u64, ev: Event) {
@@ -66,7 +65,7 @@ impl GameState {
     }
 
     fn boss_fight(&mut self, ts: u64, name: String) {
-        if self.mode == Mode::Lobby {
+        if matches!(self.mode, Mode::Lobby | Mode::Intermission) {
             return;
         }
         self.bosses.insert(name.clone());
@@ -75,15 +74,11 @@ impl GameState {
             .last()
             .filter(|r| r.end_ts.is_none())
             .and_then(|r| r.fights.last());
-        let echo = last.is_some_and(|f| {
-            base_name(&f.name) == base_name(&name)
-                && phase_num(&name) <= phase_num(&f.name)
-                && match f.end_ts {
-                    None => true,
-                    Some(e) => f.kill.is_some() && ts.saturating_sub(e) <= KILL_DEDUPE_SECS,
-                }
-        });
-        let transition = last.is_some_and(|f| continues(f, &name, ts));
+        let echo = self.stage_boss_seen
+            && last.is_some_and(|f| {
+                base_name(&f.name) == base_name(&name) && phase_num(&name) <= phase_num(&f.name)
+            });
+        let transition = last.is_some_and(|f| continues(f, &name));
         if self.boss.as_deref() == Some(&name) || echo {
             return;
         }
@@ -91,10 +86,7 @@ impl GameState {
         self.boss = Some(name.clone());
         if !self.stage_boss_seen {
             self.stage_boss_seen = true;
-            if self
-                .last_save
-                .is_some_and(|s| ts.saturating_sub(s) <= BOSS_SAVE_LEAD)
-            {
+            if self.last_save.is_some() {
                 self.tokens_got = self.tokens_got.saturating_sub(1);
             }
         }
@@ -116,6 +108,7 @@ impl GameState {
             dmg: 0,
             taken: 0,
             hits: 0,
+            max_hit: 0,
             attacks: Vec::new(),
             deaths: 0,
             kill: None,
@@ -161,17 +154,18 @@ impl GameState {
             s.taken += amount;
             s.hits += 1;
             s.max_hit = s.max_hit.max(amount);
-            let (who, attack) = describe_source(&source, amount);
+            let (who, attack) = describe_source(&source);
             tally(&mut s.attacks, &who, &attack, amount);
         } else if self.boss.is_some() {
             self.fight_taken += amount;
             self.fight_hits += 1;
             self.fight_max_hit = self.fight_max_hit.max(amount);
-            let (who, attack) = describe_source(&source, amount);
+            let (who, attack) = describe_source(&source);
             tally(&mut self.fight_attacks, &who, &attack, amount);
             if let Some(f) = self.open_fight() {
                 f.taken += amount;
                 f.hits += 1;
+                f.max_hit = f.max_hit.max(amount);
                 tally(&mut f.attacks, &who, &attack, amount);
             }
         }
@@ -216,6 +210,7 @@ impl GameState {
         let fresh = self.stage_stats.start_ts == 0 || self.stage != name || self.boss.is_some();
         if fresh {
             self.close_stage(ts);
+            self.stage_boss_seen = false;
             self.stage_stats = StageStats {
                 start_ts: ts,
                 ..Default::default()
@@ -266,18 +261,7 @@ impl GameState {
     }
 
     fn record_kill(&mut self, k: KillSummary) {
-        let chained = self.dead_seen.as_ref().is_some_and(|(boss, ts)| {
-            *boss == k.boss && k.ts.saturating_sub(*ts) <= KILL_DEDUPE_SECS
-        });
-        self.dead_seen = Some((k.boss.clone(), k.ts));
-        let dupe = chained
-            && self.last_kill.as_ref().is_some_and(|p| {
-                p.boss == k.boss && p.strike + p.non_strike >= k.strike + k.non_strike
-            });
-        if dupe {
-            return;
-        }
-        if let Some(f) = self
+        let Some(f) = self
             .runs
             .last_mut()
             .filter(|r| r.end_ts.is_none())
@@ -287,10 +271,11 @@ impl GameState {
                     .rev()
                     .find(|f| f.name == k.boss && f.kill.is_none())
             })
-        {
-            f.kill = Some((k.strike, k.non_strike));
-            f.end_ts.get_or_insert(k.ts);
-        }
+        else {
+            return;
+        };
+        f.kill = Some((k.strike, k.non_strike));
+        f.end_ts.get_or_insert(k.ts);
         self.last_kill = Some(k);
     }
 

@@ -149,7 +149,7 @@ impl Renderer {
                 );
             }
             Row::Hit(h) => {
-                let (who, attack) = describe_source(&h.source, h.amount);
+                let (who, attack) = describe_source(&h.source);
                 let who_color = if generic_attacker(&who) { DIM } else { TEXT };
                 self.log_row(
                     x,

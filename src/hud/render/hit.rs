@@ -157,7 +157,7 @@ impl Info {
             (Info::TakenBar, _) => {
                 "Incoming damage right now against the worst 10 seconds this fight"
             }
-            (Info::LastHit, _) => "Newest hit on you; sourceless ticks are status effects",
+            (Info::LastHit, _) => "Newest hit on you",
             (Info::Attackers | Info::HistAttackers, _) => {
                 "Who hurt you this fight, as a share of all damage taken"
             }

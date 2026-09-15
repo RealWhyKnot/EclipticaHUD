@@ -1,7 +1,5 @@
 use std::collections::VecDeque;
 
-pub(crate) const KILL_DEDUPE_SECS: u64 = 30;
-
 #[derive(Debug, Clone)]
 pub struct TargetEntry {
     pub ts: u64,
@@ -69,6 +67,7 @@ pub struct BossFight {
     pub dmg: u64,
     pub taken: u64,
     pub hits: u32,
+    pub max_hit: u64,
     pub attacks: Vec<Tally>,
     pub deaths: u32,
     pub kill: Option<(u64, u64)>,
@@ -141,7 +140,7 @@ impl Run {
     pub fn max_hit(&self) -> u64 {
         self.fights
             .iter()
-            .flat_map(|f| f.attacks.iter().map(|t| t.total / t.hits.max(1) as u64))
+            .map(|f| f.max_hit)
             .chain(self.stages.iter().map(|s| s.max_hit))
             .max()
             .unwrap_or(0)
@@ -190,7 +189,7 @@ impl Run {
     pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
         let mut out: Vec<std::ops::Range<usize>> = Vec::new();
         for (i, f) in self.fights.iter().enumerate() {
-            let chained = i > 0 && continues(&self.fights[i - 1], &f.name, f.start_ts);
+            let chained = i > 0 && continues(&self.fights[i - 1], &f.name);
             match out.last_mut() {
                 Some(g) if chained => g.end = i + 1,
                 _ => out.push(i..i + 1),
@@ -231,12 +230,8 @@ impl FightGroup<'_> {
     }
 }
 
-pub fn continues(prev: &BossFight, name: &str, start_ts: u64) -> bool {
-    base_name(&prev.name) == base_name(name)
-        && phase_num(name) > phase_num(&prev.name)
-        && prev
-            .end_ts
-            .is_none_or(|e| start_ts.saturating_sub(e) <= KILL_DEDUPE_SECS)
+pub fn continues(prev: &BossFight, name: &str) -> bool {
+    base_name(&prev.name) == base_name(name) && phase_num(name) > phase_num(&prev.name)
 }
 
 pub fn base_name(name: &str) -> &str {
@@ -286,6 +281,7 @@ mod tests {
             dmg: 0,
             taken: 0,
             hits: 0,
+            max_hit: 0,
             attacks: Vec::new(),
             deaths: 0,
             kill: None,

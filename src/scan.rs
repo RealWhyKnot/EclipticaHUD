@@ -219,7 +219,7 @@ impl Seen {
         }
         if let Some(hit) = gs.taken.back().filter(|h| h.seq != self.taken_seq) {
             self.taken_seq = hit.seq;
-            let (who, attack) = describe_source(&hit.source, hit.amount);
+            let (who, attack) = describe_source(&hit.source);
             println!("{t}  hit      {:>4}  {who}  {attack}", hit.amount);
         }
     }

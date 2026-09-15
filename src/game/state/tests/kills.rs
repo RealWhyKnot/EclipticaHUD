@@ -3,44 +3,71 @@ use super::*;
 #[test]
 fn kill_dedupe() {
     let mut gs = GameState::default();
-    let kill = |gs: &mut GameState, t: &str, s: u64| {
-        gs.feed(&format!(
-            "2026.09.07 {t} Debug      -  Boss Kakarot dead, personal damage dealt: "
-        ));
-        gs.feed(&format!("2026.09.07 {t} Debug      -  STRIKE DMG: {s}"));
-        gs.feed(&format!("2026.09.07 {t} Debug      -  NON-STRIKE DMG: 0"));
-    };
-    kill(&mut gs, "09:24:12", 4793);
-    kill(&mut gs, "09:24:18", 0);
-    let k = gs.last_kill.as_ref().unwrap();
-    assert_eq!(k.strike, 4793);
-    kill(&mut gs, "09:26:00", 900);
+    feed_at(&mut gs, "09:20:00", HALL);
+    feed_at(
+        &mut gs,
+        "09:21:00",
+        "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0",
+    );
+    kill_at(&mut gs, "09:24:12", "Kakarot", 4793);
+    kill_at(&mut gs, "09:24:18", "Kakarot", 0);
+    assert_eq!(gs.last_kill.as_ref().unwrap().strike, 4793);
+    assert_eq!(gs.runs[0].fights[0].kill, Some((4793, 0)));
+    feed_at(&mut gs, "09:25:00", "ECLIPTICA - now in intermission");
+    feed_at(&mut gs, "09:25:30", HALL);
+    feed_at(
+        &mut gs,
+        "09:25:40",
+        "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0",
+    );
+    kill_at(&mut gs, "09:26:00", "Kakarot", 900);
     assert_eq!(gs.last_kill.as_ref().unwrap().strike, 900);
+    assert_eq!(gs.runs[0].fights[1].kill, Some((900, 0)));
 }
 
 #[test]
-fn kill_echo_chain_outlives_window() {
+fn kill_echoes_never_replace_the_kill() {
     let mut gs = GameState::default();
+    feed_at(&mut gs, "00:58:00", HALL);
+    feed_at(
+        &mut gs,
+        "00:59:00",
+        "ECLIPTICA - now fighting boss: Gravetender(Clone) on phase: 0",
+    );
     let kill = |gs: &mut GameState, secs: u64, s: u64| {
-        let t = fmt_clock(3600 + secs);
-        gs.feed(&format!(
-            "2026.09.08 {t} Debug      -  Boss Gravetender dead, personal damage dealt: "
-        ));
-        gs.feed(&format!("2026.09.08 {t} Debug      -  STRIKE DMG: {s}"));
-        gs.feed(&format!("2026.09.08 {t} Debug      -  NON-STRIKE DMG: 0"));
+        kill_at(gs, &fmt_clock(3600 + secs), "Gravetender", s);
     };
     kill(&mut gs, 0, 9173);
-    let first_ts = gs.last_kill.as_ref().unwrap().ts;
+    feed_at(&mut gs, "01:00:20", "ECLIPTICA - now in intermission");
     let mut t = 13;
     while t <= 110 {
         kill(&mut gs, t, 0);
         t += 3;
     }
-    let k = gs.last_kill.as_ref().unwrap();
-    assert_eq!(k.strike, 9173);
-    assert_eq!(k.ts, first_ts);
-    kill(&mut gs, 380, 0);
-    assert_eq!(gs.last_kill.as_ref().unwrap().strike, 0);
+    assert_eq!(gs.last_kill.as_ref().unwrap().strike, 9173);
+    assert_eq!(gs.runs[0].fights[0].kill, Some((9173, 0)));
+    feed_at(&mut gs, "01:02:00", HALL);
+    feed_at(
+        &mut gs,
+        "01:04:00",
+        "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+    );
+    feed_at(
+        &mut gs,
+        "01:05:00",
+        "Boss Nan dead, personal damage dealt: ",
+    );
+    feed_at(&mut gs, "01:05:00", "STRIKE DMG: 700");
+    feed_at(&mut gs, "01:05:10", "ECLIPTICA - now in intermission");
+    feed_at(&mut gs, "01:06:00", HALL);
+    feed_at(
+        &mut gs,
+        "01:07:30",
+        "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0",
+    );
+    kill_at(&mut gs, "01:08:00", "Kakarot", 900);
+    assert_eq!(gs.runs[0].fights[1].kill, Some((700, 0)));
+    assert_eq!(gs.runs[0].fights[2].kill, Some((900, 0)));
 }
 
 #[test]

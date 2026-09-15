@@ -220,7 +220,7 @@ fn jimbringer_three_phase_ordering() {
 }
 
 #[test]
-fn refight_after_unfinished_fight_is_kept() {
+fn boss_line_in_intermission_is_ignored() {
     let mut gs = GameState::default();
     feed_at(&mut gs, "09:10:01", HALL);
     feed_at(
@@ -228,22 +228,15 @@ fn refight_after_unfinished_fight_is_kept() {
         "09:12:00",
         "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
     );
-    feed_at(&mut gs, "09:12:30", "ECLIPTICA - now in intermission");
-    feed_at(
-        &mut gs,
-        "09:12:40",
-        "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
-    );
-    assert_eq!(gs.boss.as_deref(), Some("Nan"));
-    assert_eq!(gs.runs[0].fights.len(), 2);
     kill_at(&mut gs, "09:15:00", "Nan", 500);
+    feed_at(&mut gs, "09:15:30", "ECLIPTICA - now in intermission");
     feed_at(
         &mut gs,
-        "09:15:03",
+        "09:15:33",
         "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
     );
     assert!(gs.boss.is_none());
-    assert_eq!(gs.runs[0].fights.len(), 2);
+    assert_eq!(gs.runs[0].fights.len(), 1);
 }
 
 #[test]

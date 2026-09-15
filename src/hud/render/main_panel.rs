@@ -702,7 +702,7 @@ impl Renderer {
             }
             match gs.taken.back().filter(|_| !f.empty()) {
                 Some(hit) => {
-                    let (who, attack) = describe_source(&hit.source, hit.amount);
+                    let (who, attack) = describe_source(&hit.source);
                     let line = format!("last hit  {}   {who}   {attack}", hit.amount);
                     self.text_rect(
                         M + 12,

@@ -91,10 +91,12 @@ fn skipped_token_and_boss_save() {
 }
 
 #[test]
-fn token_left_long_before_boss_is_kept() {
+fn last_save_before_the_boss_is_the_summon() {
     let mut gs = GameState::default();
     spawn_level(&mut gs, "05:00:00", HALL);
     feed_at(&mut gs, "05:00:10", SAVE);
+    feed_at(&mut gs, "05:02:56", SAVE);
+    assert_eq!(gs.tokens_shown(), Some((2, 3)));
     feed_at(
         &mut gs,
         "05:03:00",

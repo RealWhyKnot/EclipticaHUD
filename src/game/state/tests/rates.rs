@@ -38,7 +38,7 @@ fn taken_aggregates_current_fight() {
         "12:00:00",
         "damage has been taken: 5, from source: attack_Spit",
     );
-    assert_eq!(gs.rolling_taken(t0), 5);
+    assert_eq!(gs.rolling_taken(t0), 0);
     assert_eq!(gs.fight_taken, 0);
     assert_eq!(gs.fight_hits, 0);
     feed_at(
@@ -66,7 +66,7 @@ fn taken_aggregates_current_fight() {
         "12:00:14",
         "damage has been taken: 10, from source: attack_Spit (2)",
     );
-    assert_eq!(gs.rolling_taken(t), 15);
+    assert_eq!(gs.rolling_taken(t), 12);
     assert_eq!(gs.fight_taken, 60);
     assert_eq!(gs.fight_hits, 4);
     assert_eq!(gs.fight_max_hit, 30);

@@ -13,14 +13,12 @@ pub struct Tick {
     pub quit: bool,
 }
 
-pub(super) const STALE_SECS: u64 = 120;
 const VRC_CHECK_SECS: u64 = 2;
 
 impl App {
     pub(super) fn now(&self) -> u64 {
-        let elapsed = self.last_ts_at.elapsed().as_secs();
-        if self.env() == Env::InWorld && elapsed <= STALE_SECS {
-            self.last_ts + elapsed
+        if self.env() == Env::InWorld {
+            self.last_ts + self.last_ts_at.elapsed().as_secs()
         } else {
             self.last_ts
         }
