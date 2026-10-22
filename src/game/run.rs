@@ -232,7 +232,7 @@ impl FightGroup<'_> {
 }
 
 pub fn final_phase(name: &str) -> bool {
-    base_name(name) == "JimBringer" && phase_num(name) == 3
+    matches!(base_name(name), "JimBringer" | "Gilgamesh") && phase_num(name) == 3
 }
 
 pub fn continues(prev: &BossFight, name: &str) -> bool {

@@ -122,6 +122,83 @@ fn jim_final_phase_kill_is_a_win() {
 }
 
 #[test]
+fn gilgamesh_final_phase_kill_is_a_win() {
+    const GILGAMESH: [(&str, &str); 20] = [
+        (
+            "16:18:23",
+            "ECLIPTICA - now in stage: Stage_Gilgamesh on phase: 1 as class: Thaumaturge",
+        ),
+        ("16:18:40", "Advancing Stage Event: 0"),
+        (
+            "16:18:40",
+            "ECLIPTICA - now fighting boss: Gilgamesh(Clone) on phase: 1",
+        ),
+        ("16:18:40", "Advancing Stage Progress to: 1"),
+        ("16:27:19", "Boss Gilgamesh dead, personal damage dealt: "),
+        ("16:27:19", "STRIKE DMG: 27635"),
+        ("16:27:19", "NON-STRIKE DMG: 13248"),
+        (
+            "16:27:19",
+            "ECLIPTICA - now fighting boss: GilgameshPhase2(Clone) on phase: 1",
+        ),
+        ("16:33:06", "Advancing Stage Event: 1"),
+        ("16:33:06", "Advancing Stage Progress to: 2"),
+        ("16:33:22", "Advancing Stage Event: 2"),
+        (
+            "16:33:22",
+            "ECLIPTICA - now fighting boss: GilgameshPhase3(Clone) on phase: 1",
+        ),
+        ("16:33:22", "Advancing Stage Progress to: 3"),
+        (
+            "16:33:22",
+            "Boss GilgameshPhase2 dead, personal damage dealt: ",
+        ),
+        ("16:33:22", "STRIKE DMG: 718"),
+        ("16:33:22", "NON-STRIKE DMG: 0"),
+        ("16:45:33", "Advancing Stage Event: 3"),
+        ("16:45:33", "Advancing Stage Progress to: 4"),
+        (
+            "16:45:39",
+            "Boss GilgameshPhase3 dead, personal damage dealt: ",
+        ),
+        ("16:45:39", "STRIKE DMG: 65918"),
+    ];
+    let gilgamesh = |gs: &mut GameState| {
+        for (t, msg) in GILGAMESH {
+            feed_at(gs, t, msg);
+        }
+        feed_at(gs, "16:45:39", "NON-STRIKE DMG: 30297");
+    };
+    let mut gs = GameState::default();
+    gilgamesh(&mut gs);
+    feed_at(&mut gs, "16:48:10", LOBBY);
+    let fights: Vec<_> = gs.runs[0]
+        .fights
+        .iter()
+        .map(|f| (f.name.as_str(), f.kill))
+        .collect();
+    assert_eq!(
+        fights,
+        vec![
+            ("Gilgamesh", Some((27635, 13248))),
+            ("GilgameshPhase2", Some((718, 0))),
+            ("GilgameshPhase3", Some((65918, 30297))),
+        ]
+    );
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Won));
+    let mut gs = GameState::default();
+    gilgamesh(&mut gs);
+    feed_at(&mut gs, "16:45:39", LOBBY);
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Lost));
+    let mut gs = GameState::default();
+    for (t, msg) in &GILGAMESH[..16] {
+        feed_at(&mut gs, t, msg);
+    }
+    feed_at(&mut gs, "16:40:00", LOBBY);
+    assert_eq!(gs.runs[0].end, Some(RunEnd::Lost));
+}
+
+#[test]
 fn echoes_stop_at_the_next_stage_with_the_same_boss() {
     let mut gs = GameState::default();
     feed_at(&mut gs, "03:02:42", HALL);
