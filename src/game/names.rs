@@ -39,6 +39,7 @@ pub fn boss_name(internal: &str) -> &str {
         "JimBringer" => "Jim C. Bringer",
         "Obisidus" => "Irides",
         "ManalyteAncient" => "Abaddon",
+        "Hakli" => "Ha'Kli",
         _ => internal,
     }
 }
@@ -51,6 +52,7 @@ pub fn stage_name(internal: &str) -> &str {
         "GMBigcity" => "GM_BigCity",
         "GMFuncFlat" => "GM_Func_Flat",
         "LostElysia" => "Lost Elysia",
+        "OuterHeven" => "Outer Heven",
         "ProtoColony" => "Proto Colony",
         "VRCHub" => "VRChat Hub",
         _ => internal,
@@ -77,6 +79,10 @@ mod tests {
         assert_eq!(boss_name("Obisidus"), "Irides");
         assert_eq!(boss_name("ManalyteAncient"), "Abaddon");
         assert_eq!(boss_name("Kodama"), "Kodama");
+        assert_eq!(boss_name("Hakli"), "Ha'Kli");
+        assert_eq!(boss_name("Gilgamesh"), "Gilgamesh");
+        assert_eq!(stage_name("OuterHeven"), "Outer Heven");
+        assert_eq!(stage_name("Hallow"), "Hallow");
         assert_eq!(stage_name("GMBigcity"), "GM_BigCity");
         assert_eq!(stage_name("Hall of Beginnings"), "Hall of Beginnings");
     }
