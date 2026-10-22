@@ -171,7 +171,7 @@ fn gilgamesh_final_phase_kill_is_a_win() {
     };
     let mut gs = GameState::default();
     gilgamesh(&mut gs);
-    feed_at(&mut gs, "16:48:10", LOBBY);
+    let lobby = feed_at(&mut gs, "16:48:10", LOBBY);
     let fights: Vec<_> = gs.runs[0]
         .fights
         .iter()
@@ -186,10 +186,14 @@ fn gilgamesh_final_phase_kill_is_a_win() {
         ]
     );
     assert_eq!(gs.runs[0].end, Some(RunEnd::Won));
+    let kill = lobby - 151;
+    assert_eq!(gs.runs[0].end_ts, Some(kill));
+    assert_eq!(kill - gs.runs[0].start_ts, 1636);
     let mut gs = GameState::default();
     gilgamesh(&mut gs);
     feed_at(&mut gs, "16:45:39", LOBBY);
     assert_eq!(gs.runs[0].end, Some(RunEnd::Lost));
+    assert_eq!(gs.runs[0].end_ts, Some(kill));
     let mut gs = GameState::default();
     for (t, msg) in &GILGAMESH[..16] {
         feed_at(&mut gs, t, msg);

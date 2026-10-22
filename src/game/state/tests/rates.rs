@@ -61,6 +61,11 @@ fn taken_aggregates_current_fight() {
         "12:00:13",
         "damage has been taken: 30, from source: attack_Spit (1)",
     );
+    feed_at(
+        &mut gs,
+        "12:00:13",
+        "damage has been taken: 0, from source: ",
+    );
     let t = feed_at(
         &mut gs,
         "12:00:14",

@@ -150,6 +150,9 @@ impl GameState {
     }
 
     fn damage_taken(&mut self, ts: u64, amount: u64, source: String) {
+        if amount == 0 {
+            return;
+        }
         self.taken_hits.push_back((ts, amount));
         if self.pre_boss() {
             let s = &mut self.stage_stats;
@@ -306,18 +309,20 @@ impl GameState {
         self.close_stage(ts);
         if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
             let mut end = how;
+            let mut end_ts = ts;
             if let Some(f) = r.fights.last_mut() {
                 let running = f.end_ts.is_none_or(|e| e == ts);
-                f.end_ts.get_or_insert(ts);
+                let kill_ts = *f.end_ts.get_or_insert(ts);
                 if how == RunEnd::Lobby && in_fight && running {
                     f.lost = true;
                     end = RunEnd::Lost;
                 } else if f.kill.is_some() && final_phase(&f.name) {
                     end = RunEnd::Won;
+                    end_ts = kill_ts;
                 }
             }
             r.end = Some(end);
-            r.end_ts = Some(ts);
+            r.end_ts = Some(end_ts);
             r.hits = std::mem::take(&mut self.taken);
             r.targets = std::mem::take(&mut self.history);
             r.death_log = std::mem::take(&mut self.deaths_log);
