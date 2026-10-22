@@ -122,9 +122,14 @@ pub(super) unsafe extern "system" fn wndproc(
                             Hit::Close => {
                                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
                             }
-                            Hit::Update => {
+                            Hit::UpdateNow => {
                                 update::spawn_install();
-                                app.tick();
+                                app.poll_badge();
+                            }
+                            Hit::UpdateSkip => {
+                                if let Some(tag) = app.skip_update() {
+                                    save_skipped(&tag);
+                                }
                             }
                             Hit::Target => {
                                 app.activate(hit);
@@ -138,6 +143,14 @@ pub(super) unsafe extern "system" fn wndproc(
                             Hit::Discord => {
                                 app.activate(hit);
                                 save_discord(app.discord_on);
+                            }
+                            Hit::Party => {
+                                app.activate(hit);
+                                save_party(app.party_on);
+                                app.poll_party();
+                                if app.log.visible {
+                                    repaint_log(app);
+                                }
                             }
                             Hit::ScaleDown | Hit::ScaleUp => {
                                 if app.activate(hit) {

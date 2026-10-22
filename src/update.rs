@@ -19,9 +19,9 @@ pub struct UpdateInfo {
 enum Status {
     Idle,
     Available(UpdateInfo),
-    Installing,
-    Restart,
-    Failed,
+    Installing(String),
+    Restart(String),
+    Failed(UpdateInfo),
 }
 
 static STATUS: Mutex<Status> = Mutex::new(Status::Idle);
@@ -31,21 +31,22 @@ pub enum Badge {
     #[default]
     None,
     Ready(String),
-    Installing,
-    Failed,
+    Installing(String),
+    Failed(String),
 }
 
 pub fn badge() -> Badge {
     match &*STATUS.lock().unwrap() {
         Status::Idle => Badge::None,
         Status::Available(i) => Badge::Ready(i.tag.clone()),
-        Status::Installing | Status::Restart => Badge::Installing,
-        Status::Failed => Badge::Failed,
+        Status::Installing(t) => Badge::Installing(t.clone()),
+        Status::Restart(t) => Badge::Installing(t.clone()),
+        Status::Failed(i) => Badge::Failed(i.tag.clone()),
     }
 }
 
 pub fn restart_pending() -> bool {
-    matches!(*STATUS.lock().unwrap(), Status::Restart)
+    matches!(*STATUS.lock().unwrap(), Status::Restart(_))
 }
 
 pub fn cleanup_old() {
@@ -54,12 +55,12 @@ pub fn cleanup_old() {
     }
 }
 
-pub fn spawn_check() {
+pub fn spawn_check(skipped: Option<String>) {
     if parse_version(VERSION).is_none() {
         return;
     }
-    std::thread::spawn(|| {
-        if let Some(info) = check() {
+    std::thread::spawn(move || {
+        if let Some(info) = check().filter(|i| Some(&i.tag) != skipped.as_ref()) {
             *STATUS.lock().unwrap() = Status::Available(info);
         }
     });
@@ -68,8 +69,11 @@ pub fn spawn_check() {
 pub fn spawn_install() {
     let info = {
         let mut s = STATUS.lock().unwrap();
-        match std::mem::replace(&mut *s, Status::Installing) {
-            Status::Available(i) => i,
+        match std::mem::replace(&mut *s, Status::Idle) {
+            Status::Available(i) | Status::Failed(i) => {
+                *s = Status::Installing(i.tag.clone());
+                i
+            }
             other => {
                 *s = other;
                 return;
@@ -79,11 +83,22 @@ pub fn spawn_install() {
     std::thread::spawn(move || {
         let done = install(&info);
         *STATUS.lock().unwrap() = if done {
-            Status::Restart
+            Status::Restart(info.tag)
         } else {
-            Status::Failed
+            Status::Failed(info)
         };
     });
+}
+
+pub fn skip() -> Option<String> {
+    let mut s = STATUS.lock().unwrap();
+    match std::mem::replace(&mut *s, Status::Idle) {
+        Status::Available(i) | Status::Failed(i) => Some(i.tag),
+        other => {
+            *s = other;
+            None
+        }
+    }
 }
 
 pub fn relaunch() {

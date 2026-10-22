@@ -1,0 +1,326 @@
+mod client;
+pub mod party;
+pub mod proto;
+pub mod sha256;
+
+use proto::{Member, Room, MAX_DMG};
+use std::collections::VecDeque;
+use std::sync::{Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+pub const DEFAULT_URL: &str = "wss://ecliptica.whyknot.dev/ws";
+const SNAP_QUEUE: usize = 8;
+const SEND_GAP_MS: u64 = 1000;
+const MAX_BACKOFF_S: u64 = 60;
+const MAX_STEP: u32 = 5;
+const STABLE_SECS: u64 = 30;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Want {
+    pub url: String,
+    pub location: String,
+    pub usr: String,
+}
+
+impl Want {
+    pub fn room(&self) -> Room {
+        proto::room_hash(&self.location)
+    }
+
+    pub fn member(&self) -> Member {
+        proto::member_hash(&self.location, &self.usr)
+    }
+}
+
+pub fn want(on: bool, in_world: bool, location: Option<&str>, usr: Option<&str>) -> Option<Want> {
+    if !on || !in_world {
+        return None;
+    }
+    let location = location.filter(|l| l.starts_with("wrld_"))?;
+    let usr = usr.filter(|u| u.starts_with("usr_"))?;
+    Some(Want {
+        url: relay_url().to_string(),
+        location: location.to_string(),
+        usr: usr.to_string(),
+    })
+}
+
+fn relay_url() -> &'static str {
+    static URL: OnceLock<String> = OnceLock::new();
+    URL.get_or_init(|| url_from(std::env::var("EHUD_RELAY_URL").ok().as_deref()))
+}
+
+pub fn url_from(env: Option<&str>) -> String {
+    env.map(str::trim)
+        .filter(|u| Url::parse(u).is_some())
+        .unwrap_or(DEFAULT_URL)
+        .to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Url {
+    pub secure: bool,
+    pub host: String,
+    pub port: u16,
+    pub path: String,
+}
+
+impl Url {
+    pub fn parse(s: &str) -> Option<Url> {
+        let (secure, rest) = if let Some(r) = s.strip_prefix("wss://") {
+            (true, r)
+        } else {
+            (false, s.strip_prefix("ws://")?)
+        };
+        let (auth, path) = match rest.find('/') {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, "/"),
+        };
+        let default = if secure { 443 } else { 80 };
+        let (host, port) = if let Some(v6) = auth.strip_prefix('[') {
+            let (h, tail) = v6.split_once(']')?;
+            let port = match tail.strip_prefix(':') {
+                Some(p) => p.parse().ok()?,
+                None if tail.is_empty() => default,
+                None => return None,
+            };
+            (h, port)
+        } else {
+            match auth.rsplit_once(':') {
+                Some((h, p)) => (h, p.parse().ok()?),
+                None => (auth, default),
+            }
+        };
+        let ok_host = !host.is_empty()
+            && host
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
+        let ok_path = path.chars().all(|c| c.is_ascii_graphic());
+        let ok_scheme = secure || loopback(host);
+        (ok_host && ok_path && ok_scheme && port != 0).then(|| Url {
+            secure,
+            host: host.to_string(),
+            port,
+            path: path.to_string(),
+        })
+    }
+}
+
+fn loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+#[derive(Debug, Default)]
+pub struct Backoff {
+    fails: u32,
+}
+
+impl Backoff {
+    pub fn next_ms(&mut self, rand: u64) -> u64 {
+        let base = (2u64 << self.fails.min(MAX_STEP)).min(MAX_BACKOFF_S) * 1000;
+        self.fails = self.fails.saturating_add(1);
+        base + rand % (base / 4 + 1)
+    }
+
+    pub fn max_ms(&mut self, rand: u64) -> u64 {
+        self.fails = self.fails.max(MAX_STEP);
+        self.next_ms(rand)
+    }
+
+    pub fn reset(&mut self) {
+        self.fails = 0;
+    }
+
+    pub fn after_session(&mut self, lived: Duration) {
+        if lived.as_secs() >= STABLE_SECS {
+            self.reset();
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Throttle {
+    sent: Option<u64>,
+    at: Option<u64>,
+}
+
+impl Throttle {
+    pub fn due(&mut self, now_ms: u64, dmg: Option<u64>) -> Option<u64> {
+        let v = dmg?.min(MAX_DMG);
+        if self.sent == Some(v) || self.at.is_some_and(|t| now_ms < t + SEND_GAP_MS) {
+            return None;
+        }
+        self.sent = Some(v);
+        self.at = Some(now_ms);
+        Some(v)
+    }
+
+    pub fn wait_ms(&self, now_ms: u64, dmg: Option<u64>) -> u64 {
+        let pending = dmg.is_some_and(|v| self.sent != Some(v.min(MAX_DMG)));
+        match (pending, self.at) {
+            (true, Some(t)) => (t + SEND_GAP_MS).saturating_sub(now_ms).max(1),
+            (true, None) => 1,
+            (false, _) => SEND_GAP_MS,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Link {
+    #[default]
+    Off,
+    Connecting,
+    Connected,
+    Retrying,
+}
+
+#[derive(Debug, Clone)]
+pub struct Snap {
+    pub at: Instant,
+    pub room: Room,
+    pub entries: Vec<(Member, u64)>,
+}
+
+#[derive(Default)]
+struct Shared {
+    want: Option<Want>,
+    dmg: Option<u64>,
+    running: bool,
+    link: Link,
+    session: u64,
+    snaps: VecDeque<Snap>,
+}
+
+impl Shared {
+    fn end_session(&mut self) {
+        self.session += 1;
+        self.snaps.clear();
+    }
+}
+
+pub struct Hub {
+    m: Mutex<Shared>,
+    cv: Condvar,
+}
+
+pub static HUB: Hub = Hub::new();
+
+pub struct Poll {
+    pub link: Link,
+    pub session: u64,
+    pub snaps: Vec<Snap>,
+}
+
+pub trait Relay: Sync {
+    fn sync(&'static self, want: Option<Want>, dmg: Option<u64>);
+    fn poll(&self) -> Poll;
+}
+
+impl Relay for Hub {
+    fn sync(&'static self, want: Option<Want>, dmg: Option<u64>) {
+        Hub::sync(self, want, dmg);
+    }
+
+    fn poll(&self) -> Poll {
+        Hub::poll(self)
+    }
+}
+
+impl Hub {
+    pub const fn new() -> Self {
+        Hub {
+            m: Mutex::new(Shared {
+                want: None,
+                dmg: None,
+                running: false,
+                link: Link::Off,
+                session: 0,
+                snaps: VecDeque::new(),
+            }),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
+        self.m.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn sync(&'static self, want: Option<Want>, dmg: Option<u64>) {
+        let mut s = self.lock();
+        let changed = s.want != want || s.dmg != dmg;
+        s.want = want;
+        s.dmg = dmg;
+        if s.want.is_some() && !s.running {
+            let spawned = std::thread::Builder::new()
+                .name("ehud-relay".into())
+                .spawn(move || client::run(self));
+            if spawned.is_ok() {
+                s.running = true;
+                s.link = Link::Connecting;
+            } else {
+                s.link = Link::Retrying;
+            }
+        }
+        if changed {
+            self.cv.notify_all();
+        }
+    }
+
+    pub fn poll(&self) -> Poll {
+        let mut s = self.lock();
+        Poll {
+            link: s.link,
+            session: s.session,
+            snaps: s.snaps.drain(..).collect(),
+        }
+    }
+
+    pub fn shutdown(&'static self, wait: Duration) -> bool {
+        self.sync(None, None);
+        let deadline = Instant::now() + wait;
+        let mut s = self.lock();
+        while s.running {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            s = self
+                .cv
+                .wait_timeout(s, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        true
+    }
+
+    fn push_snap(&self, session: u64, snap: Snap) {
+        let mut s = self.lock();
+        if s.session != session || s.link != Link::Connected {
+            return;
+        }
+        if s.snaps.len() >= SNAP_QUEUE {
+            s.snaps.pop_front();
+        }
+        s.snaps.push_back(snap);
+    }
+
+    fn set_link(&self, link: Link) -> u64 {
+        let mut s = self.lock();
+        if link == Link::Connected || s.link == Link::Connected {
+            s.end_session();
+        }
+        s.link = link;
+        s.session
+    }
+}
+
+pub fn rand() -> u64 {
+    use std::hash::BuildHasher;
+    std::collections::hash_map::RandomState::new().hash_one(Instant::now())
+}
+
+#[cfg(test)]
+pub(crate) mod tests;

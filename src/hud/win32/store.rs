@@ -54,6 +54,18 @@ pub(super) fn save_discord(on: bool) {
     save_flag("discord.txt", on);
 }
 
+pub(super) fn party_on_from(text: &str) -> bool {
+    text.trim() == "1"
+}
+
+pub(super) fn load_party() -> bool {
+    load_text("party.txt").is_some_and(|t| party_on_from(&t))
+}
+
+pub(super) fn save_party(on: bool) {
+    save_flag("party.txt", on);
+}
+
 pub(super) fn scale_from(text: &str) -> f32 {
     text.trim()
         .parse::<u32>()
@@ -86,9 +98,33 @@ pub(super) fn save_window(window: u64) {
     write_data("window.txt", window.to_string());
 }
 
+pub(super) fn skipped_from(text: &str) -> Option<String> {
+    Some(text.trim())
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+}
+
+pub(super) fn load_skipped() -> Option<String> {
+    load_text("skip_update.txt").and_then(|t| skipped_from(&t))
+}
+
+pub(super) fn save_skipped(tag: &str) {
+    write_data("skip_update.txt", tag.to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipped_version_parse() {
+        assert_eq!(
+            skipped_from("v2026.10.29.0\r\n").as_deref(),
+            Some("v2026.10.29.0")
+        );
+        assert_eq!(skipped_from("  \n"), None);
+        assert_eq!(skipped_from(""), None);
+    }
 
     #[test]
     fn sound_default_and_parse() {
@@ -113,6 +149,24 @@ mod tests {
         assert_eq!(window_from("x"), 10);
         assert_eq!(window_from("1"), 3);
         assert_eq!(window_from("99"), 30);
+    }
+
+    #[test]
+    fn party_sharing_defaults_off() {
+        assert!(data_file("party.txt").is_some_and(|p| p.ends_with("party.txt")));
+        for (text, on) in [
+            ("", false),
+            ("0", false),
+            ("0\n", false),
+            ("on", false),
+            ("true", false),
+            ("11", false),
+            ("1", true),
+            ("1\r\n", true),
+            (" 1 ", true),
+        ] {
+            assert_eq!(party_on_from(text), on, "{text:?}");
+        }
     }
 
     #[test]

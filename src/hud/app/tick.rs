@@ -1,5 +1,5 @@
 use super::anim::*;
-use super::{play, App, BLIP, TOKENS};
+use super::{play, App, BLIP, TOKENS, YOU};
 use crate::discord;
 use crate::game::run::base_name;
 use crate::hud::render::{Env, Frame, LogHit};
@@ -46,17 +46,18 @@ impl App {
             log_ok: env != Env::NoVrchat && self.watch.path.is_some(),
             log_open: self.log.visible,
             progress_shown: self.progress_shown,
-            dps_frac_shown: self.dps_frac_shown,
             taken_frac_shown: self.taken_frac_shown,
             dps_shown: self.dps_shown,
             fight_dps_shown: self.fight_dps_shown,
             taken_shown: self.taken_shown,
             taken_rate_shown: self.taken_rate_shown,
             update: self.badge.clone(),
+            prompt: self.prompt_shown(),
             sound_on: self.sound_on,
             topmost: self.topmost,
             discord: self.link,
             discord_on: self.discord_on,
+            party_on: self.party_on,
             view_run: self.shown_run().map(|(i, _)| i),
             view_group: self.viewed_group().map(|(i, _)| i),
             group_pages: self.group_pages(),
@@ -82,6 +83,7 @@ impl App {
         let now = self.now();
         self.cue_effects();
         let services_changed = self.poll_services(now);
+        let party_changed = self.poll_party();
         let anim = self.animate(env, now);
         let dead = self.dead_since.is_some();
         let tip = self.tip();
@@ -99,7 +101,7 @@ impl App {
         let changed = self.gs.changed;
         self.gs.changed = false;
         let (log_anim, redraw_log) = if self.log.visible {
-            self.tick_log(rotated, env_changed, changed)
+            self.tick_log(rotated, env_changed, changed || party_changed)
         } else {
             (false, false)
         };
@@ -167,7 +169,7 @@ impl App {
             if self.gs.target.is_some() {
                 self.flash_at = Some(Instant::now());
                 if self.sound_on {
-                    play(BLIP);
+                    play(if self.gs.targets_me() { YOU } else { BLIP });
                 }
             }
         }
@@ -190,7 +192,6 @@ impl App {
         let dps_base = self.gs.boss.as_deref().map(base_name);
         if dps_base != self.dps_boss.as_deref() {
             self.dps_boss = dps_base.map(str::to_string);
-            self.dps_peak = 0;
             self.taken_peak = 0;
         }
     }
@@ -200,22 +201,24 @@ impl App {
         let link = discord::link();
         let link_changed = link != self.link;
         self.link = link;
+        let badge_changed = self.poll_badge();
+        link_changed || badge_changed
+    }
+
+    pub fn poll_badge(&mut self) -> bool {
         let badge = update::badge();
         let badge_changed = badge != self.badge;
         if badge_changed {
+            if matches!(badge, update::Badge::Ready(_)) && self.badge == update::Badge::None {
+                self.prompt_open = true;
+            }
             self.badge = badge;
         }
-        link_changed || badge_changed
+        badge_changed
     }
 
     fn animate(&mut self, env: Env, now: u64) -> bool {
         let rolling = self.gs.rolling_dps(now);
-        self.dps_peak = self.dps_peak.max(rolling);
-        let dps_target = if self.gs.boss.is_some() && self.dps_peak > 0 {
-            rolling as f32 / self.dps_peak as f32
-        } else {
-            0.0
-        };
         let rolling_taken = self.gs.rolling_taken(now);
         self.taken_peak = self.taken_peak.max(rolling_taken);
         let taken_target = if self.gs.boss.is_some() && self.taken_peak > 0 {
@@ -226,7 +229,6 @@ impl App {
         let tip_pending = self.hover.is_some() && self.tip().is_none();
         let mut anim = approach(&mut self.progress_shown, self.gs.progress, 0.002);
         anim |= tip_pending;
-        anim |= approach(&mut self.dps_frac_shown, dps_target, 0.002);
         anim |= approach(&mut self.taken_frac_shown, taken_target, 0.002);
         anim |= approach(&mut self.dps_shown, rolling as f32, 0.5);
         anim |= approach(
@@ -256,7 +258,11 @@ impl App {
         let log_tip_pending = self.log.hover.is_some() && self.log_tip().is_none();
         let rows = self.log_rows();
         if rows != self.log.rows {
-            if rows > self.log.rows && self.primed && self.log.scroll_shown < 1.0 {
+            if rows > self.log.rows
+                && self.primed
+                && self.log.scroll_shown < 1.0
+                && self.log.filter != crate::hud::timeline::Filter::Party
+            {
                 self.log.slide_at = Some(Instant::now());
             }
             self.log.rows = rows;

@@ -3,13 +3,46 @@ use super::logwin::*;
 use super::settings::*;
 use super::tick::*;
 use super::*;
+use crate::hud::render::{TARGET_HIT, UPDATE_LATER_HIT, UPDATE_NOW_HIT, UPDATE_SKIP_HIT};
 use crate::hud::timeline;
 
 const P: &str = "2026.09.07 09:12:28 Debug      -  ";
 const ENTER: &str = "[Behaviour] Entering Room: Ecliptica - Demo Playtest";
 
+#[derive(Default)]
+struct FakeRelay {
+    calls: std::sync::Mutex<Vec<(Option<crate::relay::Want>, Option<u64>)>>,
+}
+
+impl crate::relay::Relay for FakeRelay {
+    fn sync(&'static self, want: Option<crate::relay::Want>, dmg: Option<u64>) {
+        self.calls.lock().unwrap().push((want, dmg));
+    }
+
+    fn poll(&self) -> crate::relay::Poll {
+        crate::relay::Poll {
+            link: crate::relay::Link::Off,
+            session: 0,
+            snaps: Vec::new(),
+        }
+    }
+}
+
+impl FakeRelay {
+    fn take(&self) -> Vec<(Option<crate::relay::Want>, Option<u64>)> {
+        std::mem::take(&mut *self.calls.lock().unwrap())
+    }
+}
+
+fn fake_relay(app: &mut App) -> &'static FakeRelay {
+    let fake: &'static FakeRelay = Box::leak(Box::default());
+    app.party.relay = fake;
+    fake
+}
+
 fn headless() -> App {
     let mut app = App::new(96);
+    fake_relay(&mut app);
     app.watch = LogWatch::default();
     app.gs.feed(&format!("{P}{ENTER}"));
     app.gs.changed = false;
@@ -384,7 +417,7 @@ fn token_warning_when_enemies_clear_with_tokens_missing() {
 }
 
 #[test]
-fn dps_peak_survives_phase_change() {
+fn taken_peak_survives_phase_change() {
     let mut app = headless();
     app.gs.feed(&format!(
         "{P}ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0"
@@ -393,15 +426,12 @@ fn dps_peak_survives_phase_change() {
     app.gs
         .feed(&format!("{P}damage has been taken: 40, from source: "));
     app.tick();
-    let peak = app.dps_peak;
-    assert!(peak > 0);
     assert_eq!(app.taken_peak, 40);
     assert_eq!(app.dps_boss.as_deref(), Some("Yuki"));
     app.gs.feed(&format!(
         "{P}ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0"
     ));
     app.tick();
-    assert_eq!(app.dps_peak, peak);
     assert_eq!(app.taken_peak, 40);
     assert_eq!(app.dps_boss.as_deref(), Some("Yuki"));
     app.gs.feed(&format!(
@@ -540,4 +570,451 @@ fn log_scroll_filter_and_fade() {
     assert_eq!(app.log.alpha, 255);
     app.log_press(LogHit::Close, 0);
     assert!(!app.log.visible);
+}
+
+#[test]
+fn update_prompt_is_modal_and_waits_for_boss_fights() {
+    let mut app = headless();
+    let at = |r: (i32, i32, i32, i32)| (r.0 + r.2 / 2, r.1 + r.3 / 2);
+    let (nx, ny) = at(UPDATE_NOW_HIT);
+    let (tx, ty) = at(TARGET_HIT);
+    assert!(!app.prompt_shown());
+    assert_ne!(app.enabled_hit(nx, ny), Some(Hit::UpdateNow));
+    app.badge = Badge::Ready("v2026.10.29.0".into());
+    assert!(!app.prompt_shown());
+    assert!(app.activate(Hit::Update));
+    assert!(app.prompt_shown());
+    assert_eq!(app.enabled_hit(nx, ny), Some(Hit::UpdateNow));
+    let (sx, sy) = at(UPDATE_SKIP_HIT);
+    assert_eq!(app.enabled_hit(sx, sy), Some(Hit::UpdateSkip));
+    let (lx, ly) = at(UPDATE_LATER_HIT);
+    assert_eq!(app.enabled_hit(lx, ly), Some(Hit::UpdateLater));
+    assert_eq!(app.enabled_hit(LOGICAL_W - 1, 0), Some(Hit::Close));
+    assert_eq!(app.enabled_hit(240, 10), None);
+    assert_eq!(app.enabled_hit(300, LOGICAL_H - 20), None);
+    for h in [
+        Hit::Settings,
+        Hit::Target,
+        Hit::RunPrev,
+        Hit::Info(Info::Boss),
+    ] {
+        assert!(!app.hit_enabled(h));
+    }
+    assert!(app.activate(Hit::UpdateLater));
+    assert!(!app.prompt_shown());
+    assert_eq!(app.enabled_hit(300, LOGICAL_H - 20), Some(Hit::Update));
+    app.activate(Hit::Update);
+    app.gs.feed(&format!(
+        "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"
+    ));
+    assert!(!app.prompt_shown());
+    assert_ne!(app.enabled_hit(nx, ny), Some(Hit::UpdateNow));
+    app.gs
+        .feed(&format!("{P}ownership of Kakarot transferred to Alice"));
+    assert_eq!(app.enabled_hit(tx, ty), Some(Hit::Target));
+    app.gs
+        .feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
+    assert!(app.prompt_shown());
+    app.badge = Badge::Installing("v2026.10.29.0".into());
+    assert!(app.prompt_shown());
+    assert_eq!(app.enabled_hit(nx, ny), None);
+    assert_eq!(app.enabled_hit(sx, sy), None);
+    app.badge = Badge::Failed("v2026.10.29.0".into());
+    assert_eq!(app.enabled_hit(nx, ny), Some(Hit::UpdateNow));
+    assert_eq!(app.enabled_hit(sx, sy), None);
+}
+
+mod party_tests {
+    use super::*;
+    use crate::relay::proto::{member_hash, room_hash};
+    use crate::relay::{self, Link, Poll, Snap, Want};
+    use std::time::{Duration, Instant};
+    use timeline::Filter;
+
+    const W1: &str = "[Behaviour] Joining wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:98473~hidden(usr_me)~region(use)";
+    const W2: &str = "[Behaviour] Joining wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:11111~hidden(usr_me)~region(use)";
+
+    fn feed(app: &mut App, ts: &str, line: &str) {
+        app.gs
+            .feed(&format!("2026.09.07 {ts} Debug      -  {line}"));
+    }
+
+    fn party_app() -> (App, Want) {
+        let mut app = headless();
+        feed(&mut app, "09:12:29", "User Authenticated: Me (usr_me)");
+        feed(&mut app, "09:12:30", W1);
+        feed(
+            &mut app,
+            "09:12:31",
+            "[Behaviour] OnPlayerJoined Me (usr_me)",
+        );
+        feed(
+            &mut app,
+            "09:12:31",
+            "[Behaviour] OnPlayerJoined Alice (usr_a)",
+        );
+        app.set_party(true);
+        let want = relay::want(
+            true,
+            true,
+            app.gs.location.as_deref(),
+            app.gs.me_usr.as_deref(),
+        )
+        .unwrap();
+        (app, want)
+    }
+
+    fn poll(link: Link, session: u64, snaps: Vec<Snap>) -> Option<Poll> {
+        Some(Poll {
+            link,
+            session,
+            snaps,
+        })
+    }
+
+    fn snap(at: Instant, want: &Want, entries: &[(&str, u64)]) -> Snap {
+        Snap {
+            at,
+            room: want.room(),
+            entries: entries
+                .iter()
+                .map(|(usr, d)| (member_hash(&want.location, usr), *d))
+                .collect(),
+        }
+    }
+
+    fn rows(app: &App) -> Vec<(String, bool, bool, u64)> {
+        app.party
+            .pane()
+            .rows
+            .iter()
+            .map(|r| (r.name.clone(), r.you, r.live, r.dmg))
+            .collect()
+    }
+
+    fn row(name: &str, you: bool, live: bool, dmg: u64) -> (String, bool, bool, u64) {
+        (name.to_string(), you, live, dmg)
+    }
+
+    #[test]
+    fn party_toggle_needs_open_settings() {
+        let mut app = headless();
+        assert!(!app.party_on);
+        assert!(!app.hit_enabled(Hit::Party));
+        app.activate(Hit::Settings);
+        assert!(app.hit_enabled(Hit::Party));
+        assert!(app.activate(Hit::Party));
+        assert!(app.party_on);
+        app.render();
+        assert!(app.activate(Hit::Party));
+        assert!(!app.party_on);
+        app.activate(Hit::Settings);
+        assert!(!app.hit_enabled(Hit::Party));
+    }
+
+    #[test]
+    fn snaps_fill_the_table_with_roster_names() {
+        let (mut app, want) = party_app();
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+        );
+        feed(&mut app, "09:13:01", "Dealing 100 STRIKE damage");
+        let t0 = Instant::now();
+        let s = snap(
+            t0,
+            &want,
+            &[("usr_a", 300), ("usr_b", 100), ("usr_me", 100)],
+        );
+        assert!(app.party_step(t0, Some(&want), poll(Link::Connected, 1, vec![s])));
+        assert_eq!(
+            rows(&app),
+            [
+                row("Alice", false, true, 300),
+                row("you", true, true, 100),
+                row("Player 1", false, true, 100)
+            ]
+        );
+        assert_eq!(app.party.pane().status(), "connected");
+        assert!(!app.party_step(t0, Some(&want), poll(Link::Connected, 1, Vec::new())));
+        let wrong = Snap {
+            room: room_hash("wrld_other:1"),
+            ..snap(t0, &want, &[("usr_a", 999)])
+        };
+        app.party_step(t0, Some(&want), poll(Link::Connected, 1, vec![wrong]));
+        assert_eq!(rows(&app)[0], row("Alice", false, true, 300));
+        app.party_step(
+            t0,
+            None,
+            poll(Link::Connected, 1, vec![snap(t0, &want, &[("usr_a", 999)])]),
+        );
+        assert_eq!(rows(&app)[0], row("Alice", false, true, 300));
+        let t1 = t0 + Duration::from_secs(1);
+        let s = snap(t1, &want, &[("usr_a", 500), ("usr_b", 100)]);
+        app.party_step(t1, Some(&want), poll(Link::Connected, 1, vec![s]));
+        assert_eq!(rows(&app)[0], row("Alice", false, true, 500));
+        assert_eq!(app.party.pane().rows[0].dps, 200);
+        app.log.filter = Filter::Party;
+        assert_eq!(app.log_rows(), 4);
+        app.log.filter = Filter::All;
+        assert_ne!(app.log_rows(), 4);
+    }
+
+    #[test]
+    fn members_missing_from_a_snap_or_a_dropped_link_freeze() {
+        let (mut app, want) = party_app();
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+        );
+        let t0 = Instant::now();
+        let s = snap(t0, &want, &[("usr_a", 300), ("usr_b", 100)]);
+        app.party_step(t0, Some(&want), poll(Link::Connected, 1, vec![s]));
+        let t1 = t0 + Duration::from_secs(1);
+        app.party_step(
+            t1,
+            Some(&want),
+            poll(Link::Connected, 1, vec![snap(t1, &want, &[("usr_a", 400)])]),
+        );
+        assert_eq!(
+            rows(&app),
+            [
+                row("Alice", false, true, 400),
+                row("Player 1", false, false, 100),
+                row("you", true, true, 0)
+            ]
+        );
+        app.party_step(t1, Some(&want), poll(Link::Retrying, 1, Vec::new()));
+        assert_eq!(rows(&app)[0], row("Alice", false, false, 400));
+        assert_eq!(app.party.pane().status(), "not connected");
+        app.party_step(
+            t1,
+            Some(&want),
+            poll(Link::Connected, 2, vec![snap(t1, &want, &[("usr_a", 450)])]),
+        );
+        assert_eq!(rows(&app)[0], row("Alice", false, true, 450));
+        app.party_step(t1, Some(&want), poll(Link::Connected, 3, Vec::new()));
+        assert_eq!(rows(&app)[0], row("Alice", false, false, 450));
+    }
+
+    #[test]
+    fn rows_clear_at_the_next_fight_and_reset_on_a_new_room() {
+        let (mut app, want) = party_app();
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+        );
+        feed(&mut app, "09:13:01", "Dealing 100 STRIKE damage");
+        let t0 = Instant::now();
+        app.party_step(
+            t0,
+            Some(&want),
+            poll(Link::Connected, 1, vec![snap(t0, &want, &[("usr_b", 300)])]),
+        );
+        feed(
+            &mut app,
+            "09:13:30",
+            "Boss Kakarot dead, personal damage dealt: ",
+        );
+        app.party_step(
+            t0,
+            Some(&want),
+            poll(Link::Connected, 1, vec![snap(t0, &want, &[])]),
+        );
+        assert_eq!(
+            rows(&app),
+            [
+                row("Player 1", false, false, 300),
+                row("you", true, false, 100)
+            ]
+        );
+        app.log.filter = Filter::Party;
+        assert_eq!(app.log_rows(), 3);
+        feed(
+            &mut app,
+            "09:14:00",
+            "ECLIPTICA - now fighting boss: DarkMouth(Clone) on phase: 0",
+        );
+        app.party_step(t0, Some(&want), poll(Link::Connected, 1, Vec::new()));
+        assert_eq!(rows(&app), [row("you", true, true, 0)]);
+        assert_eq!(app.log_rows(), 0);
+        app.party_step(
+            t0,
+            Some(&want),
+            poll(
+                Link::Connected,
+                1,
+                vec![snap(t0, &want, &[("usr_c", 5), ("usr_b", 9)])],
+            ),
+        );
+        assert_eq!(rows(&app)[0], row("Player 1", false, true, 9));
+        assert_eq!(rows(&app)[1], row("Player 2", false, true, 5));
+        feed(&mut app, "09:15:00", "[Behaviour] OnLeftRoom");
+        feed(&mut app, "09:15:01", ENTER);
+        feed(&mut app, "09:15:01", W2);
+        let want2 = relay::want(true, true, app.gs.location.as_deref(), Some("usr_me")).unwrap();
+        assert_ne!(want2.room(), want.room());
+        app.party_step(t0, Some(&want2), poll(Link::Connected, 1, Vec::new()));
+        assert!(rows(&app).is_empty());
+        app.party_step(
+            t0,
+            Some(&want2),
+            poll(Link::Connected, 2, vec![snap(t0, &want2, &[("usr_c", 7)])]),
+        );
+        assert_eq!(rows(&app), [row("Player 1", false, true, 7)]);
+    }
+
+    #[test]
+    fn turning_sharing_off_clears_the_table() {
+        let (mut app, want) = party_app();
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+        );
+        let t0 = Instant::now();
+        app.party_step(
+            t0,
+            Some(&want),
+            poll(Link::Connected, 1, vec![snap(t0, &want, &[("usr_a", 300)])]),
+        );
+        assert!(!app.party.pane().shown().is_empty());
+        app.set_party(false);
+        assert!(app.party_step(t0, None, None));
+        assert!(rows(&app).is_empty());
+        assert!(!app.party.pane().on);
+        assert_eq!(app.party.pane().status(), "sharing off");
+        app.set_party(true);
+        app.party_step(t0, Some(&want), None);
+        assert_eq!(rows(&app), [row("you", true, true, 0)]);
+        assert_eq!(app.party.pane().status(), "not connected");
+    }
+
+    #[test]
+    fn sharing_off_never_touches_the_relay() {
+        let mut app = headless();
+        let fake = fake_relay(&mut app);
+        app.vrc_running = true;
+        feed(&mut app, "09:12:29", "User Authenticated: Me (usr_me)");
+        feed(&mut app, "09:12:30", W1);
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+        );
+        feed(&mut app, "09:13:01", "Dealing 100 STRIKE damage");
+        for _ in 0..5 {
+            assert!(!app.poll_party());
+        }
+        assert!(fake.take().is_empty());
+        assert!(!app.party.pane().on);
+    }
+
+    #[test]
+    fn damage_is_only_sent_during_a_live_fight() {
+        let (mut app, want) = party_app();
+        let fake = fake_relay(&mut app);
+        app.vrc_running = true;
+        app.poll_party();
+        assert_eq!(fake.take(), [(Some(want.clone()), None)]);
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+        );
+        feed(&mut app, "09:13:01", "Dealing 100 STRIKE damage");
+        app.poll_party();
+        assert_eq!(fake.take(), [(Some(want.clone()), Some(100))]);
+        feed(
+            &mut app,
+            "09:13:30",
+            "Boss Kakarot dead, personal damage dealt: ",
+        );
+        app.poll_party();
+        assert_eq!(fake.take(), [(Some(want.clone()), None)]);
+        app.vrc_running = false;
+        app.poll_party();
+        assert_eq!(fake.take(), [(None, None)]);
+    }
+
+    #[test]
+    fn turning_sharing_off_tells_the_relay_once() {
+        let (mut app, want) = party_app();
+        let fake = fake_relay(&mut app);
+        app.vrc_running = true;
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+        );
+        feed(&mut app, "09:13:01", "Dealing 100 STRIKE damage");
+        app.poll_party();
+        assert_eq!(fake.take(), [(Some(want), Some(100))]);
+        app.set_party(false);
+        assert!(app.poll_party());
+        assert_eq!(fake.take(), [(None, None)]);
+        assert!(!app.poll_party());
+        assert!(fake.take().is_empty());
+    }
+
+    #[test]
+    fn leaving_the_world_tells_the_relay() {
+        let (mut app, want) = party_app();
+        let fake = fake_relay(&mut app);
+        app.vrc_running = true;
+        app.poll_party();
+        assert_eq!(fake.take(), [(Some(want), None)]);
+        feed(&mut app, "09:15:00", "[Behaviour] OnLeftRoom");
+        app.poll_party();
+        assert_eq!(fake.take(), [(None, None)]);
+    }
+
+    #[test]
+    fn snaps_from_a_dropped_link_are_never_applied() {
+        let (mut app, want) = party_app();
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+        );
+        let hub = relay::tests::hub();
+        let id = relay::tests::connect(hub);
+        let t0 = Instant::now();
+        relay::tests::push(hub, id, snap(t0, &want, &[("usr_a", 300)]));
+        app.party_step(t0, Some(&want), Some(hub.poll()));
+        assert_eq!(rows(&app)[0], row("Alice", false, true, 300));
+        let t1 = t0 + Duration::from_secs(1);
+        relay::tests::push(hub, id, snap(t1, &want, &[("usr_a", 900)]));
+        relay::tests::drop_link(hub);
+        app.party_step(t1, Some(&want), Some(hub.poll()));
+        assert_eq!(rows(&app)[0], row("Alice", false, false, 300));
+        relay::tests::push(hub, id, snap(t1, &want, &[("usr_a", 950)]));
+        let p = hub.poll();
+        assert!(p.snaps.is_empty());
+        app.party_step(t1, Some(&want), Some(p));
+        let stale = snap(t1, &want, &[("usr_a", 999)]);
+        let session = hub.poll().session;
+        app.party_step(t1, Some(&want), poll(Link::Retrying, session, vec![stale]));
+        assert_eq!(rows(&app)[0], row("Alice", false, false, 300));
+    }
+
+    #[test]
+    fn want_follows_the_toggle_and_the_world() {
+        let (mut app, _) = party_app();
+        app.vrc_running = true;
+        assert!(relay::want(
+            app.party_on,
+            app.gs.in_ecliptica(),
+            app.gs.location.as_deref(),
+            app.gs.me_usr.as_deref()
+        )
+        .is_some());
+        feed(&mut app, "09:15:00", "[Behaviour] OnLeftRoom");
+        assert_eq!(app.gs.location, None);
+        app.poll_party();
+        assert!(app.party.pane().rows.is_empty());
+    }
 }

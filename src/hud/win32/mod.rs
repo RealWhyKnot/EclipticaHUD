@@ -36,7 +36,7 @@ fn wide(s: &str) -> Vec<u16> {
 
 pub fn run() {
     update::cleanup_old();
-    update::spawn_check();
+    update::spawn_check(load_skipped());
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let dpi = GetDpiForSystem();
@@ -52,6 +52,7 @@ pub fn run() {
         if load_discord() {
             app.set_discord(true);
         }
+        app.set_party(load_party());
         let (w, h) = (app.renderer.width, app.renderer.height);
 
         let module = GetModuleHandleW(std::ptr::null());
@@ -107,6 +108,7 @@ pub fn run() {
             DispatchMessageW(&msg);
         }
     }
+    crate::relay::HUB.shutdown(std::time::Duration::from_millis(2500));
     if update::restart_pending() {
         update::relaunch();
     }

@@ -1,6 +1,7 @@
 mod anim;
 mod logwin;
 mod nav;
+mod party;
 mod settings;
 #[cfg(test)]
 mod tests;
@@ -59,6 +60,8 @@ pub struct App {
     pub sound_on: bool,
     pub topmost: bool,
     pub discord_on: bool,
+    pub party_on: bool,
+    party: party::PartyState,
     presence: Option<Presence>,
     presence_at: Option<Instant>,
     link: Link,
@@ -76,9 +79,7 @@ pub struct App {
     token_alerts_seen: u64,
     last_target_since: u64,
     progress_shown: f32,
-    dps_peak: u64,
     dps_boss: Option<String>,
-    dps_frac_shown: f32,
     taken_peak: u64,
     taken_frac_shown: f32,
     taken_flash_at: Option<Instant>,
@@ -94,10 +95,12 @@ pub struct App {
     last_log_tip: Option<LogHit>,
     timer_ms: u32,
     badge: Badge,
+    prompt_open: bool,
 }
 
 static BLIP: &[u8] = include_bytes!("../../../assets/target.wav");
 static TOKENS: &[u8] = include_bytes!("../../../assets/tokens.wav");
+static YOU: &[u8] = include_bytes!("../../../assets/target_you.wav");
 
 fn play(wav: &'static [u8]) {
     let _ = wav;
@@ -165,6 +168,8 @@ impl App {
             sound_on: true,
             topmost: true,
             discord_on: false,
+            party_on: false,
+            party: party::PartyState::new(),
             presence: None,
             presence_at: None,
             link: Link::Off,
@@ -182,9 +187,7 @@ impl App {
             token_alerts_seen: 0,
             last_target_since: 0,
             progress_shown: 0.0,
-            dps_peak: 0,
             dps_boss: None,
-            dps_frac_shown: 0.0,
             taken_peak: 0,
             taken_frac_shown: 0.0,
             taken_flash_at: None,
@@ -200,6 +203,7 @@ impl App {
             last_log_tip: None,
             timer_ms: 1000,
             badge: Badge::None,
+            prompt_open: false,
         }
     }
 
@@ -215,7 +219,18 @@ impl App {
     }
 
     pub fn update_ready(&self) -> bool {
-        matches!(self.badge, Badge::Ready(_))
+        matches!(self.badge, Badge::Ready(_) | Badge::Failed(_))
+    }
+
+    pub fn prompt_shown(&self) -> bool {
+        self.prompt_open && self.badge != Badge::None && self.gs.boss.is_none()
+    }
+
+    pub fn skip_update(&mut self) -> Option<String> {
+        self.prompt_open = false;
+        let tag = crate::update::skip();
+        self.badge = crate::update::badge();
+        tag
     }
 
     pub fn backfill_history(&mut self) {
@@ -235,8 +250,17 @@ impl App {
     }
 
     pub fn hit_enabled(&self, hit: Hit) -> bool {
+        if self.prompt_shown() {
+            return match hit {
+                Hit::Close | Hit::Log | Hit::Pin => true,
+                Hit::UpdateNow | Hit::UpdateLater => self.update_ready(),
+                Hit::UpdateSkip => matches!(self.badge, Badge::Ready(_)),
+                _ => false,
+            };
+        }
         match hit {
             Hit::Close | Hit::Log | Hit::Pin | Hit::Discord | Hit::Settings => true,
+            Hit::Party => self.settings_open,
             Hit::ScaleDown => self.settings_open && self.scale > MIN_SCALE + 0.001,
             Hit::ScaleUp => self.settings_open && self.scale < MAX_SCALE - 0.001,
             Hit::AlphaDown => self.settings_open && self.alpha > MIN_ALPHA,
@@ -247,13 +271,14 @@ impl App {
             }
             Hit::Target | Hit::FightPrev | Hit::FightNext if self.settings_open => false,
             Hit::Info(
-                Info::Boss | Info::Result | Info::Dealt(_) | Info::DealtBar | Info::LastKill,
+                Info::Boss | Info::Result | Info::Dealt(_) | Info::DealtGraph | Info::LastKill,
             ) if self.settings_open => false,
             Hit::Info(Info::Version) => !self.update_ready(),
             Hit::Info(i) if i.live_only() => self.is_live(),
             Hit::Info(i) if i.history_only() => !self.is_live(),
             Hit::Info(_) => true,
             Hit::Update => self.update_ready(),
+            Hit::UpdateNow | Hit::UpdateLater | Hit::UpdateSkip => false,
             Hit::Target => self.is_live() && self.gs.boss.is_some() && self.gs.target.is_some(),
             Hit::RunPrev => self.viewed_page() > 0,
             Hit::RunNext => self.sel_run.is_some(),
@@ -292,13 +317,25 @@ impl App {
                 self.settings_open = !self.settings_open;
                 true
             }
+            Hit::Party => {
+                self.set_party(!self.party_on);
+                true
+            }
             Hit::ScaleDown => self.step_scale(-1.0),
             Hit::ScaleUp => self.step_scale(1.0),
             Hit::AlphaDown => self.step_alpha(false),
             Hit::AlphaUp => self.step_alpha(true),
             Hit::WindowDown => self.step_window(false),
             Hit::WindowUp => self.step_window(true),
-            Hit::Close | Hit::Update | Hit::Info(_) => false,
+            Hit::Update => {
+                self.prompt_open = true;
+                true
+            }
+            Hit::UpdateLater => {
+                self.prompt_open = false;
+                true
+            }
+            Hit::Close | Hit::UpdateNow | Hit::UpdateSkip | Hit::Info(_) => false,
         }
     }
 

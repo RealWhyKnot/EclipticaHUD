@@ -72,11 +72,25 @@ pub struct BossFight {
     pub deaths: u32,
     pub kill: Option<(u64, u64)>,
     pub lost: bool,
+    pub series: Vec<u32>,
 }
+
+const SERIES_CAP: usize = 7200;
 
 impl BossFight {
     pub fn secs(&self, now: u64) -> u64 {
         self.end_ts.unwrap_or(now).saturating_sub(self.start_ts)
+    }
+
+    pub fn add_dmg(&mut self, ts: u64, n: u64) {
+        let i = ts.saturating_sub(self.start_ts) as usize;
+        if i >= SERIES_CAP {
+            return;
+        }
+        if self.series.len() <= i {
+            self.series.resize(i + 1, 0);
+        }
+        self.series[i] = self.series[i].saturating_add(n.min(u32::MAX as u64) as u32);
     }
 }
 
@@ -200,6 +214,11 @@ impl Run {
     }
 }
 
+pub struct Graph {
+    pub cols: Vec<u64>,
+    pub marks: Vec<usize>,
+}
+
 pub struct FightGroup<'a> {
     pub fights: &'a [BossFight],
     pub name: &'a str,
@@ -219,6 +238,26 @@ impl FightGroup<'_> {
 
     pub fn dps(&self, now: u64) -> u64 {
         self.dmg / self.duration(now).max(1)
+    }
+
+    pub fn graph(&self, now: u64, max_cols: usize) -> Graph {
+        let secs = (self.duration(now) as usize + 1).min(SERIES_CAP);
+        let per = secs.div_ceil(max_cols.max(1));
+        let n = secs.div_ceil(per);
+        let col = |t: u64| (t.saturating_sub(self.start) as usize / per).min(n - 1);
+        let mut sum = vec![0u64; n];
+        for f in self.fights {
+            for (i, &d) in f.series.iter().enumerate() {
+                sum[col(f.start_ts + i as u64)] += d as u64;
+            }
+        }
+        let cols = sum
+            .iter()
+            .enumerate()
+            .map(|(c, &s)| s / per.min(secs - c * per) as u64)
+            .collect();
+        let marks = self.fights[1..].iter().map(|f| col(f.start_ts)).collect();
+        Graph { cols, marks }
     }
 
     pub fn result(&self) -> &'static str {
@@ -291,6 +330,7 @@ mod tests {
             deaths: 0,
             kill: None,
             lost: false,
+            series: Vec::new(),
         };
         let run = Run {
             fights: vec![
@@ -304,5 +344,80 @@ mod tests {
         };
         assert_eq!(run.groups(), vec![0..2, 2..3, 3..4, 4..5]);
         assert!(Run::default().groups().is_empty());
+    }
+
+    fn timed(name: &str, start_ts: u64, end_ts: Option<u64>) -> BossFight {
+        BossFight {
+            name: name.into(),
+            start_ts,
+            end_ts,
+            dmg: 0,
+            taken: 0,
+            hits: 0,
+            max_hit: 0,
+            attacks: Vec::new(),
+            deaths: 0,
+            kill: None,
+            lost: false,
+            series: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn series_records_damage_per_second() {
+        let mut f = timed("Yuki", 100, None);
+        f.add_dmg(100, 5);
+        f.add_dmg(100, 7);
+        f.add_dmg(103, 9);
+        f.add_dmg(99, 1);
+        assert_eq!(f.series, vec![13, 0, 0, 9]);
+        f.add_dmg(100 + SERIES_CAP as u64, 4);
+        assert_eq!(f.series.len(), 4);
+        f.add_dmg(101, u64::MAX);
+        assert_eq!(f.series[1], u32::MAX);
+    }
+
+    #[test]
+    fn graph_spans_phases_and_buckets_long_fights() {
+        let mut p1 = timed("Yuki", 0, Some(4));
+        for t in 0..4 {
+            p1.add_dmg(t, 10);
+        }
+        let mut p2 = timed("YukiPhase2", 4, None);
+        p2.add_dmg(5, 30);
+        let run = Run {
+            fights: vec![p1, p2],
+            ..Default::default()
+        };
+        let g = run.group(0).unwrap();
+        let short = g.graph(5, 77);
+        assert_eq!(short.cols, vec![10, 10, 10, 10, 0, 30]);
+        assert_eq!(short.marks, vec![4]);
+        let packed = g.graph(5, 2);
+        assert_eq!(packed.cols, vec![10, 13]);
+        assert_eq!(packed.marks, vec![1]);
+
+        let mut long = timed("Gilgamesh", 1000, Some(1700));
+        for t in 1000..=1700 {
+            long.add_dmg(t, 100);
+        }
+        let run = Run {
+            fights: vec![long],
+            ..Default::default()
+        };
+        let g = run.group(0).unwrap().graph(0, 77);
+        assert!(g.cols.len() <= 77);
+        assert!(g.cols.iter().all(|&c| c == 100));
+        assert!(g.marks.is_empty());
+    }
+
+    #[test]
+    fn graph_of_fresh_fight_has_one_column() {
+        let run = Run {
+            fights: vec![timed("Nan", 50, None)],
+            ..Default::default()
+        };
+        assert_eq!(run.group(0).unwrap().graph(50, 77).cols, vec![0]);
+        assert_eq!(run.group(0).unwrap().graph(10, 77).cols, vec![0]);
     }
 }

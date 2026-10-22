@@ -1,5 +1,6 @@
 use super::fmt::*;
 use super::frame::{Env, Frame};
+use super::graph::GRAPH_COLS;
 use super::hit::{Hit, TipCtx};
 use super::layout::*;
 use super::theme::*;
@@ -154,8 +155,11 @@ impl Renderer {
         if f.settings_open {
             self.draw_settings(f);
         }
-        self.draw_taken_card(f, gs, hist.as_ref());
+        self.shifted(GRAPH_DY, || self.draw_taken_card(f, gs, hist.as_ref()));
         self.draw_footer(f);
+        if f.prompt {
+            self.draw_update_prompt(f);
+        }
         if f.warn_t < 1.0 {
             self.draw_token_warning(f, gs);
         }
@@ -337,7 +341,9 @@ impl Renderer {
 
     fn draw_boss_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
         let now = f.now;
-        self.rround(M, 82, W, 96, 8, CARD);
+        let mine = f.live() && !f.empty() && gs.boss.is_some() && gs.targets_me();
+        let card = if mine { mix(CARD, DANGER, 0.16) } else { CARD };
+        self.rround(M, 82, W, 96, 8, card);
         let has_fights = f.view_run.is_some_and(|i| !gs.runs[i].fights.is_empty());
         let card_label = if f.live() && !f.empty() && gs.pre_boss() {
             "STAGE"
@@ -378,7 +384,19 @@ impl Renderer {
             (Some(boss), target) => {
                 let shown = boss_name(base_name(boss));
                 self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, shown);
-                self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "TARGET");
+                if mine {
+                    self.text(
+                        M + 12,
+                        114,
+                        W - 24,
+                        F_LABEL,
+                        DANGER,
+                        DT_LEFT,
+                        "TARGETING YOU",
+                    );
+                } else {
+                    self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "TARGET");
+                }
                 let mut right = W - 24;
                 if !f.sound_on {
                     self.text(M + 12, 114, right, F_GLYPH, DIM, DT_RIGHT, GLYPH_MUTE);
@@ -389,7 +407,11 @@ impl Renderer {
                     let hint = format!("phase {pn}");
                     self.text(M + 12, 114, right, F_TINY, DIM, DT_RIGHT, &hint);
                 }
-                let color = mix(ACCENT, TEXT, ease_out_cubic(f.flash_t));
+                let color = if mine {
+                    mix(TEXT, DANGER, ease_out_cubic(f.flash_t))
+                } else {
+                    mix(ACCENT, TEXT, ease_out_cubic(f.flash_t))
+                };
                 match target {
                     Some(t) => {
                         if f.hov(Hit::Target) || f.prs(Hit::Target) {
@@ -539,7 +561,33 @@ impl Renderer {
 
     fn draw_dealt_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
         let now = f.now;
-        self.rround(M, 186, W, 92, 8, CARD);
+        self.rround(M, 186, W, 92 + GRAPH_DY, 8, CARD);
+        let live_group = match live_kind(f, gs) {
+            Live::Fight | Live::Inter(_) => gs
+                .live_run()
+                .and_then(|r| r.group(r.groups().len().checked_sub(1)?)),
+            _ => None,
+        };
+        let shown = if f.live() { live_group.as_ref() } else { hist };
+        let (gx, gy, gw, gh) = GRAPH_RECT;
+        match shown {
+            Some(g) => self.graph(gx, gy, gw, gh, &g.graph(now, GRAPH_COLS)),
+            None if f.live() => {
+                self.graph_well(gx, gy, gw, gh);
+                self.text_rect(
+                    gx,
+                    gy,
+                    gw,
+                    gh,
+                    F_TINY,
+                    DIM,
+                    DT_CENTER | DT_VCENTER,
+                    "graph starts with the boss",
+                );
+            }
+            None => {}
+        }
+        let line_y = 288;
         if f.live() {
             let kind = live_kind(f, gs);
             let win = format!("DPS {}s", f.window);
@@ -583,9 +631,6 @@ impl Renderer {
             self.stat(192, 0, l0, &v0, AMBER);
             self.stat(192, 1, l1, &v1, AMBER);
             self.stat(192, 2, l2, &v2, AMBER);
-            if matches!(kind, Live::Fight) {
-                self.bar(M + 12, 233, W - 24, 3, f.dps_frac_shown, ACCENT);
-            }
             match gs.last_kill_total().filter(|_| !f.empty()) {
                 Some((boss, strike, other)) => {
                     let line = format!(
@@ -594,9 +639,9 @@ impl Renderer {
                         group_digits(strike),
                         group_digits(other)
                     );
-                    self.text(M + 12, 242, W - 24, F_BODY, TEXT, DT_LEFT, &line);
+                    self.text(M + 12, line_y, W - 24, F_BODY, TEXT, DT_LEFT, &line);
                 }
-                None => self.text(M + 12, 242, W - 24, F_BODY, DIM, DT_LEFT, "no kills yet"),
+                None => self.text(M + 12, line_y, W - 24, F_BODY, DIM, DT_LEFT, "no kills yet"),
             }
         } else if let Some(h) = hist {
             let dur = h.duration(now);
@@ -611,12 +656,12 @@ impl Renderer {
                         group_digits(s),
                         group_digits(ns)
                     );
-                    self.text(M + 12, 242, W - 24, F_BODY, TEXT, DT_LEFT, &line);
+                    self.text(M + 12, line_y, W - 24, F_BODY, TEXT, DT_LEFT, &line);
                 }
                 None => {
                     self.text(
                         M + 12,
-                        242,
+                        line_y,
                         W - 24,
                         F_BODY,
                         DIM,
@@ -630,7 +675,15 @@ impl Renderer {
             self.stat(192, 0, "DMG", &group_digits(r.dmg()), AMBER);
             self.stat(192, 1, "DPS", &(r.dmg() / active.max(1)).to_string(), AMBER);
             self.stat(192, 2, "CLEARING", &fmt_dur(active), AMBER);
-            self.text(M + 12, 242, W - 24, F_BODY, DIM, DT_LEFT, "no boss fight");
+            self.text(
+                M + 12,
+                line_y,
+                W - 24,
+                F_BODY,
+                DIM,
+                DT_LEFT,
+                "no boss fight",
+            );
         } else {
             self.text(M + 12, 208, W - 24, F_BODY, DIM, DT_LEFT, "no data");
         }
@@ -680,6 +733,26 @@ impl Renderer {
                 self.arrow(rect, on, f.hov(hit), f.prs(hit), glyph);
             }
         }
+        let (px, py, pw, ph) = PARTY_HIT;
+        self.text_rect(
+            M + 12,
+            py,
+            150,
+            ph,
+            F_LABEL,
+            DIM,
+            DT_LEFT | DT_VCENTER,
+            "PARTY SHARING",
+        );
+        let (bg, fg) = match (f.party_on, f.hov(Hit::Party) || f.prs(Hit::Party)) {
+            (true, false) => (ACCENT, BG),
+            (true, true) => (mix(ACCENT, TEXT, 0.2), BG),
+            (false, true) => (BG, TEXT),
+            (false, false) => (CARD, DIM),
+        };
+        self.rround(px, py, pw, ph, 6, bg);
+        let label = if f.party_on { "On" } else { "Off" };
+        self.text_rect(px, py, pw, ph, F_LABEL, fg, DT_CENTER | DT_VCENTER, label);
     }
 
     fn draw_taken_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
@@ -818,14 +891,10 @@ impl Renderer {
         let (utext, ucolor) = match &f.update {
             Badge::None => (VERSION.to_string(), DIM),
             Badge::Ready(tag) => (format!("update {tag}"), ACCENT),
-            Badge::Installing => ("updating".to_string(), AMBER),
-            Badge::Failed => ("update failed".to_string(), DANGER),
+            Badge::Installing(_) => ("updating".to_string(), AMBER),
+            Badge::Failed(_) => ("update failed".to_string(), DANGER),
         };
-        let ucolor = if f.hov(Hit::Update) && matches!(f.update, Badge::Ready(_)) {
-            TEXT
-        } else {
-            ucolor
-        };
+        let ucolor = if f.hov(Hit::Update) { TEXT } else { ucolor };
         self.text(M, fy, W, F_TINY, ucolor, DT_RIGHT, &utext);
     }
 

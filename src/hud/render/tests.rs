@@ -31,16 +31,17 @@ fn frame() -> Frame {
         log_open: false,
         topmost: true,
         progress_shown: 0.5,
-        dps_frac_shown: 0.5,
         taken_frac_shown: 0.5,
         dps_shown: 0.0,
         fight_dps_shown: 0.0,
         taken_shown: 0.0,
         taken_rate_shown: 0.0,
         update: Badge::None,
+        prompt: false,
         sound_on: true,
         discord: Link::Off,
         discord_on: false,
+        party_on: false,
         view_run: Some(0),
         view_group: Some(0),
         group_pages: 1,
@@ -176,6 +177,7 @@ fn hit_test_regions() {
         (ALPHA_UP_HIT, Hit::AlphaUp),
         (WINDOW_DOWN_HIT, Hit::WindowDown),
         (WINDOW_UP_HIT, Hit::WindowUp),
+        (PARTY_HIT, Hit::Party),
     ] {
         let (x, y, w, h) = rect;
         assert_eq!(r.hit_test(x, y), Some(hit));
@@ -278,13 +280,13 @@ fn draw_smoke_bars() {
     assert_eq!(pix(&r, 0, 0), BG);
     assert_eq!(pix(&r, 100, 49), GOOD);
     assert_eq!(pix(&r, 300, 49), CARD);
-    assert_eq!(pix(&r, 100, 234), ACCENT);
+    assert_eq!(pix(&r, 100, 250), mix(CARD, BG, 0.55));
     assert_eq!(pix(&r, 20, 90), CARD);
     assert_eq!(pix(&r, 336, 11), CARD_HI);
-    assert_eq!(pix(&r, 20, 300), CARD);
-    assert_eq!(pix(&r, 100, 397), DANGER);
-    assert_eq!(pix(&r, 300, 397), BG);
-    assert_eq!(pix(&r, 30, 449), DANGER);
+    assert_eq!(pix(&r, 20, 340), CARD);
+    assert_eq!(pix(&r, 100, 437), DANGER);
+    assert_eq!(pix(&r, 300, 437), BG);
+    assert_eq!(pix(&r, 30, 489), DANGER);
     assert_eq!(pix(&r, 20, 160), CARD);
     let warned = Frame {
         warn_t: 0.5,
@@ -301,8 +303,8 @@ fn draw_smoke_bars() {
         r.draw_main(&gs, &away);
         assert_eq!(pix(&r, 100, 49), BG);
         assert_eq!(pix(&r, 100, 234), CARD);
-        assert_eq!(pix(&r, 100, 397), CARD);
-        assert_eq!(pix(&r, 30, 449), CARD);
+        assert_eq!(pix(&r, 100, 437), CARD);
+        assert_eq!(pix(&r, 30, 489), CARD);
     }
     gs.feed(&format!("{P}ECLIPTICA - now in lobby"));
     let ended = Frame {
@@ -315,8 +317,8 @@ fn draw_smoke_bars() {
     r.draw_main(&gs, &ended);
     assert_eq!(pix(&r, 100, 49), BG);
     assert_eq!(pix(&r, 100, 234), CARD);
-    assert_eq!(pix(&r, 100, 397), CARD);
-    assert_eq!(pix(&r, 30, 449), CARD);
+    assert_eq!(pix(&r, 100, 437), CARD);
+    assert_eq!(pix(&r, 30, 489), CARD);
     r.draw_main(&gs, &frame());
     let settings = Frame {
         settings_open: true,
@@ -329,8 +331,8 @@ fn draw_smoke_bars() {
     assert_eq!(pix(&r, 120, 150), CARD_HI);
     assert_eq!(pix(&r, 120, 250), CARD_HI);
     r.draw_main(&gs, &frame());
-    assert_eq!(pix(&r, 120, 100), CARD);
-    assert_eq!(pix(&r, 120, 250), CARD);
+    assert_eq!(pix(&r, 20, 100), CARD);
+    assert_eq!(pix(&r, 120, 232), CARD);
 
     let mut pre = GameState::default();
     pre.feed(&format!(
@@ -342,7 +344,7 @@ fn draw_smoke_bars() {
     ));
     r.draw_main(&pre, &frame());
     assert_eq!(pix(&r, 100, 234), CARD);
-    assert_eq!(pix(&r, 100, 397), CARD);
+    assert_eq!(pix(&r, 100, 437), CARD);
     pre.feed(&format!(
         "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.5"
     ));
@@ -360,7 +362,7 @@ fn draw_smoke_bars() {
         ..frame()
     };
     r.draw_main(&gs, &flashing);
-    assert_ne!(pix(&r, 20, 300), CARD);
+    assert_ne!(pix(&r, 20, 340), CARD);
     assert_eq!(pix(&r, 304, 11), CARD_HI);
 
     let group = Frame {
@@ -369,8 +371,8 @@ fn draw_smoke_bars() {
         ..frame()
     };
     r.draw_main(&gs, &group);
-    assert_eq!(pix(&r, 300, 397), CARD);
-    assert_eq!(pix(&r, 30, 419), DANGER);
+    assert_eq!(pix(&r, 300, 437), CARD);
+    assert_eq!(pix(&r, 30, 459), DANGER);
 
     let tipped = Frame {
         tip: Some(Hit::Log),
@@ -420,9 +422,10 @@ fn draw_smoke_bars() {
     }
     assert!(Hit::Log.clickable());
     assert_eq!(r.hit_test(200, 30), Some(Hit::Info(Info::Status)));
-    assert_eq!(r.hit_test(200, 250), Some(Hit::Info(Info::LastKill)));
+    assert_eq!(r.hit_test(200, 295), Some(Hit::Info(Info::LastKill)));
+    assert_eq!(r.hit_test(200, 250), Some(Hit::Info(Info::DealtGraph)));
     assert_eq!(r.hit_test(30, 200), Some(Hit::Info(Info::Dealt(0))));
-    assert_eq!(r.hit_test(300, 370), Some(Hit::Info(Info::TakenMore(2))));
+    assert_eq!(r.hit_test(300, 410), Some(Hit::Info(Info::TakenMore(2))));
     let ctx = TipCtx {
         live: true,
         topmost: false,
@@ -462,6 +465,7 @@ fn draw_log_smoke() {
         slide: 0.0,
         tip: None,
         thumb: None,
+        party: PartyPane::default(),
     };
     r.draw_log(timeline::live(&gs), &lv);
     assert_eq!(pix(&r, 0, 0), BG);
@@ -545,4 +549,1052 @@ fn past_run_tags_and_no_boss_page() {
     r.draw_main(&gs, &page(1));
     assert!(ink(&r, DANGER, 54, 78) > 0);
     assert!(ink(&r, DANGER, 128, 150) > 0);
+}
+
+fn fight_log(secs: u64, me_targeted: bool) -> (GameState, u64) {
+    let line = |t: u64, m: &str| {
+        format!(
+            "2026.09.07 {:02}:{:02}:{:02} Debug      -  {m}",
+            9 + t / 3600,
+            t / 60 % 60,
+            t % 60
+        )
+    };
+    let mut gs = GameState::default();
+    gs.feed(&line(0, "User Authenticated: Me (Alt) (usr_1)"));
+    gs.feed(&line(
+        0,
+        "ECLIPTICA - now in stage: Stage_Test on phase: 0.5 as class: Blade",
+    ));
+    gs.feed(&line(
+        1,
+        "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.5",
+    ));
+    for t in 2..secs {
+        gs.feed(&line(t, &format!("Dealing {} STRIKE damage", t * 10)));
+    }
+    let who = if me_targeted { "Me (Alt)" } else { "Someone" };
+    gs.feed(&line(
+        secs,
+        &format!("ownership of Kakarot transferred to {who}"),
+    ));
+    let now = crate::game::event::split_line(&line(secs, "x")).unwrap().ts;
+    (gs, now)
+}
+
+#[test]
+fn damage_graph_draws_fight_columns() {
+    let (gs, now) = fight_log(30, false);
+    let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+    r.draw_main(&gs, &Frame { now, ..frame() });
+    let (gx, gy, gw, gh) = GRAPH_RECT;
+    assert_eq!(gx + gw, LOGICAL_W - M - 12);
+    assert!(gy - 2 > 228 && gy + gh + 2 < 288);
+    let well = mix(CARD, BG, 0.55);
+    let x0 = gx + 28 * gw / 30;
+    assert_eq!(pix(&r, x0 + 2, gy), AMBER);
+    assert_eq!(pix(&r, x0 + 2, gy + gh - 1), mix(CARD, AMBER, 0.45));
+    assert_eq!(pix(&r, gx + gw - 2, gy + gh - 1), well);
+    assert_eq!(pix(&r, gx + 2, gy + gh - 1), well);
+    assert_eq!(pix(&r, gx - 3, gy + 10), CARD);
+    assert_eq!(pix(&r, gx + gw + 2, gy + 10), CARD);
+    assert_eq!(pix(&r, 20, 100), CARD);
+}
+
+#[test]
+fn damage_graph_fits_any_fight_length() {
+    let (gs, now) = fight_log(9000, false);
+    let run = gs.live_run().unwrap();
+    let g = run.group(0).unwrap().graph(now, super::graph::GRAPH_COLS);
+    assert!(g.cols.len() <= super::graph::GRAPH_COLS);
+    let mut r = Renderer::new(192, LOGICAL_W, LOGICAL_H);
+    r.draw_main(&gs, &Frame { now, ..frame() });
+    let (gx, gy, gw, gh) = GRAPH_RECT;
+    for y in [gy - 4, gy + gh + 3] {
+        for x in (gx..gx + gw).step_by(7) {
+            assert_eq!(pix(&r, x * 2, y * 2), CARD, "{x},{y}");
+        }
+    }
+    assert_eq!(pix(&r, 20 * 2, 300 * 2), CARD);
+}
+
+#[test]
+fn boss_card_marks_you_as_target() {
+    let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+    let (gs, now) = fight_log(10, true);
+    assert!(gs.targets_me());
+    r.draw_main(&gs, &Frame { now, ..frame() });
+    assert_eq!(pix(&r, 20, 100), mix(CARD, DANGER, 0.16));
+    assert!(
+        text_w(&r, F_LABEL, "TARGETING YOU") + 20 + text_w(&r, F_TINY, "phase 3") + 8
+            <= LOGICAL_W - 2 * M - 24
+    );
+    let (other, now) = fight_log(10, false);
+    assert!(!other.targets_me());
+    r.draw_main(&other, &Frame { now, ..frame() });
+    assert_eq!(pix(&r, 20, 100), CARD);
+    let away = Frame {
+        now,
+        env: Env::NotInWorld,
+        ..frame()
+    };
+    r.draw_main(&gs, &away);
+    assert_eq!(pix(&r, 20, 100), CARD);
+}
+
+fn prompt_frame(update: Badge) -> Frame {
+    Frame {
+        update,
+        prompt: true,
+        hover: None,
+        ..frame()
+    }
+}
+
+#[test]
+fn update_prompt_covers_panel_below_status() {
+    let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+    let (gs, now) = fight_log(10, false);
+    let tag = "v2026.10.29.0".to_string();
+    r.draw_main(
+        &gs,
+        &Frame {
+            now,
+            ..prompt_frame(Badge::Ready(tag.clone()))
+        },
+    );
+    let (top, h) = PROMPT_AREA;
+    assert!(top > 51 && top < 61);
+    assert!(top + h < LOGICAL_H - 26);
+    assert_eq!(pix(&r, 20, 100), BG);
+    assert_eq!(pix(&r, 20, 500), BG);
+    assert_eq!(pix(&r, 100, 49), GOOD);
+    let (nx, ny, nw, nh) = UPDATE_NOW_HIT;
+    let (lx, ly, lw, lh) = UPDATE_LATER_HIT;
+    assert_eq!(pix(&r, nx + 6, ny + nh / 2), mix(BG, GOOD, 0.25));
+    assert_eq!(pix(&r, lx + 6, ly + lh / 2), mix(BG, DANGER, 0.25));
+    assert_eq!(nx - M, LOGICAL_W - M - (lx + lw));
+    assert!(nx + nw < lx && ny == ly && nh == lh);
+    assert_eq!(pix(&r, 180, PROMPT_T - 4), BG);
+    assert!(text_w(&r, F_BIG, "Update available!") <= W - 24);
+    let (sx, sy, sw, _) = UPDATE_SKIP_HIT;
+    assert!(text_w(&r, F_TINY, "Skip this version") <= sw);
+    assert_eq!(sx + sw / 2, LOGICAL_W / 2);
+    assert!(sy >= ny + nh + 4);
+    let hovered = Frame {
+        now,
+        hover: Some(Hit::UpdateNow),
+        ..prompt_frame(Badge::Ready(tag.clone()))
+    };
+    r.draw_main(&gs, &hovered);
+    assert_eq!(pix(&r, nx + 6, ny + nh / 2), mix(BG, GOOD, 0.4));
+    r.draw_main(
+        &gs,
+        &Frame {
+            now,
+            ..prompt_frame(Badge::Installing(tag.clone()))
+        },
+    );
+    assert_eq!(pix(&r, nx + 6, ny + nh / 2), BG);
+    r.draw_main(
+        &gs,
+        &Frame {
+            now,
+            ..prompt_frame(Badge::Failed(tag))
+        },
+    );
+    assert_eq!(pix(&r, nx + 6, ny + nh / 2), mix(BG, GOOD, 0.25));
+    r.draw_main(&gs, &Frame { now, ..frame() });
+    assert_eq!(pix(&r, 20, 100), CARD);
+}
+
+#[test]
+fn update_prompt_clips_long_versions() {
+    let tag = format!("v{}", "9".repeat(400));
+    let (gs, now) = fight_log(10, false);
+    for dpi in [96, 192] {
+        let mut r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        let s = dpi as i32 / 96;
+        let f = Frame {
+            now,
+            ..prompt_frame(Badge::Ready(tag.clone()))
+        };
+        r.draw_main(&gs, &f);
+        for y in PROMPT_T..UPDATE_NOW_HIT.1 {
+            for x in [0, M + 11, LOGICAL_W - M - 12, LOGICAL_W - 1] {
+                assert_eq!(pix(&r, x * s, y * s), BG, "{x},{y} at {dpi}");
+            }
+        }
+    }
+}
+
+#[test]
+fn update_prompt_hit_regions() {
+    let r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+    for (rect, hit) in [
+        (UPDATE_NOW_HIT, Hit::UpdateNow),
+        (UPDATE_LATER_HIT, Hit::UpdateLater),
+        (UPDATE_SKIP_HIT, Hit::UpdateSkip),
+    ] {
+        let (x, y, w, h) = rect;
+        let only = |h| h == hit;
+        assert_eq!(r.hit_test_where(x, y, only), Some(hit));
+        assert_eq!(r.hit_test_where(x + w - 1, y + h - 1, only), Some(hit));
+        assert_eq!(r.hit_test_where(x + w, y + h, only), None);
+        assert!(y >= PROMPT_AREA.0 && y + h <= PROMPT_AREA.0 + PROMPT_AREA.1);
+    }
+}
+
+fn main_frame() -> Frame {
+    Frame {
+        view_run: None,
+        view_group: None,
+        ..frame()
+    }
+}
+
+fn party_row(
+    name: &str,
+    you: bool,
+    live: bool,
+    dmg: u64,
+    share: Option<u32>,
+    dps: u64,
+) -> PartyRow {
+    PartyRow {
+        name: name.to_string(),
+        you,
+        live,
+        dmg,
+        share,
+        dps,
+    }
+}
+
+fn log_view(filter: Filter, party: PartyPane) -> LogView {
+    LogView {
+        scroll: 0.0,
+        filter,
+        hover: None,
+        dragging: false,
+        thumb_t: 0.0,
+        slide: 0.0,
+        tip: None,
+        thumb: None,
+        party,
+    }
+}
+
+fn pane(rows: Vec<PartyRow>) -> PartyPane {
+    PartyPane {
+        on: true,
+        link: crate::relay::Link::Connected,
+        rows,
+    }
+}
+
+fn sample_party() -> Vec<PartyRow> {
+    vec![
+        party_row(
+            "Be\u{430}r (Hands)",
+            false,
+            true,
+            1_284_310,
+            Some(41),
+            18_420,
+        ),
+        party_row("you", true, true, 902_115, Some(29), 12_007),
+        party_row("Player 1", false, true, 610_002, Some(19), 9_880),
+        party_row(
+            "\u{6c17}\u{307e}\u{3050}\u{308c} Sora",
+            false,
+            false,
+            230_440,
+            Some(7),
+            3_120,
+        ),
+        party_row("Player 2", false, true, 118_900, Some(4), 2_500),
+    ]
+}
+
+fn stress_party(long_names: bool, long_numbers: bool) -> Vec<PartyRow> {
+    let scripts = ["W", "\u{6c17}", "\u{430}", "\u{1d04}", "m", "\u{5d0}"];
+    (0..MAX_MEMBERS)
+        .map(|i| {
+            let name = if long_names {
+                scripts[i % scripts.len()].repeat(400)
+            } else {
+                format!("P{i}")
+            };
+            let (dmg, dps) = if long_numbers {
+                (MAX_DMG - i as u64, u64::MAX - i as u64)
+            } else {
+                (5_000 - i as u64, 120)
+            };
+            party_row(&name, i == 3, i % 5 != 4, dmg, Some(100), dps)
+        })
+        .collect()
+}
+
+use crate::relay::party::PartyRow;
+use crate::relay::proto::{MAX_DMG, MAX_MEMBERS};
+
+fn block(r: &Renderer, x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<u32> {
+    let mut out = Vec::new();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            out.push(pix(r, x, y));
+        }
+    }
+    out
+}
+
+#[test]
+fn log_tabs_fit_their_labels() {
+    for dpi in [96, 120, 144, 192] {
+        let r = Renderer::new(dpi, LOG_W, LOG_H);
+        for (_, label, _, w) in LOG_TABS {
+            let tw = text_w(&r, F_LABEL, label);
+            assert!(
+                tw + r.px(14) <= r.px(w),
+                "{label} {tw} vs {} at {dpi}",
+                r.px(w)
+            );
+        }
+        for status in [
+            "sharing off",
+            "connecting",
+            "connected",
+            "not connected",
+            "999 events",
+        ] {
+            assert!(
+                text_w(&r, F_TINY, status) <= r.px(LOG_COUNT.2),
+                "{status} at {dpi}"
+            );
+        }
+    }
+    let r = Renderer::new(96, LOG_W, LOG_H);
+    for (_, label, _, w) in LOG_TABS {
+        assert_eq!(w - text_w(&r, F_LABEL, label), 14, "{label}");
+    }
+    assert_eq!(LOG_TABS[0].2, LOG_COUNT.0 + LOG_COUNT.2 + 2);
+    for pair in LOG_TABS.windows(2) {
+        assert_eq!(pair[0].2 + pair[0].3 + 4, pair[1].2);
+    }
+    let last = LOG_TABS[LOG_TABS.len() - 1];
+    assert!(last.2 + last.3 + 4 <= LOG_CLOSE_HIT.0);
+    assert!(LOG_TABS.iter().all(|t| t.2 % 2 == 0 && t.3 % 2 == 0));
+}
+
+#[test]
+fn log_tab_hit_regions_cover_party() {
+    let r = Renderer::new(192, LOG_W, LOG_H);
+    let (_, _, x, w) = LOG_TABS[3];
+    assert_eq!(
+        r.log_hit_test(r.px(x), r.px(LOG_TAB_Y), None),
+        Some(LogHit::Tab(Filter::Party))
+    );
+    assert_eq!(
+        r.log_hit_test(r.px(x + w) - 1, r.px(LOG_TAB_Y + LOG_TAB_H) - 1, None),
+        Some(LogHit::Tab(Filter::Party))
+    );
+    assert_eq!(r.log_hit_test(r.px(x + w), r.px(LOG_TAB_Y), None), None);
+    assert_eq!(r.log_hit_test(r.px(x) - 1, r.px(LOG_TAB_Y), None), None);
+    assert!(LogHit::Tab(Filter::Party).clickable());
+    assert_ne!(
+        LogHit::Count.tip(Filter::Party),
+        LogHit::Count.tip(Filter::All)
+    );
+}
+
+#[test]
+fn party_settings_row() {
+    let gs = GameState::default();
+    let (px_, py_, pw, ph) = PARTY_HIT;
+    assert_eq!(py_, WINDOW_DOWN_HIT.1 + 44);
+    assert_eq!(px_, SCALE_DOWN_HIT.0 + SCALE_DOWN_HIT.2);
+    assert_eq!(px_ + pw, SCALE_UP_HIT.0);
+    assert!(py_ + ph <= 82 + 184 - 8);
+    for dpi in [96, 192] {
+        let mut r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        let at = |r: &Renderer, x: i32, y: i32| pix(r, r.px(x), r.px(y));
+        assert!(text_w(&r, F_LABEL, "PARTY SHARING") <= r.px(150));
+        assert!(r.px(M + 12) + text_w(&r, F_LABEL, "PARTY SHARING") < r.px(SCALE_DOWN_HIT.0));
+        assert!(text_w(&r, F_LABEL, "Off") + r.px(16) <= r.px(pw));
+        let base = Frame {
+            settings_open: true,
+            hover: None,
+            ..main_frame()
+        };
+        r.draw_main(&gs, &base);
+        assert_eq!(at(&r, px_ + 4, py_ + ph / 2), CARD, "off at {dpi}");
+        assert_eq!(at(&r, px_ - 2, py_ + ph / 2), CARD_HI);
+        assert_eq!(at(&r, px_ + pw + 2, py_ + ph / 2), CARD_HI);
+        r.draw_main(
+            &gs,
+            &Frame {
+                party_on: true,
+                ..base
+            },
+        );
+        assert_eq!(at(&r, px_ + 4, py_ + ph / 2), ACCENT, "on at {dpi}");
+        r.draw_main(
+            &gs,
+            &Frame {
+                hover: Some(Hit::Party),
+                ..Frame {
+                    settings_open: true,
+                    ..main_frame()
+                }
+            },
+        );
+        assert_eq!(at(&r, px_ + 4, py_ + ph / 2), BG, "hover at {dpi}");
+        r.draw_main(
+            &gs,
+            &Frame {
+                settings_open: false,
+                party_on: true,
+                hover: None,
+                ..main_frame()
+            },
+        );
+        assert_ne!(at(&r, px_ + 4, py_ + ph / 2), ACCENT);
+    }
+    let r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+    let (x, y, w, h) = PARTY_HIT;
+    assert_eq!(r.hit_test(x, y), Some(Hit::Party));
+    assert_eq!(r.hit_test(x + w - 1, y + h - 1), Some(Hit::Party));
+    assert_ne!(r.hit_test(x - 1, y), Some(Hit::Party));
+    assert_ne!(r.hit_test(x, y + h), Some(Hit::Party));
+    let tip = Hit::Party.tip(TipCtx {
+        live: true,
+        topmost: true,
+        sound_on: true,
+        log_open: false,
+        discord_on: false,
+    });
+    assert_eq!(
+        tip,
+        "Share boss damage through a server with others here who also turn it on"
+    );
+    assert!(!tip.contains('\u{2014}') && !tip.contains('\u{2013}'));
+}
+
+fn tip_fits(r: &Renderer, tip: &str, win_w: i32) -> (i32, usize) {
+    let (w, lines) = r.tip_lines(tip, win_w);
+    assert!(w <= win_w - 16, "{tip}: {w}");
+    assert!(lines.len() <= 2, "{tip}");
+    assert_eq!(lines.join(" "), tip);
+    for line in &lines {
+        let lw = text_w(r, F_TINY, line);
+        assert!(
+            lw + r.px(TIP_INSET) <= r.px(w),
+            "{line:?} is {lw} px in a {} px tip",
+            r.px(w)
+        );
+    }
+    (w, lines.len())
+}
+
+#[test]
+fn party_tooltip_fits_without_clipping() {
+    let tip = Hit::Party.tip(TipCtx {
+        live: false,
+        topmost: false,
+        sound_on: false,
+        log_open: false,
+        discord_on: false,
+    });
+    for dpi in [96, 120, 144, 168, 192] {
+        let mut r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        let mut tm: TEXTMETRICW = unsafe { std::mem::zeroed() };
+        unsafe {
+            SelectObject(r.dc, r.fonts[F_TINY] as _);
+            GetTextMetricsW(r.dc, &mut tm);
+        }
+        assert!(tm.tmHeight <= r.px(TIP_LINE_H), "line height at {dpi}");
+        let (w, n) = tip_fits(&r, tip, LOGICAL_W);
+        assert_eq!(n, 2, "{dpi}");
+        let base = Frame {
+            settings_open: true,
+            hover: Some(Hit::Party),
+            tip: Some(Hit::Party),
+            ..main_frame()
+        };
+        r.draw_main(&GameState::default(), &base);
+        let (px_, py_, _, ph) = PARTY_HIT;
+        let h = 8 + TIP_LINE_H * 2;
+        let x = px_.clamp(8, LOGICAL_W - 8 - w);
+        let y = py_ + ph + 6;
+        assert!(y + h <= LOGICAL_H - 8);
+        let at = |x: i32, y: i32| pix(&r, r.px(x), r.px(y));
+        assert_eq!(at(x + w / 2, y), ACCENT, "top edge at {dpi}");
+        assert_eq!(at(x + w / 2, y + h - 1), ACCENT, "bottom edge at {dpi}");
+        assert_eq!(at(x, y + h / 2), ACCENT, "left edge at {dpi}");
+        assert_eq!(at(x + w - 1, y + h / 2), ACCENT, "right edge at {dpi}");
+        assert_eq!(at(x + 3, y + h / 2), CARD_HI, "inside at {dpi}");
+    }
+}
+
+#[test]
+fn tooltips_that_fit_keep_one_line() {
+    for dpi in [96, 192] {
+        let r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        for tip in [
+            "Close the HUD (Esc)",
+            "Make the HUD smaller",
+            "Download the new version and restart the HUD",
+        ] {
+            let (w, n) = tip_fits(&r, tip, LOGICAL_W);
+            assert_eq!(n, 1, "{tip} at {dpi}");
+            assert_eq!(w, (tip.chars().count() as i32 * 6 + 20).min(LOGICAL_W - 16));
+        }
+        for tip in [
+            "Incoming damage right now against the worst 10 seconds this fight",
+            "Run number, start time, stage and deaths; LOST means a boss survived",
+        ] {
+            tip_fits(&r, tip, LOGICAL_W);
+            tip_fits(&r, tip, LOG_W);
+        }
+    }
+}
+
+#[test]
+fn compact_numbers() {
+    use super::fmt::compact;
+    for (n, s) in [
+        (0, "0"),
+        (999, "999"),
+        (1000, "1.00K"),
+        (1049, "1.05K"),
+        (12_345, "12.3K"),
+        (999_499, "999K"),
+        (999_500, "1.00M"),
+        (12_345_678, "12.3M"),
+        (123_456_789_012, "123B"),
+        (MAX_DMG, "1.10T"),
+        (1_000_000_000_000_000, "1.00Qa"),
+        (u64::MAX, "18.4Qi"),
+    ] {
+        assert_eq!(compact(n), s, "{n}");
+    }
+    let mut n = 1u64;
+    while let Some(next) = n.checked_mul(3) {
+        for v in [n, n - 1, n + n / 2] {
+            let s = compact(v);
+            assert!(s.len() <= 6, "{v} {s}");
+            let unit = s.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.');
+            let k = match unit {
+                "" => 0,
+                u => super::fmt::UNITS.iter().position(|x| *x == u).unwrap() as i32 + 1,
+            };
+            let num: f64 = s[..s.len() - unit.len()].parse().unwrap();
+            let back = num * 1000f64.powi(k);
+            assert!(
+                ((back - v as f64) / v.max(1) as f64).abs() < 0.006,
+                "{v} {s}"
+            );
+        }
+        n = next;
+    }
+}
+
+#[test]
+fn party_numbers_fit_their_columns() {
+    for dpi in [96, 192] {
+        let r = Renderer::new(dpi, LOG_W, LOG_H);
+        for (_, w) in [PARTY_DMG, PARTY_DPS] {
+            for n in [MAX_DMG, u64::MAX, MAX_DMG / 10, 999_999_999, 99_999_999, 0] {
+                let s = r.party_num(n, w);
+                let sw = text_w(&r, F_BODY, &s);
+                assert!(
+                    sw <= r.px(w),
+                    "{n} as {s} is {sw} px, column {} px at {dpi}",
+                    r.px(w)
+                );
+            }
+        }
+        assert_eq!(r.party_num(MAX_DMG, PARTY_DMG.1), "1.10T", "{dpi}");
+        assert_eq!(r.party_num(MAX_DMG, PARTY_DPS.1), "1.10T", "{dpi}");
+        assert_eq!(r.party_num(u64::MAX, PARTY_DMG.1), "18.4Qi", "{dpi}");
+        assert_eq!(r.party_num(u64::MAX, PARTY_DPS.1), "18.4Qi", "{dpi}");
+        assert_eq!(r.party_num(902_115, PARTY_DMG.1), "902,115", "{dpi}");
+        assert_eq!(
+            r.party_num(999_999_999, PARTY_DMG.1),
+            "999,999,999",
+            "{dpi}"
+        );
+        assert_eq!(r.party_num(12_007, PARTY_DPS.1), "12,007", "{dpi}");
+        assert_eq!(r.party_num(MAX_DMG / 10, PARTY_DPS.1), "110B", "{dpi}");
+    }
+}
+
+#[test]
+fn party_tab_empty_states() {
+    let mut r = Renderer::new(96, LOG_W, LOG_H);
+    let (bx, by, bw, bh) = LOG_BODY;
+    let off = PartyPane::default();
+    assert!(off.shown().is_empty());
+    assert_eq!(off.status(), "sharing off");
+    r.draw_log(None, &log_view(Filter::Party, off));
+    let off_px = block(&r, bx, by, bx + bw, by + bh);
+    assert!(off_px.iter().any(|&c| c != BG));
+    let only_me = pane(vec![party_row("you", true, true, 50, Some(100), 5)]);
+    assert!(only_me.shown().is_empty());
+    r.draw_log(None, &log_view(Filter::Party, only_me));
+    let wait_px = block(&r, bx, by, bx + bw, by + bh);
+    assert_ne!(off_px, wait_px);
+    assert_eq!(pix(&r, bx + 1, by + 12), BG);
+    let mut rows = pane(sample_party());
+    rows.on = false;
+    assert!(rows.shown().is_empty());
+    r.draw_log(None, &log_view(Filter::Party, rows));
+    assert_eq!(block(&r, bx, by, bx + bw, by + bh), off_px);
+    for (link, text) in [
+        (crate::relay::Link::Off, "not connected"),
+        (crate::relay::Link::Retrying, "not connected"),
+        (crate::relay::Link::Connecting, "connecting"),
+        (crate::relay::Link::Connected, "connected"),
+    ] {
+        assert_eq!(
+            PartyPane {
+                on: true,
+                link,
+                rows: Vec::new()
+            }
+            .status(),
+            text
+        );
+    }
+    let (tx, ty, _, _) = LOG_TRACK;
+    assert_eq!(pix(&r, tx + 3, ty + 3), BG);
+}
+
+#[test]
+fn party_tab_draws_rows_with_marks() {
+    let mut r = Renderer::new(96, LOG_W, LOG_H);
+    let (bx, by, bw, _) = LOG_BODY;
+    r.draw_log(None, &log_view(Filter::Party, pane(sample_party())));
+    let row_y = |i: i32| by + PARTY_HEAD_H + i * timeline::ROW_H;
+    assert_eq!(pix(&r, bx + 1, row_y(0) + 12), GOOD);
+    assert_eq!(pix(&r, bx + 1, row_y(1) + 12), ACCENT);
+    assert_eq!(pix(&r, bx + bw - 4, row_y(1) + 12), CARD);
+    assert_eq!(pix(&r, bx + bw - 4, row_y(0) + 12), BG);
+    assert_eq!(pix(&r, bx + 1, row_y(3) + 12), CARD_HI);
+    assert_eq!(pix(&r, bx + 40, by + PARTY_HEAD_H - 1), CARD_HI);
+    let (tx, ty, _, _) = LOG_TRACK;
+    assert_eq!(pix(&r, tx + 3, ty + 3), BG);
+    let (_, _, ax, aw) = LOG_TABS[3];
+    assert_eq!(pix(&r, ax + aw / 2, LOG_TAB_Y + 2), ACCENT);
+}
+
+#[test]
+fn party_tab_stress_never_leaves_its_columns() {
+    for dpi in [96, 192] {
+        let mut r = Renderer::new(dpi, LOG_W, LOG_H);
+        let scale = r.scale;
+        let s = move |v: i32| (v as f32 * scale) as i32;
+        let (bx, by, bw, bh) = LOG_BODY;
+        let short = pane(stress_party(false, false));
+        let long_names = pane(stress_party(true, false));
+        let long = pane(stress_party(true, true));
+        assert_eq!(long.shown().len(), MAX_MEMBERS);
+        for row in long.shown() {
+            for (n, (_, w)) in [(row.dmg, PARTY_DMG), (row.dps, PARTY_DPS)] {
+                let text = r.party_num(n, w);
+                assert!(text_w(&r, F_BODY, &text) <= r.px(w), "{text} at {dpi}");
+                assert!(text.ends_with(['T', 'i']), "{text} at {dpi}");
+            }
+        }
+        let n = long.shown().len() + 1;
+        let max = timeline::max_scroll(n, bh);
+        assert_eq!(max, (n as i32 * timeline::ROW_H - bh) as f32);
+        let cols = |r: &Renderer| -> Vec<Vec<u32>> {
+            [PARTY_DMG, PARTY_SHARE, PARTY_DPS]
+                .iter()
+                .map(|&(x, w)| block(r, s(x), s(by), s(x + w), s(by + bh)))
+                .collect()
+        };
+        for scroll in [0.0, max / 2.0, max] {
+            let mut lv = log_view(Filter::Party, short.clone());
+            lv.scroll = scroll;
+            r.draw_log(None, &lv);
+            let cols_short = cols(&r);
+            let head_short = block(&r, 0, 0, r.width, s(by + PARTY_HEAD_H));
+            lv.party = long_names.clone();
+            r.draw_log(None, &lv);
+            assert_eq!(
+                cols_short,
+                cols(&r),
+                "long names moved the columns at {dpi} dpi, scroll {scroll}"
+            );
+            lv.party = long.clone();
+            r.draw_log(None, &lv);
+            assert_ne!(cols_short, cols(&r), "long numbers not drawn at {dpi} dpi");
+            assert_eq!(
+                head_short,
+                block(&r, 0, 0, r.width, s(by + PARTY_HEAD_H)),
+                "header moved at {dpi} dpi, scroll {scroll}"
+            );
+            let (nx, nw) = PARTY_NAME;
+            let ink = |c: u32| c != BG && c != CARD && c != CARD_HI && c != GOOD && c != ACCENT;
+            let gaps = [
+                (nx + nw, PARTY_DMG.0, "name"),
+                (PARTY_DMG.0 + PARTY_DMG.1, PARTY_SHARE.0, "damage"),
+                (PARTY_SHARE.0 + PARTY_SHARE.1, PARTY_DPS.0, "share"),
+                (PARTY_DPS.0 + PARTY_DPS.1, LOG_TRACK.0, "right margin"),
+            ];
+            for y in s(by + PARTY_HEAD_H)..s(by + bh) {
+                for (x0, x1, what) in gaps {
+                    for x in s(x0)..s(x1) {
+                        assert!(!ink(pix(&r, x, y)), "{what} ink at {x},{y} ({dpi} dpi)");
+                    }
+                }
+            }
+            for y in s(by + bh)..r.height {
+                for x in 0..s(LOG_TRACK.0) {
+                    assert_eq!(pix(&r, x, y), BG, "below body at {x},{y} ({dpi} dpi)");
+                }
+            }
+            for y in s(by)..s(by + bh) {
+                for x in 0..s(bx) {
+                    assert_eq!(pix(&r, x, y), BG, "left of body at {x},{y} ({dpi} dpi)");
+                }
+                for x in s(bx + bw)..s(LOG_TRACK.0) {
+                    assert_eq!(pix(&r, x, y), BG, "right of body at {x},{y} ({dpi} dpi)");
+                }
+            }
+            let thumb = timeline::thumb(n, bh, scroll).unwrap();
+            assert!(thumb.0 >= 0 && thumb.0 + thumb.1 <= bh);
+        }
+    }
+}
+
+#[test]
+fn party_rows_scroll_under_a_fixed_header() {
+    let mut r = Renderer::new(96, LOG_W, LOG_H);
+    let (_, by, _, bh) = LOG_BODY;
+    let rows = pane(stress_party(false, false));
+    let n = rows.shown().len() + 1;
+    let mut lv = log_view(Filter::Party, rows);
+    r.draw_log(None, &lv);
+    let head = block(&r, 0, by, LOG_W - 20, by + PARTY_HEAD_H);
+    let body_top = block(&r, 0, by + PARTY_HEAD_H, LOG_W - 20, by + PARTY_HEAD_H + 24);
+    lv.scroll = timeline::max_scroll(n, bh);
+    r.draw_log(None, &lv);
+    assert_eq!(block(&r, 0, by, LOG_W - 20, by + PARTY_HEAD_H), head);
+    assert_ne!(
+        block(&r, 0, by + PARTY_HEAD_H, LOG_W - 20, by + PARTY_HEAD_H + 24),
+        body_top
+    );
+    let last = by + PARTY_HEAD_H + (n as i32 - 2) * timeline::ROW_H - lv.scroll as i32;
+    assert_eq!(last + timeline::ROW_H, by + bh);
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut c = 0xffff_ffffu32;
+    for &b in data {
+        c ^= b as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 {
+                0xedb8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+        }
+    }
+    !c
+}
+
+fn png(w: u32, h: u32, rgb: &[u8]) -> Vec<u8> {
+    let mut raw = Vec::with_capacity((w * 3 + 1) as usize * h as usize);
+    for row in rgb.chunks(w as usize * 3) {
+        raw.push(0);
+        raw.extend_from_slice(row);
+    }
+    let mut z = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+    for (i, b) in blocks.iter().enumerate() {
+        z.push((i + 1 == blocks.len()) as u8);
+        z.extend_from_slice(&(b.len() as u16).to_le_bytes());
+        z.extend_from_slice(&(!(b.len() as u16)).to_le_bytes());
+        z.extend_from_slice(b);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in &raw {
+        a = (a + x as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8], data: &[u8]| {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&crc32(&body).to_be_bytes());
+    };
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&w.to_be_bytes());
+    ihdr.extend_from_slice(&h.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    chunk(b"IHDR", &ihdr);
+    chunk(b"IDAT", &z);
+    chunk(b"IEND", &[]);
+    out
+}
+
+struct Sheet {
+    w: u32,
+    h: u32,
+    rgb: Vec<u8>,
+}
+
+impl Sheet {
+    fn new(w: u32, h: u32) -> Self {
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        for _ in 0..w * h {
+            rgb.extend_from_slice(&[0x0b, 0x0b, 0x10]);
+        }
+        Sheet { w, h, rgb }
+    }
+
+    fn put(&mut self, r: &Renderer, x0: u32, y0: u32, clip: (i32, i32, i32, i32)) {
+        let (cx, cy, cw, ch) = (r.px(clip.0), r.px(clip.1), r.px(clip.2), r.px(clip.3));
+        for y in 0..ch {
+            for x in 0..cw {
+                let c = pix(r, cx + x, cy + y);
+                let i = (((y0 + y as u32) * self.w + x0 + x as u32) * 3) as usize;
+                self.rgb[i] = (c & 0xff) as u8;
+                self.rgb[i + 1] = ((c >> 8) & 0xff) as u8;
+                self.rgb[i + 2] = ((c >> 16) & 0xff) as u8;
+            }
+        }
+    }
+
+    fn save(&self, name: &str) {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(".devflow")
+            .join("pick");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), png(self.w, self.h, &self.rgb)).unwrap();
+    }
+}
+
+#[test]
+fn png_writer_matches_known_crc() {
+    assert_eq!(crc32(b"IEND"), 0xae42_6082);
+    let p = png(1, 1, &[255, 0, 0]);
+    assert_eq!(&p[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(&p[p.len() - 12..], b"\0\0\0\0IEND\xaeB`\x82");
+}
+
+#[test]
+#[ignore]
+fn write_party_review_images() {
+    let mut rows = sample_party();
+    rows.push(party_row(
+        &"Very Long Display Name That Keeps Going ".repeat(10),
+        false,
+        true,
+        52_000,
+        Some(2),
+        900,
+    ));
+    let states = [
+        log_view(Filter::Party, pane(rows)),
+        log_view(
+            Filter::Party,
+            pane(vec![party_row("you", true, true, 50, Some(100), 5)]),
+        ),
+        log_view(Filter::Party, PartyPane::default()),
+    ];
+    let gap = 16u32;
+    let mut sheet = Sheet::new(
+        gap + (LOG_W as u32 + gap) * 3 + LOG_W as u32 * 2 + gap,
+        gap + LOG_H as u32 * 2 + gap,
+    );
+    let mut x = gap;
+    for lv in &states {
+        let mut r = Renderer::new(96, LOG_W, LOG_H);
+        r.draw_log(None, lv);
+        sheet.put(&r, x, gap, (0, 0, LOG_W, LOG_H));
+        x += LOG_W as u32 + gap;
+    }
+    let mut r = Renderer::new(192, LOG_W, LOG_H);
+    r.draw_log(None, &states[0]);
+    sheet.put(&r, x, gap, (0, 0, LOG_W, LOG_H));
+    sheet.save("party_tab.png");
+
+    let gs = GameState::default();
+    let clip = (0, 70, LOGICAL_W, 206);
+    let looks = [
+        Frame {
+            settings_open: true,
+            hover: None,
+            party_on: false,
+            ..main_frame()
+        },
+        Frame {
+            settings_open: true,
+            hover: None,
+            party_on: true,
+            ..main_frame()
+        },
+        Frame {
+            settings_open: true,
+            hover: Some(Hit::Party),
+            party_on: false,
+            ..main_frame()
+        },
+    ];
+    let mut sheet = Sheet::new(
+        gap + (LOGICAL_W as u32 + gap) * 3 + LOGICAL_W as u32 * 2 + gap,
+        gap + clip.3 as u32 * 2 + gap,
+    );
+    let mut x = gap;
+    for f in &looks {
+        let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+        r.draw_main(&gs, f);
+        sheet.put(&r, x, gap, clip);
+        x += LOGICAL_W as u32 + gap;
+    }
+    let mut r = Renderer::new(192, LOGICAL_W, LOGICAL_H);
+    r.draw_main(&gs, &looks[1]);
+    sheet.put(&r, x, gap, clip);
+    sheet.save("party_settings.png");
+}
+
+#[test]
+#[ignore]
+fn write_party_big_image() {
+    let names = [
+        "Be\u{430}r (Hands)",
+        "you",
+        "\u{6c17}\u{307e}\u{3050}\u{308c} Sora",
+        "Very Long Display Name That Keeps Going",
+    ];
+    let rows: Vec<PartyRow> = (0..MAX_MEMBERS)
+        .map(|i| {
+            let name = match i {
+                0..=3 => names[i].to_string(),
+                _ => format!("Player {}", i - 3),
+            };
+            party_row(
+                &name,
+                i == 1,
+                i % 5 != 4,
+                MAX_DMG - i as u64,
+                Some(3),
+                if i == 0 { u64::MAX } else { MAX_DMG - i as u64 },
+            )
+        })
+        .collect();
+    let n = rows.len() + 1;
+    let top = log_view(Filter::Party, pane(rows));
+    let bottom = LogView {
+        scroll: timeline::max_scroll(n, LOG_BODY.3),
+        ..log_view(Filter::Party, top.party.clone())
+    };
+    let gap = 16u32;
+    let mut sheet = Sheet::new(
+        gap + (LOG_W as u32 + gap) * 2 + LOG_W as u32 * 2 + gap,
+        gap + LOG_H as u32 * 2 + gap,
+    );
+    let mut x = gap;
+    for lv in [&top, &bottom] {
+        let mut r = Renderer::new(96, LOG_W, LOG_H);
+        r.draw_log(None, lv);
+        sheet.put(&r, x, gap, (0, 0, LOG_W, LOG_H));
+        x += LOG_W as u32 + gap;
+    }
+    let mut r = Renderer::new(192, LOG_W, LOG_H);
+    r.draw_log(None, &top);
+    sheet.put(&r, x, gap, (0, 0, LOG_W, LOG_H));
+    sheet.save("party_tab_big.png");
+}
+
+#[test]
+#[ignore]
+fn write_tooltip_wrap_images() {
+    let ctx = TipCtx {
+        live: false,
+        topmost: false,
+        sound_on: false,
+        log_open: false,
+        discord_on: false,
+    };
+    let cases = [
+        (96, Hit::Party),
+        (192, Hit::Party),
+        (96, Hit::Info(Info::TakenBar)),
+        (96, Hit::Info(Info::RunRow)),
+    ];
+    let gs = GameState::default();
+    let (gap, label_h) = (16u32, 20);
+    let bands: Vec<(i32, i32)> = cases
+        .iter()
+        .map(|&(_, hit)| {
+            let near = hit.rect();
+            let top = (near.1 - 8).max(0);
+            (top, (near.1 + near.3 + 6 + 40 + 8).min(LOGICAL_H) - top)
+        })
+        .collect();
+    let height: u32 = cases
+        .iter()
+        .zip(&bands)
+        .map(|(&(dpi, _), &(_, h))| ((label_h + h) * dpi / 96) as u32 + gap)
+        .sum();
+    let mut sheet = Sheet::new(gap * 3 + LOGICAL_W as u32 * 4, gap + height);
+    let mut y = gap;
+    for (&(dpi, hit), &(top, h)) in cases.iter().zip(&bands) {
+        let s = dpi / 96;
+        let near = hit.rect();
+        let text = hit.tip(ctx);
+        for (col, name) in ["A  before: one line", "B  after: wraps to fit"]
+            .iter()
+            .enumerate()
+        {
+            let x = gap + col as u32 * (LOGICAL_W * s) as u32 + col as u32 * gap;
+            let l = Renderer::new(dpi as u32, LOGICAL_W, label_h);
+            l.rround(0, 0, LOGICAL_W, label_h, 0, BG);
+            l.text_rect(
+                4,
+                0,
+                LOGICAL_W - 8,
+                label_h,
+                F_LABEL,
+                TEXT,
+                DT_VCENTER,
+                name,
+            );
+            unsafe { GdiFlush() };
+            sheet.put(&l, x, y, (0, 0, LOGICAL_W, label_h));
+            let mut r = Renderer::new(dpi as u32, LOGICAL_W, LOGICAL_H);
+            r.draw_main(
+                &gs,
+                &Frame {
+                    settings_open: hit == Hit::Party,
+                    hover: Some(hit),
+                    tip: None,
+                    ..main_frame()
+                },
+            );
+            if col == 0 {
+                let w = (text.chars().count() as i32 * 6 + 20).min(LOGICAL_W - 16);
+                let tx = near.0.clamp(8, LOGICAL_W - 8 - w);
+                let ty = near.1 + near.3 + 6;
+                r.rround(tx, ty, w, 24, 6, ACCENT);
+                r.rround(tx + 1, ty + 1, w - 2, 22, 5, CARD_HI);
+                r.text_rect(tx, ty, w, 24, F_TINY, TEXT, DT_CENTER | DT_VCENTER, text);
+            } else {
+                r.tooltip(near, text, LOGICAL_W, LOGICAL_H);
+            }
+            unsafe { GdiFlush() };
+            sheet.put(&r, x, y + (label_h * s) as u32, (0, top, LOGICAL_W, h));
+        }
+        y += ((label_h + h) * s) as u32 + gap;
+    }
+    sheet.save("tooltip_wrap.png");
 }

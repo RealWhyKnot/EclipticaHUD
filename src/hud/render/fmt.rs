@@ -36,3 +36,23 @@ pub(super) fn group_digits(n: u64) -> String {
     }
     out
 }
+
+pub(super) const UNITS: [&str; 6] = ["K", "M", "B", "T", "Qa", "Qi"];
+
+pub(super) fn compact(n: u64) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+    let mut drop = n.ilog10() - 2;
+    let p = 10u128.pow(drop);
+    let mut m = (n as u128 + p / 2) / p;
+    if m >= 1000 {
+        m /= 10;
+        drop += 1;
+    }
+    let k = drop.div_ceil(3);
+    let digits = m.to_string();
+    let (int, frac) = digits.split_at((drop + 3 - 3 * k) as usize);
+    let dot = if frac.is_empty() { "" } else { "." };
+    format!("{int}{dot}{frac}{}", UNITS[k as usize - 1])
+}

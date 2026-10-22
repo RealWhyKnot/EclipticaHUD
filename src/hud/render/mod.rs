@@ -1,21 +1,23 @@
 mod breakdown;
 mod fmt;
 mod frame;
+mod graph;
 mod hit;
 mod layout;
 mod log_panel;
 mod main_panel;
+mod prompt;
 #[cfg(test)]
 mod tests;
 mod theme;
 
-pub use frame::{Env, Frame, LogView};
+pub use frame::{Env, Frame, LogView, PartyPane};
 pub use hit::{tip_ready, Hit, Info, LogHit};
 pub use layout::*;
 pub use theme::ease_out_cubic;
 
 use theme::*;
-use windows_sys::Win32::Foundation::RECT;
+use windows_sys::Win32::Foundation::{RECT, SIZE};
 use windows_sys::Win32::Graphics::Gdi::*;
 
 pub struct Renderer {
@@ -134,6 +136,12 @@ impl Renderer {
         }
     }
 
+    fn shifted(&self, dy: i32, draw: impl FnOnce()) {
+        unsafe { SetViewportOrgEx(self.dc, 0, self.px(dy), std::ptr::null_mut()) };
+        draw();
+        unsafe { SetViewportOrgEx(self.dc, 0, 0, std::ptr::null_mut()) };
+    }
+
     fn bar(&self, x: i32, y: i32, w: i32, h: i32, frac: f32, color: u32) {
         self.bar_on(x, y, w, h, frac, color, CARD);
     }
@@ -188,6 +196,16 @@ impl Renderer {
         }
     }
 
+    pub(super) fn text_w(&self, font: usize, s: &str) -> i32 {
+        let buf: Vec<u16> = s.encode_utf16().collect();
+        let mut size = SIZE { cx: 0, cy: 0 };
+        unsafe {
+            SelectObject(self.dc, self.fonts[font] as _);
+            GetTextExtentPoint32W(self.dc, buf.as_ptr(), buf.len() as i32, &mut size);
+        }
+        size.cx
+    }
+
     fn glyph_button(
         &self,
         btn: (i32, i32, i32, i32),
@@ -236,18 +254,49 @@ impl Renderer {
         self.text_rect(x, y, w, h, F_GLYPH, color, DT_CENTER | DT_VCENTER, glyph);
     }
 
+    pub(super) fn tip_lines<'a>(&self, text: &'a str, win_w: i32) -> (i32, Vec<&'a str>) {
+        let max = win_w - 16;
+        let w = (text.chars().count() as i32 * 6 + 20).min(max);
+        if self.text_w(F_TINY, text) + self.px(TIP_INSET) <= self.px(w) {
+            return (w, vec![text]);
+        }
+        let widest = |a: &str, b: &str| self.text_w(F_TINY, a).max(self.text_w(F_TINY, b));
+        let Some((a, b)) = text
+            .match_indices(' ')
+            .map(|(i, _)| (&text[..i], &text[i + 1..]))
+            .min_by_key(|(a, b)| widest(a, b))
+        else {
+            return (w, vec![text]);
+        };
+        let w = (self.unscale(widest(a, b)) + 1 + TIP_PAD).min(max);
+        (w, vec![a, b])
+    }
+
     fn tooltip(&self, near: (i32, i32, i32, i32), text: &str, win_w: i32, win_h: i32) {
-        let w = (text.chars().count() as i32 * 6 + 20).min(win_w - 16);
+        let (w, lines) = self.tip_lines(text, win_w);
+        let h = if lines.len() == 1 {
+            24
+        } else {
+            8 + TIP_LINE_H * lines.len() as i32
+        };
         let x = near.0.clamp(8, win_w - 8 - w);
         let below = near.1 + near.3 + 6;
-        let y = if below + 24 <= win_h - 8 {
+        let y = if below + h <= win_h - 8 {
             below
         } else {
-            near.1 - 30
+            near.1 - h - 6
         };
-        self.rround(x, y, w, 24, 6, ACCENT);
-        self.rround(x + 1, y + 1, w - 2, 22, 5, CARD_HI);
-        self.text_rect(x, y, w, 24, F_TINY, TEXT, DT_CENTER | DT_VCENTER, text);
+        self.rround(x, y, w, h, 6, ACCENT);
+        self.rround(x + 1, y + 1, w - 2, h - 2, 5, CARD_HI);
+        if let [line] = lines[..] {
+            self.text_rect(x, y, w, 24, F_TINY, TEXT, DT_CENTER | DT_VCENTER, line);
+            return;
+        }
+        for (i, line) in lines.iter().enumerate() {
+            let ly = y + 4 + TIP_LINE_H * i as i32;
+            let flags = DT_CENTER | DT_VCENTER;
+            self.text_rect(x, ly, w, TIP_LINE_H, F_TINY, TEXT, flags, line);
+        }
     }
 
     pub fn body_h(&self) -> i32 {

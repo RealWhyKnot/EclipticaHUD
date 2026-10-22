@@ -1,6 +1,7 @@
 use super::hit::{Hit, LogHit};
 use crate::discord::Link;
 use crate::hud::timeline::Filter;
+use crate::relay::party::PartyRow;
 use crate::update::Badge;
 use crate::vr::VrStatus;
 
@@ -32,16 +33,17 @@ pub struct Frame {
     pub log_open: bool,
     pub topmost: bool,
     pub progress_shown: f32,
-    pub dps_frac_shown: f32,
     pub taken_frac_shown: f32,
     pub dps_shown: f32,
     pub fight_dps_shown: f32,
     pub taken_shown: f32,
     pub taken_rate_shown: f32,
     pub update: Badge,
+    pub prompt: bool,
     pub sound_on: bool,
     pub discord: Link,
     pub discord_on: bool,
+    pub party_on: bool,
     pub view_run: Option<usize>,
     pub view_group: Option<usize>,
     pub group_pages: usize,
@@ -76,4 +78,32 @@ pub struct LogView {
     pub slide: f32,
     pub tip: Option<LogHit>,
     pub thumb: Option<(i32, i32)>,
+    pub party: PartyPane,
+}
+
+#[derive(Default, Clone)]
+pub struct PartyPane {
+    pub on: bool,
+    pub link: crate::relay::Link,
+    pub rows: Vec<PartyRow>,
+}
+
+impl PartyPane {
+    pub fn shown(&self) -> &[PartyRow] {
+        if self.on && self.rows.iter().any(|r| !r.you) {
+            &self.rows
+        } else {
+            &[]
+        }
+    }
+
+    pub fn status(&self) -> &'static str {
+        use crate::relay::Link as L;
+        match (self.on, self.link) {
+            (false, _) => "sharing off",
+            (true, L::Connected) => "connected",
+            (true, L::Connecting) => "connecting",
+            (true, L::Off | L::Retrying) => "not connected",
+        }
+    }
 }

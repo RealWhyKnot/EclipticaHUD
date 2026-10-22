@@ -490,6 +490,62 @@ mod tests {
     }
 
     #[test]
+    fn presence_never_shows_roster_names() {
+        let mut gs = GameState::default();
+        feed(
+            &mut gs,
+            "04:00:00",
+            "User Authenticated: Owner Name (usr_me)",
+        );
+        feed(
+            &mut gs,
+            "04:00:01",
+            "[Behaviour] Entering Room: Ecliptica - Demo Playtest",
+        );
+        feed(&mut gs, "04:00:01", &format!("[Behaviour] Joining {LOC}"));
+        feed(
+            &mut gs,
+            "04:00:02",
+            "[Behaviour] OnPlayerJoined Rosterbuddy (usr_a)",
+        );
+        feed(
+            &mut gs,
+            "04:00:02",
+            "[Behaviour] OnPlayerJoined Zed Q (usr_b)",
+        );
+        assert_eq!(gs.roster.len(), 2);
+        let mut seen = Vec::new();
+        for (t, line) in [
+            ("04:00:03", "ECLIPTICA - now in lobby"),
+            ("04:01:00", "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer"),
+            ("04:02:00", "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"),
+            ("04:02:01", "Dealing 500 STRIKE damage"),
+            ("04:02:30", "Boss Kakarot dead, personal damage dealt: "),
+        ] {
+            let now = feed(&mut gs, t, line);
+            for unix in [1_800_000_000, 1_800_000_015, 1_800_000_030] {
+                seen.extend(activity(&gs, now, unix));
+            }
+        }
+        assert!(seen.len() >= 10);
+        for a in &seen {
+            for name in ["Rosterbuddy", "Zed Q", "usr_a", "usr_b", "Owner Name"] {
+                assert!(!a.contains(name), "{name} in {a}");
+            }
+        }
+        let src = include_str!("activity.rs");
+        let body = &src[..src.find("\nmod tests").unwrap()];
+        assert!(body.contains("pub fn activity("));
+        let idents: Vec<&str> = body
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .collect();
+        assert!(idents.contains(&"gs"));
+        for word in ["roster", "relay", "party_on", "me_usr"] {
+            assert!(!idents.contains(&word), "{word}");
+        }
+    }
+
+    #[test]
     fn lobby_presence_has_no_timer() {
         let mut gs = GameState::default();
         let now = feed(&mut gs, "04:12:08", "ECLIPTICA - now in lobby");

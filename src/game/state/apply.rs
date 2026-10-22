@@ -9,6 +9,7 @@ use crate::game::source::describe_source;
 
 const DEATH_HOLD: u64 = 2;
 const LOG_CAP: usize = 500;
+pub const ROSTER_CAP: usize = 128;
 
 impl GameState {
     pub fn apply(&mut self, ts: u64, ev: Event) {
@@ -58,7 +59,23 @@ impl GameState {
                     self.last_save = Some(ts);
                 }
             }
-            Event::RoomJoin(location) => self.location = Some(location),
+            Event::RoomJoin(location) => {
+                if self.location.as_ref() != Some(&location) {
+                    self.clear_roster();
+                }
+                self.location = Some(location);
+            }
+            Event::SelfName { name, usr } => {
+                self.me = Some(name);
+                self.me_usr = Some(usr);
+            }
+            Event::PlayerJoined { name, usr } => self.player_joined(name, usr),
+            Event::PlayerLeft { usr, .. } => {
+                if let Some(i) = self.roster.iter().position(|(u, _)| *u == usr) {
+                    self.roster.remove(i);
+                    self.roster_seq += 1;
+                }
+            }
             Event::EnemySpawn { slot, kind } => self.enemy_spawn(slot, kind),
             Event::EnemyRetire(slot) => self.enemy_retire(ts, slot),
             Event::EnemyName(name) => self.enemy_name(name),
@@ -115,6 +132,7 @@ impl GameState {
             deaths: 0,
             kill: None,
             lost: false,
+            series: Vec::new(),
         });
     }
 
@@ -143,6 +161,7 @@ impl GameState {
             self.fight_dmg += n;
             if let Some(f) = self.open_fight() {
                 f.dmg += n;
+                f.add_dmg(ts, n);
             }
         } else if self.pre_boss() {
             self.stage_stats.dmg += n;
@@ -354,7 +373,26 @@ impl GameState {
         self.stage_no = None;
     }
 
+    fn player_joined(&mut self, name: String, usr: String) {
+        let full = self.roster.len() >= ROSTER_CAP;
+        match self.roster.iter_mut().find(|(u, _)| *u == usr) {
+            Some((_, n)) if *n == name => return,
+            Some((_, n)) => *n = name,
+            None if full => return,
+            None => self.roster.push((usr, name)),
+        }
+        self.roster_seq += 1;
+    }
+
+    fn clear_roster(&mut self) {
+        if !self.roster.is_empty() {
+            self.roster.clear();
+            self.roster_seq += 1;
+        }
+    }
+
     fn leave_world(&mut self, ts: u64) {
+        self.clear_roster();
         self.end_run(ts, RunEnd::Left);
         self.pool_reset_seen = false;
         self.mode = Mode::Idle;

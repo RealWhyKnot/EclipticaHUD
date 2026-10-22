@@ -3,6 +3,7 @@ mod deaths;
 mod kills;
 mod lifecycle;
 mod rates;
+mod roster;
 mod stage;
 mod tokens;
 

@@ -1,8 +1,13 @@
 use crate::hud::timeline::Filter;
 
 pub const LOGICAL_W: i32 = 360;
-pub const LOGICAL_H: i32 = 600;
+pub const LOGICAL_H: i32 = 640;
+pub const GRAPH_DY: i32 = 40;
+pub const GRAPH_RECT: (i32, i32, i32, i32) = (26, 240, 308, 40);
 pub const LOG_W: i32 = 420;
+pub const TIP_INSET: i32 = 8;
+pub const TIP_PAD: i32 = 16;
+pub const TIP_LINE_H: i32 = 16;
 pub const LOG_H: i32 = 560;
 pub const M: i32 = 14;
 pub const W: i32 = LOGICAL_W - 2 * M;
@@ -21,7 +26,13 @@ pub const ALPHA_DOWN_HIT: (i32, i32, i32, i32) = (200, 134, 26, 24);
 pub const ALPHA_UP_HIT: (i32, i32, i32, i32) = (306, 134, 26, 24);
 pub const WINDOW_DOWN_HIT: (i32, i32, i32, i32) = (200, 178, 26, 24);
 pub const WINDOW_UP_HIT: (i32, i32, i32, i32) = (306, 178, 26, 24);
+pub const PARTY_HIT: (i32, i32, i32, i32) = (226, 222, 80, 24);
 pub const UPDATE_HIT: (i32, i32) = (230, LOGICAL_H - 32);
+pub const PROMPT_AREA: (i32, i32) = (54, LOGICAL_H - 88);
+pub const PROMPT_T: i32 = 250;
+pub const UPDATE_NOW_HIT: (i32, i32, i32, i32) = (50, PROMPT_T + 100, 168, 36);
+pub const UPDATE_LATER_HIT: (i32, i32, i32, i32) = (222, PROMPT_T + 100, 88, 36);
+pub const UPDATE_SKIP_HIT: (i32, i32, i32, i32) = (120, PROMPT_T + 142, 120, 20);
 pub const DISCORD_HIT: (i32, i32, i32, i32) = (136, LOGICAL_H - 30, 72, 24);
 pub const TARGET_HIT: (i32, i32, i32, i32) = (26, 126, 308, 40);
 pub const RUN_PREV_HIT: (i32, i32, i32, i32) = (14, 54, 26, 24);
@@ -37,10 +48,11 @@ pub const MAX_WINDOW: u64 = 30;
 
 pub const LOG_CLOSE_HIT: (i32, i32, i32, i32) = (380, 0, 40, 36);
 pub const LOG_CLOSE_BTN: (i32, i32, i32, i32) = (388, 8, 24, 24);
-pub const LOG_TABS: [(Filter, &str, i32, i32); 3] = [
-    (Filter::All, "All", 166, 40),
-    (Filter::Damage, "Damage", 210, 66),
-    (Filter::Targets, "Targets", 280, 66),
+pub const LOG_TABS: [(Filter, &str, i32, i32); 4] = [
+    (Filter::All, "All", 166, 30),
+    (Filter::Damage, "Damage", 200, 62),
+    (Filter::Targets, "Targets", 266, 58),
+    (Filter::Party, "Party", 328, 44),
 ];
 pub const LOG_TAB_Y: i32 = 8;
 pub const LOG_TAB_H: i32 = 24;
@@ -49,3 +61,8 @@ pub const LOG_TRACK: (i32, i32, i32, i32) = (LOG_W - 20, 44, 6, LOG_H - 54);
 
 pub const LOG_TITLE: (i32, i32, i32, i32) = (14, LOG_TAB_Y, 74, LOG_TAB_H);
 pub const LOG_COUNT: (i32, i32, i32, i32) = (88, LOG_TAB_Y, 76, LOG_TAB_H);
+pub const PARTY_HEAD_H: i32 = 24;
+pub const PARTY_NAME: (i32, i32) = (26, 138);
+pub const PARTY_DMG: (i32, i32) = (168, 100);
+pub const PARTY_SHARE: (i32, i32) = (272, 44);
+pub const PARTY_DPS: (i32, i32) = (320, 64);

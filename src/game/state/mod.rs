@@ -30,6 +30,10 @@ pub struct GameState {
     pub fight_dmg: u64,
     pub target: Option<String>,
     pub target_since: u64,
+    pub me: Option<String>,
+    pub me_usr: Option<String>,
+    pub roster: Vec<(String, String)>,
+    pub roster_seq: u64,
     pub history: VecDeque<TargetEntry>,
     pub targets_total: u64,
     pub taken: VecDeque<TakenEntry>,
@@ -90,6 +94,14 @@ impl GameState {
 
     pub fn live_run(&self) -> Option<&Run> {
         self.runs.last().filter(|r| r.end_ts.is_none())
+    }
+
+    pub fn targets_me(&self) -> bool {
+        self.me.is_some() && self.target == self.me
+    }
+
+    pub fn relay_dmg(&self) -> Option<u64> {
+        self.boss.is_some().then_some(self.fight_dmg)
     }
 
     pub fn in_ecliptica(&self) -> bool {

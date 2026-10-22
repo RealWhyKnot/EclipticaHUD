@@ -16,10 +16,14 @@ pub enum Hit {
     AlphaUp,
     WindowDown,
     WindowUp,
+    Party,
     Discord,
     Log,
     Close,
     Update,
+    UpdateNow,
+    UpdateLater,
+    UpdateSkip,
     Target,
     RunPrev,
     RunNext,
@@ -36,7 +40,7 @@ pub enum Info {
     Boss,
     Result,
     Dealt(u8),
-    DealtBar,
+    DealtGraph,
     LastKill,
     TakenTitle,
     Taken(u8),
@@ -61,21 +65,21 @@ pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
     (Info::Dealt(0), (26, 190, 102, 40)),
     (Info::Dealt(1), (128, 190, 102, 40)),
     (Info::Dealt(2), (230, 190, 102, 40)),
-    (Info::DealtBar, (14, 230, 332, 10)),
-    (Info::LastKill, (14, 240, 332, 30)),
-    (Info::TakenTitle, (14, 288, 332, 20)),
-    (Info::Taken(0), (26, 310, 102, 40)),
-    (Info::Taken(1), (128, 310, 102, 40)),
-    (Info::Taken(2), (230, 310, 102, 40)),
-    (Info::TakenMore(0), (26, 354, 102, 36)),
-    (Info::TakenMore(1), (128, 354, 102, 36)),
-    (Info::TakenMore(2), (230, 354, 102, 36)),
-    (Info::TakenBar, (14, 392, 332, 10)),
-    (Info::LastHit, (14, 402, 332, 24)),
-    (Info::Attackers, (14, 428, 332, 48)),
-    (Info::TopAttacks, (14, 478, 332, 82)),
-    (Info::HistAttackers, (14, 398, 332, 48)),
-    (Info::HistTopAttacks, (14, 448, 332, 82)),
+    (Info::DealtGraph, (14, 232, 332, 52)),
+    (Info::LastKill, (14, 284, 332, 30)),
+    (Info::TakenTitle, (14, 288 + GRAPH_DY, 332, 20)),
+    (Info::Taken(0), (26, 310 + GRAPH_DY, 102, 40)),
+    (Info::Taken(1), (128, 310 + GRAPH_DY, 102, 40)),
+    (Info::Taken(2), (230, 310 + GRAPH_DY, 102, 40)),
+    (Info::TakenMore(0), (26, 354 + GRAPH_DY, 102, 36)),
+    (Info::TakenMore(1), (128, 354 + GRAPH_DY, 102, 36)),
+    (Info::TakenMore(2), (230, 354 + GRAPH_DY, 102, 36)),
+    (Info::TakenBar, (14, 392 + GRAPH_DY, 332, 10)),
+    (Info::LastHit, (14, 402 + GRAPH_DY, 332, 24)),
+    (Info::Attackers, (14, 428 + GRAPH_DY, 332, 48)),
+    (Info::TopAttacks, (14, 478 + GRAPH_DY, 332, 82)),
+    (Info::HistAttackers, (14, 398 + GRAPH_DY, 332, 48)),
+    (Info::HistTopAttacks, (14, 448 + GRAPH_DY, 332, 82)),
     (Info::Vr, (14, LOGICAL_H - 30, 72, 24)),
     (Info::LogDot, (86, LOGICAL_H - 30, 50, 24)),
     (
@@ -96,7 +100,6 @@ impl Info {
             Info::LastHit
                 | Info::Attackers
                 | Info::TopAttacks
-                | Info::DealtBar
                 | Info::TakenBar
                 | Info::TakenMore(1)
                 | Info::TakenMore(2)
@@ -137,7 +140,9 @@ impl Info {
             (Info::Dealt(2), true) => "All damage you dealt in this fight, stage or run",
             (Info::Dealt(2), false) => "How long the fight lasted",
             (Info::Dealt(_), _) => "",
-            (Info::DealtBar, _) => "Your DPS right now against your best moment this fight",
+            (Info::DealtGraph, _) => {
+                "Your damage per second across the fight; lines mark new phases"
+            }
             (Info::LastKill, true) => "What the game credited you with on your last boss kill",
             (Info::LastKill, false) => "What the game credited you with when this boss died",
             (Info::TakenTitle, true) => "Damage you took; the right side counts deaths in this run",
@@ -196,6 +201,7 @@ impl Hit {
             Hit::AlphaUp => "Make the HUD less see-through",
             Hit::WindowDown => "Shorter window for the live DPS and damage taken",
             Hit::WindowUp => "Longer window for the live DPS and damage taken",
+            Hit::Party => "Share boss damage through a server with others here who also turn it on",
             Hit::Discord if c.discord_on => {
                 "Showing this run as your Discord status; click to stop"
             }
@@ -203,7 +209,10 @@ impl Hit {
             Hit::Log if c.log_open => "Close the event log window",
             Hit::Log => "Open the event log window",
             Hit::Close => "Close the HUD (Esc)",
-            Hit::Update => "Install this update and restart",
+            Hit::Update => "Show the update",
+            Hit::UpdateNow => "Download the new version and restart the HUD",
+            Hit::UpdateLater => "Hide this for now; the update label in the corner brings it back",
+            Hit::UpdateSkip => "Don't offer this version again",
             Hit::Target if c.sound_on => "Who the boss is after; click to mute the aggro sound",
             Hit::Target => "Who the boss is after; click to unmute the aggro sound",
             Hit::RunPrev => "Show the previous run",
@@ -224,10 +233,14 @@ impl Hit {
             Hit::AlphaUp => ALPHA_UP_HIT,
             Hit::WindowDown => WINDOW_DOWN_HIT,
             Hit::WindowUp => WINDOW_UP_HIT,
+            Hit::Party => PARTY_HIT,
             Hit::Discord => DISCORD_HIT,
             Hit::Log => LOG_BTN,
             Hit::Close => CLOSE_BTN,
             Hit::Update => UPDATE_RECT,
+            Hit::UpdateNow => UPDATE_NOW_HIT,
+            Hit::UpdateLater => UPDATE_LATER_HIT,
+            Hit::UpdateSkip => UPDATE_SKIP_HIT,
             Hit::Target => TARGET_HIT,
             Hit::RunPrev => RUN_PREV_HIT,
             Hit::RunNext => RUN_NEXT_HIT,
@@ -257,14 +270,16 @@ impl LogHit {
         !matches!(self, LogHit::Title | LogHit::Count)
     }
 
-    pub fn tip(self) -> &'static str {
+    pub fn tip(self, filter: Filter) -> &'static str {
         match self {
             LogHit::Title => "Every hit you took and every aggro switch, newest first",
+            LogHit::Count if filter == Filter::Party => "Connection to the party damage server",
             LogHit::Count => "Events in the current filter; a grey line marks a boss fight start",
             LogHit::Close => "Close the log (Esc)",
             LogHit::Tab(Filter::All) => "Show hits and aggro switches",
             LogHit::Tab(Filter::Damage) => "Show only damage you took",
             LogHit::Tab(Filter::Targets) => "Show only aggro switches",
+            LogHit::Tab(Filter::Party) => "Show boss damage from players who share it",
             LogHit::Thumb => "Drag to scroll, or use the wheel",
             LogHit::Track => "Click to jump a page",
         }
@@ -324,6 +339,7 @@ impl Renderer {
             (ALPHA_UP_HIT, Hit::AlphaUp),
             (WINDOW_DOWN_HIT, Hit::WindowDown),
             (WINDOW_UP_HIT, Hit::WindowUp),
+            (PARTY_HIT, Hit::Party),
             (DISCORD_HIT, Hit::Discord),
             (TARGET_HIT, Hit::Target),
             (RUN_PREV_HIT, Hit::RunPrev),
@@ -334,6 +350,11 @@ impl Renderer {
         regions
             .into_iter()
             .chain(INFO_REGIONS.iter().map(|(i, r)| (*r, Hit::Info(*i))))
+            .chain([
+                (UPDATE_NOW_HIT, Hit::UpdateNow),
+                (UPDATE_LATER_HIT, Hit::UpdateLater),
+                (UPDATE_SKIP_HIT, Hit::UpdateSkip),
+            ])
             .find(|(r, h)| ok(*h) && self.in_rect(*r, x, y))
             .map(|(_, h)| h)
     }

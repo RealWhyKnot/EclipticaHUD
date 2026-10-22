@@ -23,6 +23,7 @@ features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Pipes",
+    "Win32_Networking_WinHttp",
 ]
 
 [profile.release]

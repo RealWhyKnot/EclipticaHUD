@@ -42,6 +42,18 @@ pub enum Event {
     SessionSave,
     RoomJoin(String),
     RoomEnter(String),
+    SelfName {
+        name: String,
+        usr: String,
+    },
+    PlayerJoined {
+        name: String,
+        usr: String,
+    },
+    PlayerLeft {
+        name: String,
+        usr: String,
+    },
 }
 
 impl Event {
@@ -66,6 +78,9 @@ impl Event {
             Event::SessionSave => "session_save",
             Event::RoomJoin(_) => "room_join",
             Event::RoomEnter(_) => "room_enter",
+            Event::SelfName { .. } => "self_name",
+            Event::PlayerJoined { .. } => "player_joined",
+            Event::PlayerLeft { .. } => "player_left",
         }
     }
 }
@@ -175,6 +190,18 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
     if let Some(rest) = msg.strip_prefix("[Behaviour] Joining wrld_") {
         return Some(Event::RoomJoin(format!("wrld_{}", rest.trim_end())));
     }
+    if let Some(rest) = msg.strip_prefix("User Authenticated: ") {
+        let (name, usr) = name_and_usr(rest)?;
+        return Some(Event::SelfName { name, usr });
+    }
+    if let Some(rest) = msg.strip_prefix("[Behaviour] OnPlayerJoined ") {
+        let (name, usr) = name_and_usr(rest)?;
+        return Some(Event::PlayerJoined { name, usr });
+    }
+    if let Some(rest) = msg.strip_prefix("[Behaviour] OnPlayerLeft ") {
+        let (name, usr) = name_and_usr(rest)?;
+        return Some(Event::PlayerLeft { name, usr });
+    }
     if msg.starts_with("ECLIPTICA saving SESSION ID ") {
         return Some(Event::SessionSave);
     }
@@ -219,6 +246,20 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
         return Some(Event::EnemyName(name.to_string()));
     }
     None
+}
+
+fn name_and_usr(rest: &str) -> Option<(String, String)> {
+    let (name, id) = rest.trim_end().rsplit_once(" (usr_")?;
+    let id = id.strip_suffix(')')?;
+    let name = name.trim();
+    if name.is_empty()
+        || id.is_empty()
+        || id.len() > 64
+        || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return None;
+    }
+    Some((name.to_string(), format!("usr_{id}")))
 }
 
 pub fn fmt_clock(ts: u64) -> String {
@@ -400,6 +441,116 @@ mod tests {
             parse_msg("[Behaviour] Entering Room: Sky Dream"),
             Some(Event::RoomEnter("Sky Dream".into()))
         );
+    }
+
+    #[test]
+    fn self_name() {
+        let l = split_line(
+            "2026.10.22 13:44:35 Debug      -  User Authenticated: WhyKnot (usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)\r",
+        )
+        .unwrap();
+        assert_eq!(
+            parse_msg(l.msg),
+            Some(Event::SelfName {
+                name: "WhyKnot".into(),
+                usr: "usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1".into()
+            })
+        );
+        assert_eq!(
+            parse_msg("User Authenticated: Be\u{430}r (Hands) (usr_1)"),
+            Some(Event::SelfName {
+                name: "Be\u{430}r (Hands)".into(),
+                usr: "usr_1".into()
+            })
+        );
+        assert_eq!(parse_msg("User Authenticated:  (usr_1)"), None);
+        assert_eq!(parse_msg("User Authenticated: WhyKnot"), None);
+        assert_eq!(parse_msg("User Authenticated: WhyKnot (usr_)"), None);
+        assert_eq!(parse_msg("User Authenticated: WhyKnot (usr_1"), None);
+        assert_eq!(parse_msg("User Authenticated: WhyKnot (usr_a b)"), None);
+    }
+
+    fn joined(name: &str, usr: &str) -> Option<Event> {
+        Some(Event::PlayerJoined {
+            name: name.into(),
+            usr: usr.into(),
+        })
+    }
+
+    fn left(name: &str, usr: &str) -> Option<Event> {
+        Some(Event::PlayerLeft {
+            name: name.into(),
+            usr: usr.into(),
+        })
+    }
+
+    #[test]
+    fn player_joined_and_left() {
+        let l = split_line(
+            "2026.10.22 13:44:49 Debug      -  [Behaviour] OnPlayerJoined WhyKnot (usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)\r",
+        )
+        .unwrap();
+        assert_eq!(
+            parse_msg(l.msg),
+            joined("WhyKnot", "usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1")
+        );
+        let l = split_line(
+            "2026.10.22 13:48:37 Debug      -  [Behaviour] OnPlayerLeft WhyKnot (usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)",
+        )
+        .unwrap();
+        assert_eq!(
+            parse_msg(l.msg),
+            left("WhyKnot", "usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1")
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] OnPlayerJoined Be\u{430}r (Hands) (usr_97dd)"),
+            joined("Be\u{430}r (Hands)", "usr_97dd")
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] OnPlayerJoined  two  spaces  (x) (usr_1)"),
+            joined("two  spaces  (x)", "usr_1")
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] OnPlayerLeft (usr_fake) (usr_2)"),
+            left("(usr_fake)", "usr_2")
+        );
+        assert_eq!(
+            parse_msg("[Behaviour] OnPlayerJoined \u{6c17}\u{307e}\u{3050}\u{308c} (usr_3)"),
+            joined("\u{6c17}\u{307e}\u{3050}\u{308c}", "usr_3")
+        );
+    }
+
+    #[test]
+    fn player_lines_that_are_not_join_or_leave() {
+        assert_eq!(parse_msg("[Behaviour] OnPlayerLeftRoom"), None);
+        assert_eq!(parse_msg("[Behaviour] OnPlayerLeftRoom\r"), None);
+        assert_eq!(
+            parse_msg("[Behaviour] OnPlayerLeftRoom WhyKnot (usr_1)"),
+            None
+        );
+        assert_eq!(parse_msg("[Behaviour] OnPlayerJoinComplete WhyKnot"), None);
+        assert_eq!(
+            parse_msg("[Behaviour] OnPlayerEnteredRoom WhyKnot (usr_1)"),
+            None
+        );
+        assert_eq!(parse_msg("[Behaviour] OnPlayerJoined WhyKnot"), None);
+        assert_eq!(parse_msg("[Behaviour] OnPlayerLeft WhyKnot"), None);
+        assert_eq!(parse_msg("[Behaviour] OnPlayerJoined (usr_1)"), None);
+        assert_eq!(parse_msg("[Behaviour] OnPlayerJoined  (usr_1)"), None);
+        assert_eq!(parse_msg("[Behaviour] OnPlayerJoined WhyKnot (usr_)"), None);
+        assert_eq!(
+            parse_msg("[Behaviour] OnPlayerJoined WhyKnot (usr_1) trailing"),
+            None
+        );
+        assert_eq!(parse_msg("OnPlayerJoined WhyKnot (usr_1)"), None);
+        assert_eq!(
+            parse_msg(&format!(
+                "[Behaviour] OnPlayerJoined A (usr_{})",
+                "a".repeat(65)
+            )),
+            None
+        );
+        assert_eq!(parse_msg("[Behaviour] OnLeftRoom"), Some(Event::RoomLeft));
     }
 
     #[test]

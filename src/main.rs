@@ -4,6 +4,7 @@ mod discord;
 mod game;
 mod hud;
 mod process;
+mod relay;
 mod scan;
 mod update;
 mod vr;

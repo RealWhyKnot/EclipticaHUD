@@ -53,6 +53,12 @@ impl App {
     }
 
     pub fn log_rows(&self) -> usize {
+        if self.log.filter == Filter::Party {
+            return match self.party.pane().shown().len() {
+                0 => 0,
+                n => n + 1,
+            };
+        }
         timeline::timeline(self.log_source(), self.log.filter).len()
     }
 
@@ -144,6 +150,7 @@ impl App {
             dragging: self.log.drag.is_some(),
             thumb_t: self.log.thumb_t,
             slide: -(1.0 - crate::hud::render::ease_out_cubic(slide_t)) * timeline::ROW_H as f32,
+            party: self.party.pane().clone(),
         };
         let (sel, page, env) = (self.sel_run, self.viewed_page(), self.env());
         let src = Self::source(&self.gs, sel, page, env);
