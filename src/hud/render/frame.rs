@@ -34,7 +34,6 @@ pub struct Frame {
     pub log_open: bool,
     pub topmost: bool,
     pub progress_shown: f32,
-    pub taken_frac_shown: f32,
     pub dps_shown: f32,
     pub fight_dps_shown: f32,
     pub taken_shown: f32,
@@ -44,6 +43,7 @@ pub struct Frame {
     pub sound_on: bool,
     pub discord: Link,
     pub discord_on: bool,
+    pub usage_on: bool,
     pub party_open: bool,
     pub view_run: Option<usize>,
     pub view_group: Option<usize>,
@@ -101,6 +101,9 @@ pub struct PartyPane {
     pub here: usize,
     pub fight: Option<PartyFight>,
     pub rows: Vec<PartyRow>,
+    pub saved: Option<u64>,
+    pub page: usize,
+    pub pages: usize,
 }
 
 impl PartyPane {
@@ -120,5 +123,14 @@ pub struct PartyView<'a> {
 impl PartyView<'_> {
     pub(super) fn ctl(&self, h: PartyHit, on: bool) -> Ctl {
         Ctl::of(true, on, self.hover == Some(h), self.pressed == Some(h))
+    }
+
+    pub(super) fn ctl_if(&self, h: PartyHit, enabled: bool) -> Ctl {
+        Ctl::of(
+            enabled,
+            false,
+            self.hover == Some(h),
+            self.pressed == Some(h),
+        )
     }
 }

@@ -6,6 +6,7 @@ mod placement;
 mod store;
 mod window;
 
+use crate::history::History;
 use crate::hud::app::App;
 use crate::hud::app::WINDOW_STEPS;
 use crate::hud::render::{Hit, LogHit, PartyHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
@@ -50,7 +51,10 @@ pub fn run() {
         app.set_window(
             load_text("window.txt").map_or(crate::game::state::DEFAULT_WINDOW, |t| window_from(&t)),
         );
+        app.set_history(data_file("history.db").and_then(|p| History::open(&p)));
         app.backfill_history();
+        app.set_usage(load_usage(), false);
+        crate::usage::spawn(data_file("history.db"));
         if load_discord() {
             app.set_discord(true);
         }

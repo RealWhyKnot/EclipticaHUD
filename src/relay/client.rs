@@ -116,33 +116,95 @@ struct Conn {
     _session: Handle,
 }
 
-impl Conn {
-    fn open(url: &Url) -> Option<Conn> {
-        let agent = wide(&format!("EclipticaHUD/{}", crate::update::VERSION));
-        unsafe {
-            let mut raw = WinHttpOpen(
+fn open_session() -> Option<Handle> {
+    let agent = wide(&format!("EclipticaHUD/{}", crate::update::VERSION));
+    unsafe {
+        let mut raw = WinHttpOpen(
+            agent.as_ptr(),
+            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        );
+        if raw.is_null() {
+            raw = WinHttpOpen(
                 agent.as_ptr(),
-                WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                 std::ptr::null(),
                 std::ptr::null(),
                 0,
             );
-            if raw.is_null() {
-                raw = WinHttpOpen(
-                    agent.as_ptr(),
-                    WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                    std::ptr::null(),
-                    std::ptr::null(),
-                    0,
-                );
-            }
-            let session = Handle(raw);
-            if session.0.is_null()
-                || WinHttpSetTimeouts(session.0, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS)
-                    == 0
-            {
-                return None;
-            }
+        }
+        let session = Handle(raw);
+        if session.0.is_null()
+            || WinHttpSetTimeouts(session.0, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS, TIMEOUT_MS) == 0
+        {
+            return None;
+        }
+        Some(session)
+    }
+}
+
+fn status(req: &Handle) -> Option<u32> {
+    let mut code = 0u32;
+    let mut len = 4u32;
+    let ok = unsafe {
+        WinHttpQueryHeaders(
+            req.0,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            std::ptr::null(),
+            &mut code as *mut u32 as *mut c_void,
+            &mut len,
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(code)
+}
+
+pub(super) fn post(url: &Url, body: &[u8]) -> Option<u32> {
+    let session = open_session()?;
+    let len = u32::try_from(body.len()).ok()?;
+    unsafe {
+        let host = wide(&url.host);
+        let connect = Handle(WinHttpConnect(session.0, host.as_ptr(), url.port, 0));
+        if connect.0.is_null() {
+            return None;
+        }
+        let verb = wide("POST");
+        let path = wide(&url.path);
+        let flags = if url.secure { WINHTTP_FLAG_SECURE } else { 0 };
+        let req = Handle(WinHttpOpenRequest(
+            connect.0,
+            verb.as_ptr(),
+            path.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            flags,
+        ));
+        let headers = wide("Content-Type: application/octet-stream\r\n");
+        if req.0.is_null()
+            || WinHttpSendRequest(
+                req.0,
+                headers.as_ptr(),
+                u32::MAX,
+                body.as_ptr() as *const c_void,
+                len,
+                len,
+                0,
+            ) == 0
+            || WinHttpReceiveResponse(req.0, std::ptr::null_mut()) == 0
+        {
+            return None;
+        }
+        status(&req)
+    }
+}
+
+impl Conn {
+    fn open(url: &Url) -> Option<Conn> {
+        let session = open_session()?;
+        unsafe {
             let host = wide(&url.host);
             let connect = Handle(WinHttpConnect(session.0, host.as_ptr(), url.port, 0));
             if connect.0.is_null() {
@@ -172,18 +234,7 @@ impl Conn {
             {
                 return None;
             }
-            let mut code = 0u32;
-            let mut len = 4u32;
-            if WinHttpQueryHeaders(
-                req.0,
-                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                std::ptr::null(),
-                &mut code as *mut u32 as *mut c_void,
-                &mut len,
-                std::ptr::null_mut(),
-            ) == 0
-                || code != 101
-            {
+            if status(&req) != Some(101) {
                 return None;
             }
             let ws = WinHttpWebSocketCompleteUpgrade(req.0, 0);

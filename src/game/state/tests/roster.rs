@@ -138,15 +138,20 @@ fn relay_damage_is_the_live_fight_total() {
         "08:01:00",
         "ECLIPTICA - now fighting boss: DarkMouth(Clone) on phase: 0",
     );
-    assert_eq!(gs.relay_dmg(), Some(0));
+    assert_eq!(gs.relay_dmg(), Some((0, 0)));
     feed_at(&mut gs, "08:01:01", "Dealing 100 STRIKE damage");
     feed_at(&mut gs, "08:01:02", "Dealing 7 NON-STRIKE damage");
-    assert_eq!(gs.relay_dmg(), Some(107));
+    feed_at(
+        &mut gs,
+        "08:01:03",
+        "damage has been taken: 12, from source: (DarkMouth) attack_Bite",
+    );
+    assert_eq!(gs.relay_dmg(), Some((107, 12)));
     feed_at(
         &mut gs,
         "08:01:10",
         "Boss DarkMouth dead, personal damage dealt: ",
     );
-    assert_eq!(gs.relay_dmg(), Some(107));
+    assert_eq!(gs.relay_dmg(), Some((107, 12)));
     assert_eq!(gs.fight_dmg, 107);
 }

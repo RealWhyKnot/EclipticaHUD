@@ -266,9 +266,64 @@ pub fn fmt_clock(ts: u64) -> String {
     format!("{:02}:{:02}:{:02}", ts / 3600 % 24, ts / 60 % 60, ts % 60)
 }
 
+fn month_start(y: u64, mo: u64) -> u64 {
+    365 * y + y / 4 - y / 100 + y / 400 + (153 * (mo + 1)) / 5
+}
+
+pub fn civil(ts: u64) -> (u64, u64, u64) {
+    let days = ts / 86400;
+    let mut y = days * 400 / 146097;
+    while month_start(y + 1, 3) <= days {
+        y += 1;
+    }
+    while y > 0 && month_start(y, 3) > days {
+        y -= 1;
+    }
+    let mo = (3..=14)
+        .rev()
+        .find(|&m| month_start(y, m) <= days)
+        .unwrap_or(3);
+    let d = days - month_start(y, mo) + 1;
+    if mo > 12 {
+        (y + 1, mo - 12, d)
+    } else {
+        (y, mo, d)
+    }
+}
+
+pub fn fmt_date(ts: u64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (y, mo, d) = civil(ts);
+    format!("{} {d} {y}", MONTHS[(mo as usize - 1).min(11)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn civil_round_trips_parse_ts() {
+        for y in [1999u64, 2000, 2024, 2026, 2100] {
+            for mo in 1..=12u64 {
+                for d in [1u64, 15, 28] {
+                    let s = format!("{y:04}.{mo:02}.{d:02} 23:59:58");
+                    let ts = parse_ts(&s).unwrap();
+                    assert_eq!(civil(ts), (y, mo, d), "{s}");
+                }
+            }
+        }
+        let leap = parse_ts("2024.02.29 00:00:00").unwrap();
+        assert_eq!(civil(leap), (2024, 2, 29));
+        assert_eq!(civil(leap + 86400), (2024, 3, 1));
+        let eve = parse_ts("2026.12.31 12:00:00").unwrap();
+        assert_eq!(civil(eve + 86400), (2027, 1, 1));
+        assert_eq!(
+            fmt_date(parse_ts("2026.10.22 14:05:00").unwrap()),
+            "Oct 22 2026"
+        );
+    }
 
     #[test]
     fn ownership_unicode() {

@@ -2,11 +2,13 @@
 
 mod discord;
 mod game;
+mod history;
 mod hud;
 mod process;
 mod relay;
 mod scan;
 mod update;
+mod usage;
 mod vr;
 mod vrchat;
 

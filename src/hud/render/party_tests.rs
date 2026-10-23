@@ -143,6 +143,7 @@ fn ranked(n: usize, you: Option<usize>) -> PartyPane {
                     Some(i) == you,
                     true,
                     1000 - i as u64,
+                    10 * i as u64,
                     None,
                     0,
                 )
@@ -170,8 +171,8 @@ fn board_keeps_you_in_view() {
 fn gap_line_names_the_nearest_rival() {
     let two = |a: (&str, bool, u64), b: (&str, bool, u64)| {
         pane(vec![
-            party_row(a.0, a.1, true, a.2, None, 0),
-            party_row(b.0, b.1, true, b.2, None, 0),
+            party_row(a.0, a.1, true, a.2, 0, None, 0),
+            party_row(b.0, b.1, true, b.2, 0, None, 0),
         ])
     };
     assert_eq!(
@@ -223,16 +224,23 @@ fn party_layout_lines_up() {
     let (c2x, c2y, c2w, c2h) = PARTY_CARD2;
     assert_eq!((c1x, c2x, c1w, c2w), (M, M, W, W));
     assert_eq!(c1y + c1h + 8, c2y);
-    assert_eq!(c2y + c2h, PARTY_H - M);
+    let (ox, oy, ow, oh) = PARTY_OLDER;
+    let (px, py, pw, ph) = PARTY_PAGE;
+    let (nx, ny, nw, nh) = PARTY_NEWER;
+    assert_eq!(c2y + c2h + 8, oy);
+    assert_eq!(oy + oh + M, PARTY_H);
+    assert_eq!((py, ny, ph, nh), (oy, oy, oh, oh));
+    assert_eq!((ox + ow, px + pw), (px, nx));
+    assert_eq!(ox, PARTY_W - (nx + nw));
     assert_eq!(c1y, PARTY_CLOSE_HIT.1 + PARTY_CLOSE_HIT.3 + 8);
     let rows_end = PARTY_ROW_Y + PARTY_ROWS as i32 * PARTY_ROW_H;
     assert!(rows_end <= c2y + c2h - 4, "{rows_end}");
-    let cols = [PARTY_RANK, PARTY_NAME, PARTY_BAR, PARTY_DMG];
+    let cols = [PARTY_RANK, PARTY_NAME, PARTY_BAR, PARTY_DMG, PARTY_TAKEN];
     assert!(cols[0].0 >= c2x + 12);
     for pair in cols.windows(2) {
         assert!(pair[0].0 + pair[0].1 + 6 <= pair[1].0, "{pair:?}");
     }
-    assert_eq!(PARTY_DMG.0 + PARTY_DMG.1, c2x + c2w - 12);
+    assert_eq!(PARTY_TAKEN.0 + PARTY_TAKEN.1, c2x + c2w - 12);
     let (tx, ty, tw, th) = PARTY_TOGGLE;
     assert_eq!(tx + tw + 8, PARTY_CLOSE_BTN.0);
     assert_eq!((ty, th), (PARTY_CLOSE_BTN.1, PARTY_CLOSE_BTN.3));
@@ -244,7 +252,7 @@ fn party_layout_lines_up() {
 fn party_hit_regions() {
     for dpi in DPIS {
         let r = Renderer::new(dpi, PARTY_W, PARTY_H);
-        let at = |x: i32, y: i32, vr: bool| r.party_hit_test(r.px(x), r.px(y), vr);
+        let at = |x: i32, y: i32, vr: bool| r.party_hit_test(r.px(x), r.px(y), vr, false);
         assert_eq!(at(PARTY_W - 1, 0, false), Some(PartyHit::Close));
         assert_eq!(at(324, 35, false), Some(PartyHit::Close));
         assert_eq!(at(322, 20, false), None);
@@ -358,22 +366,25 @@ fn party_window_stress_never_leaves_its_columns() {
             s(PARTY_ROW_Y + PARTY_ROWS as i32 * PARTY_ROW_H),
         );
         let cols = |r: &Renderer| {
-            [PARTY_BAR, PARTY_DMG]
+            [PARTY_BAR, PARTY_DMG, PARTY_TAKEN]
                 .iter()
                 .map(|&(x, w)| block(r, s(x), y0, s(x + w), y1))
                 .collect::<Vec<_>>()
         };
         assert_eq!(cols(&rs), cols(&rn), "long names moved columns at {dpi}");
-        assert_ne!(
-            cols(&rs)[1],
-            cols(&rh)[1],
-            "huge numbers not drawn at {dpi}"
-        );
+        for c in [1, 2] {
+            assert_ne!(
+                cols(&rs)[c],
+                cols(&rh)[c],
+                "huge numbers not drawn in column {c} at {dpi}"
+            );
+        }
         let gaps = [
             (PARTY_RANK.0 + PARTY_RANK.1, PARTY_NAME.0, "rank"),
             (PARTY_NAME.0 + PARTY_NAME.1, PARTY_BAR.0, "name"),
             (PARTY_BAR.0 + PARTY_BAR.1, PARTY_DMG.0, "bar"),
-            (PARTY_DMG.0 + PARTY_DMG.1, PARTY_W - M, "damage"),
+            (PARTY_DMG.0 + PARTY_DMG.1, PARTY_TAKEN.0, "dealt"),
+            (PARTY_TAKEN.0 + PARTY_TAKEN.1, PARTY_W - M, "taken"),
         ];
         for (r, what) in [(&rs, "short"), (&rn, "names"), (&rh, "huge")] {
             for y in y0..y1 {
@@ -392,6 +403,11 @@ fn party_window_stress_never_leaves_its_columns() {
                 rs.text_w(F_BODY, &compact(n)) <= s(PARTY_DMG.1),
                 "{n} at {dpi}"
             );
+            let t = row.1.taken;
+            assert!(
+                rs.text_w(F_BODY, &compact(t)) <= s(PARTY_TAKEN.1),
+                "{t} taken at {dpi}"
+            );
         }
         let (cx, _, cw, _) = PARTY_CARD1;
         let rank = ordinal(32);
@@ -403,19 +419,39 @@ fn party_window_stress_never_leaves_its_columns() {
 }
 
 #[test]
+fn board_count_clears_column_labels() {
+    use crate::relay::proto::MAX_MEMBERS;
+    for dpi in DPIS {
+        let r = Renderer::new(dpi, PARTY_W, PARTY_H);
+        let w = |f: usize, s: &str| r.unscale(r.text_w(f, s));
+        let count = format!("{MAX_MEMBERS} of {MAX_MEMBERS} here sharing");
+        let label = PARTY_DMG.0 + PARTY_DMG.1 - w(F_LABEL, "DEALT");
+        for head in ["THIS FIGHT", "LAST FIGHT", "BOSS DAMAGE"] {
+            let end = PARTY_CARD2.0 + 12 + w(F_LABEL, head) + 10 + w(F_TINY, &count);
+            assert!(
+                end + 6 <= label,
+                "{head} ends {end}, DEALT at {label}, {dpi}"
+            );
+        }
+    }
+}
+
+#[test]
 fn damage_column_uses_one_format_per_board() {
     for dpi in DPIS {
         let r = Renderer::new(dpi, PARTY_W, PARTY_H);
         let fits = |n: u64| r.text_w(F_BODY, &group_digits(n)) <= r.px(PARTY_DMG.1);
         assert!(fits(9_999_999), "{dpi}");
         assert!(!fits(u64::MAX), "{dpi}");
+        let fits_t = |n: u64| r.text_w(F_BODY, &group_digits(n)) <= r.px(PARTY_TAKEN.1);
+        assert!(fits_t(999_999), "{dpi}");
         let mixed = pane(vec![
-            party_row("A", false, true, u64::MAX / 2, None, 0),
-            party_row("B", true, true, 1_234, None, 0),
+            party_row("A", false, true, u64::MAX / 2, 0, None, 0),
+            party_row("B", true, true, 1_234, 0, None, 0),
         ]);
         let only_b = pane(vec![
-            party_row("A", false, true, 0, None, 0),
-            party_row("B", true, true, 1_234, None, 0),
+            party_row("A", false, true, 0, 0, None, 0),
+            party_row("B", true, true, 1_234, 0, None, 0),
         ]);
         let rm = draw(dpi, &mixed, false);
         let rb = draw(dpi, &only_b, false);
@@ -493,6 +529,7 @@ fn every_empty_state_says_something_different() {
         here: 3,
         fight: None,
         rows: Vec::new(),
+        ..PartyPane::default()
     };
     let states = [
         PartyPane::default(),
@@ -547,6 +584,7 @@ fn settings_rows_fit_their_labels() {
             "STAT WINDOW",
             "AGGRO SOUND",
             "DISCORD STATUS",
+            "SHARE FIGHT DATA",
         ] {
             assert!(r.text_w(F_LABEL, label) <= label_w, "{label} at {dpi}");
         }
@@ -572,14 +610,15 @@ fn settings_rows_fit_their_labels() {
             },
         );
         let at = |x: i32, y: i32| pix(&r, r.px(x), r.px(y));
-        let (sx, sy, _, sh) = SOUND_HIT;
+        let (sx, sy, _, sh) = Hit::Sound.rect();
         assert_eq!(at(sx + 4, sy + sh / 2), ACCENT, "sound on at {dpi}");
-        let (dx, dy, _, dh) = DISCORD_HIT;
+        let (dx, dy, _, dh) = Hit::Discord.rect();
         assert_eq!(at(dx, dy + dh / 2), EDGE, "discord off at {dpi}");
         assert_eq!(at(dx + 4, dy + dh / 2), CARD_HI, "discord off at {dpi}");
         let (cx, cy, cw, ch) = SETTINGS_CARD;
-        assert_eq!(at(cx + cw / 2, cy + ch - 2), CARD_HI);
-        assert_eq!(DISCORD_HIT.1 + DISCORD_HIT.3 + 14, cy + ch);
+        assert_eq!(at(cx + cw / 2, cy + BODY_DY + ch - 2), CARD_HI);
+        assert_eq!(USAGE_HIT.1 + USAGE_HIT.3 + 16, cy + ch);
+        assert_eq!(SCALE_DOWN_HIT.1 - cy, 16);
     }
 }
 
@@ -647,6 +686,7 @@ fn empty_board_messages_fit_and_name_the_fight() {
         here: 3,
         fight: None,
         rows: Vec::new(),
+        ..PartyPane::default()
     };
     let states = [
         base(Link::Off, false),
@@ -677,4 +717,13 @@ fn empty_board_messages_fit_and_name_the_fight() {
     assert_eq!(p.board_head(), "LAST FIGHT");
     p.rows = sample_party();
     assert_eq!(p.board_empty(), None);
+}
+
+#[test]
+fn page_label_fits_five_digit_counts() {
+    for dpi in DPIS {
+        let r = Renderer::new(dpi, PARTY_W, PARTY_H);
+        let need = r.unscale(r.text_w(F_TINY, "99999/99999"));
+        assert!(need + 4 <= PARTY_PAGE.2, "{dpi}: {need}");
+    }
 }

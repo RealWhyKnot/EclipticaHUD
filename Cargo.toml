@@ -7,6 +7,8 @@ description = "Boss target and damage HUD for Ecliptica in VRChat, desktop panel
 
 [dependencies]
 openvr = "0.9.0"
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [dependencies.windows-sys]
 version = "0.60"

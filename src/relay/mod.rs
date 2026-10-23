@@ -3,7 +3,7 @@ pub mod party;
 pub mod proto;
 pub mod sha256;
 
-use proto::{Claim, Member, Msg, Room, MAX_DMG};
+use proto::{Claim, Member, Msg, Room, Totals};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, OnceLock};
@@ -212,13 +212,13 @@ impl Backoff {
 
 #[derive(Debug, Default)]
 pub struct Throttle {
-    sent: Option<u64>,
+    sent: Option<Totals>,
     at: Option<u64>,
 }
 
 impl Throttle {
-    pub fn due(&mut self, now_ms: u64, dmg: Option<u64>) -> Option<Msg> {
-        let v = dmg.map(|d| d.min(MAX_DMG));
+    pub fn due(&mut self, now_ms: u64, dmg: Option<Totals>) -> Option<Msg> {
+        let v = dmg.map(Totals::capped);
         if self.sent == v || self.at.is_some_and(|t| now_ms < t + SEND_GAP_MS) {
             return None;
         }
@@ -227,8 +227,8 @@ impl Throttle {
         Some(v.map_or(Msg::End, Msg::Dmg))
     }
 
-    pub fn wait_ms(&self, now_ms: u64, dmg: Option<u64>) -> u64 {
-        let pending = self.sent != dmg.map(|d| d.min(MAX_DMG));
+    pub fn wait_ms(&self, now_ms: u64, dmg: Option<Totals>) -> u64 {
+        let pending = self.sent != dmg.map(Totals::capped);
         match (pending, self.at) {
             (true, Some(t)) => (t + SEND_GAP_MS).saturating_sub(now_ms).max(1),
             (true, None) => 1,
@@ -250,13 +250,13 @@ pub enum Link {
 pub struct Snap {
     pub at: Instant,
     pub room: Room,
-    pub entries: Vec<(Member, u64)>,
+    pub entries: Vec<(Member, Totals)>,
 }
 
 #[derive(Default)]
 struct Shared {
     want: Option<Want>,
-    dmg: Option<u64>,
+    dmg: Option<Totals>,
     running: bool,
     link: Link,
     session: u64,
@@ -284,12 +284,12 @@ pub struct Poll {
 }
 
 pub trait Relay: Sync {
-    fn sync(&'static self, want: Option<Want>, dmg: Option<u64>);
+    fn sync(&'static self, want: Option<Want>, dmg: Option<Totals>);
     fn poll(&self) -> Poll;
 }
 
 impl Relay for Hub {
-    fn sync(&'static self, want: Option<Want>, dmg: Option<u64>) {
+    fn sync(&'static self, want: Option<Want>, dmg: Option<Totals>) {
         Hub::sync(self, want, dmg);
     }
 
@@ -317,7 +317,7 @@ impl Hub {
         self.m.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub fn sync(&'static self, want: Option<Want>, dmg: Option<u64>) {
+    pub fn sync(&'static self, want: Option<Want>, dmg: Option<Totals>) {
         let mut s = self.lock();
         let changed = s.want != want || s.dmg != dmg;
         s.want = want;
@@ -384,6 +384,18 @@ impl Hub {
         s.link = link;
         s.session
     }
+}
+
+pub fn usage_url(relay: &str) -> Option<Url> {
+    let url = Url::parse(relay)?;
+    Some(Url {
+        path: "/usage".to_string(),
+        ..url
+    })
+}
+
+pub fn post_usage(body: &[u8]) -> Option<u32> {
+    client::post(&usage_url(relay_url())?, body)
 }
 
 pub fn rand() -> u64 {

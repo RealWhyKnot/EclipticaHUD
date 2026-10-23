@@ -166,6 +166,16 @@ fn main_states() -> Vec<(&'static str, u8, Frame)> {
             },
         ),
         (
+            "main_settings_hover_usage",
+            0,
+            Frame {
+                settings_open: true,
+                hover: Some(Hit::Usage),
+                tip: Some(Hit::Usage),
+                ..live()
+            },
+        ),
+        (
             "main_history",
             0,
             Frame {
@@ -278,6 +288,7 @@ fn party_states() -> Vec<(&'static str, PartyPane)> {
         true,
         true,
         51_000,
+        2_300,
         Some(100),
         1_200,
     )]);
@@ -301,9 +312,70 @@ fn party_states() -> Vec<(&'static str, PartyPane)> {
         ("connecting", connecting),
         ("waiting", waiting),
         ("alone", alone),
-        ("four", four),
+        ("four", four.clone()),
         ("thirty_two", big),
         ("link_lost", lost),
-        ("after_kill", down),
+        ("after_kill", down.clone()),
+        (
+            "hist_live",
+            PartyPane {
+                pages: 11,
+                ..four.clone()
+            },
+        ),
+        (
+            "hist_saved",
+            PartyPane {
+                saved: Some(saved_at()),
+                page: 4,
+                pages: 11,
+                ..down.clone()
+            },
+        ),
+        (
+            "hist_saved_off",
+            PartyPane {
+                on: false,
+                link: Link::Off,
+                ready: false,
+                saved: Some(saved_at()),
+                page: 11,
+                pages: 11,
+                ..down.clone()
+            },
+        ),
+        (
+            "hist_off",
+            PartyPane {
+                pages: 3,
+                ..PartyPane {
+                    here: 6,
+                    ..PartyPane::default()
+                }
+            },
+        ),
+        (
+            "hist_waiting",
+            PartyPane {
+                rows: Vec::new(),
+                fight: None,
+                pages: 3,
+                ..pane(Vec::new())
+            },
+        ),
+        (
+            "hist_huge",
+            PartyPane {
+                pages: 9998,
+                page: 0,
+                ..pane(stress_party(true, true))
+            },
+        ),
     ]
+}
+
+fn saved_at() -> u64 {
+    crate::game::event::split_line("2026.12.28 23:59:00 Debug      -  x")
+        .unwrap()
+        .ts
 }

@@ -4,14 +4,15 @@ use super::hit::PartyHit;
 use super::layout::*;
 use super::theme::*;
 use super::{wide, Renderer};
+use crate::game::event::{fmt_clock, fmt_date};
 use crate::relay::party::PartyRow;
 use crate::relay::Link;
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::*;
 
 const OFF_LINES: [&str; 3] = [
-    "While a boss fight is on, the HUD sends your damage total for it to the server, at most once a second.",
-    "Players in this instance who turn sharing on see it beside your VRChat name, and you see theirs.",
+    "While a boss fight is on, the HUD sends the server how much damage you've dealt and taken, at most once a second.",
+    "Players in this instance who turn sharing on see those numbers beside your VRChat name, and you see theirs.",
     "The server keeps totals in memory only and drops yours when your run ends or you disconnect.",
 ];
 
@@ -32,6 +33,9 @@ fn clock(secs: u64) -> String {
 
 impl PartyPane {
     pub fn board_head(&self) -> &'static str {
+        if self.saved.is_some() {
+            return "SAVED FIGHT";
+        }
         match &self.fight {
             Some(f) if f.live => "THIS FIGHT",
             Some(_) => "LAST FIGHT",
@@ -49,6 +53,16 @@ impl PartyPane {
             (true, Link::Off | Link::Connecting) => "Connecting to the server",
             (true, Link::Connected) => "Damage shows up here once a boss fight starts",
         })
+    }
+
+    pub fn saved_when(&self) -> Option<String> {
+        self.saved
+            .map(|at| format!("{}, {}", fmt_date(at), &fmt_clock(at)[..5]))
+    }
+
+    pub fn page_label(&self) -> String {
+        let total = self.pages + 1;
+        format!("{}/{}", total - self.page.min(self.pages), total)
     }
 
     pub fn status(&self) -> (&'static str, u32) {
@@ -119,6 +133,9 @@ impl Renderer {
         }
         self.draw_party_status(p);
         self.draw_party_board(p);
+        if p.pages > 0 {
+            self.draw_party_pager(v);
+        }
         if let Some(hit) = v.tip.filter(|_| !v.vr) {
             self.tooltip(hit.rect(), hit.tip(p.on), PARTY_W, PARTY_H);
         }
@@ -131,21 +148,29 @@ impl Renderer {
         let (x, w) = (cx + 12, cw - 24);
         let vc = DT_VCENTER;
         let (word, color) = p.status();
-        let ww = self.unscale(self.text_w(F_TINY, word));
-        self.text_rect(x, cy + 6, w, 18, F_TINY, DIM, DT_RIGHT | vc, word);
-        self.dot(x + w - ww - 14, cy + 11, 8, color);
+        let when = p.saved_when();
+        let shown = when.as_deref().unwrap_or(word);
+        let ww = self.unscale(self.text_w(F_TINY, shown));
+        self.text_rect(x, cy + 6, w, 18, F_TINY, DIM, DT_RIGHT | vc, shown);
+        let lead = if when.is_none() {
+            self.dot(x + w - ww - 14, cy + 11, 8, color);
+            26
+        } else {
+            12
+        };
         let title = p.fight_title();
+        let right = x + w;
         self.text_rect(
             x,
             cy + 6,
-            w - ww - 26,
+            w - ww - lead,
             18,
             F_LABEL,
             DIM,
             DT_LEFT | vc,
             &title,
         );
-        let (head, sub) = match (p.on, p.you()) {
+        let (head, sub) = match (p.on || p.saved.is_some(), p.you()) {
             (false, _) => (
                 "Sharing is off".to_string(),
                 "Turn it on above to compare boss damage with others here".to_string(),
@@ -164,16 +189,33 @@ impl Renderer {
                 self.text_rect(x, cy + 28, rw + 2, 36, F_BIG, TEXT, DT_LEFT | vc, &rank);
                 let sx = x + rw + 10;
                 let of = format!("of {} sharing", p.rows.len());
-                self.text_rect(sx, cy + 29, x + w - sx, 18, F_BODY, TEXT, DT_LEFT | vc, &of);
+                self.text_rect(sx, cy + 29, right - sx, 18, F_BODY, TEXT, DT_LEFT | vc, &of);
                 let gap = p
                     .gap_line()
                     .unwrap_or_else(|| "no one else here has sent damage yet".to_string());
-                self.text_rect(sx, cy + 47, x + w - sx, 16, F_TINY, DIM, DT_LEFT | vc, &gap);
+                self.text_rect(sx, cy + 47, right - sx, 16, F_TINY, DIM, DT_LEFT | vc, &gap);
                 return;
             }
         };
-        self.text_rect(x, cy + 28, w, 18, F_BODY, TEXT, DT_LEFT | vc, &head);
-        self.text_rect(x, cy + 47, w, 16, F_TINY, DIM, DT_LEFT | vc, &sub);
+        self.text_rect(x, cy + 28, right - x, 18, F_BODY, TEXT, DT_LEFT | vc, &head);
+        self.text_rect(x, cy + 47, right - x, 16, F_TINY, DIM, DT_LEFT | vc, &sub);
+    }
+
+    fn draw_party_pager(&self, v: &PartyView) {
+        let p = v.pane;
+        self.glyph_button(
+            PARTY_OLDER,
+            v.ctl_if(PartyHit::Older, p.page < p.pages),
+            GLYPH_PREV,
+        );
+        self.glyph_button(
+            PARTY_NEWER,
+            v.ctl_if(PartyHit::Newer, p.page > 0),
+            GLYPH_NEXT,
+        );
+        let (ix, iy, iw, ih) = PARTY_PAGE;
+        let label = p.page_label();
+        self.text_rect(ix, iy, iw, ih, F_TINY, DIM, DT_CENTER | DT_VCENTER, &label);
     }
 
     fn draw_party_board(&self, p: &PartyPane) {
@@ -181,7 +223,7 @@ impl Renderer {
         self.rround(cx, cy, cw, ch, 8, CARD);
         let (x, w) = (cx + 12, cw - 24);
         let vc = DT_VCENTER;
-        if !p.on {
+        if !p.on && p.saved.is_none() {
             self.text_rect(
                 x,
                 cy + 6,
@@ -210,13 +252,42 @@ impl Renderer {
         } else {
             format!("{n} sharing")
         };
-        self.text_rect(x, cy + 6, w, 18, F_TINY, DIM, DT_RIGHT | vc, &count);
+        let (dx, dw) = PARTY_DMG;
+        let (tx, tw) = PARTY_TAKEN;
+        let hw = self.unscale(self.text_w(F_LABEL, p.board_head()));
+        let lw = self.unscale(self.text_w(F_LABEL, "DEALT"));
+        let count_x = x + hw + 10;
+        let count_w = dx + dw - lw - 6 - count_x;
+        self.text_rect(
+            count_x,
+            cy + 6,
+            count_w,
+            18,
+            F_TINY,
+            DIM,
+            DT_LEFT | vc,
+            &count,
+        );
+        self.text_rect(dx, cy + 6, dw, 18, F_LABEL, DIM, DT_RIGHT | vc, "DEALT");
+        self.text_rect(
+            tx,
+            cy + 6,
+            tw,
+            18,
+            F_LABEL,
+            mix(DIM, DANGER, 0.5),
+            DT_RIGHT | vc,
+            "TAKEN",
+        );
         let board = p.board();
         let leader = p.rows[0].dmg.max(1);
         let full = board
             .iter()
-            .all(|(_, r)| self.text_w(F_BODY, &group_digits(r.dmg)) <= self.px(PARTY_DMG.1));
-        let stale = p.link != Link::Connected;
+            .all(|(_, r)| self.text_w(F_BODY, &group_digits(r.dmg)) <= self.px(dw));
+        let full_t = board
+            .iter()
+            .all(|(_, r)| self.text_w(F_BODY, &group_digits(r.taken)) <= self.px(tw));
+        let stale = p.link != Link::Connected && p.saved.is_none();
         let h = PARTY_ROW_H;
         for (slot, (i, r)) in board.into_iter().enumerate() {
             let y = PARTY_ROW_Y + slot as i32 * h;
@@ -243,8 +314,18 @@ impl Renderer {
             } else {
                 compact(r.dmg)
             };
-            let (dx, dw) = PARTY_DMG;
             self.text_rect(dx, y, dw, h, F_BODY, ink, DT_RIGHT | vc, &num);
+            let t = if full_t {
+                group_digits(r.taken)
+            } else {
+                compact(r.taken)
+            };
+            let tink = if stale && !r.you {
+                DIM
+            } else {
+                mix(TEXT, DANGER, 0.6)
+            };
+            self.text_rect(tx, y, tw, h, F_BODY, tink, DT_RIGHT | vc, &t);
         }
     }
 

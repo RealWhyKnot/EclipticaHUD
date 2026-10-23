@@ -1,4 +1,5 @@
 mod anim;
+mod archive;
 mod logwin;
 mod nav;
 mod party;
@@ -11,6 +12,7 @@ pub use settings::WINDOW_STEPS;
 
 use crate::discord::{self, Link, Presence};
 use crate::game::state::GameState;
+use crate::history::History;
 use crate::hud::render::{
     tip_ready, Env, Hit, Info, LogHit, PartyHit, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W,
     MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE, PARTY_H, PARTY_W,
@@ -18,8 +20,7 @@ use crate::hud::render::{
 use crate::hud::timeline::Filter;
 use crate::update::Badge;
 use crate::vr::VrOverlay;
-use crate::vrchat::log::{all_logs, log_dir, read_lines, LogWatch};
-use std::path::Path;
+use crate::vrchat::log::{log_dir, LogWatch};
 use std::time::Instant;
 use windows_sys::Win32::Foundation::HWND;
 
@@ -62,6 +63,7 @@ pub struct PartyWin {
 pub struct App {
     pub gs: GameState,
     pub watch: LogWatch,
+    archive: archive::Archive,
     pub renderer: Renderer,
     pub log: LogState,
     pub party_win: PartyWin,
@@ -76,6 +78,7 @@ pub struct App {
     pub sound_on: bool,
     pub topmost: bool,
     pub discord_on: bool,
+    pub usage_on: bool,
     pub party_on: bool,
     party: party::PartyState,
     presence: Option<Presence>,
@@ -95,9 +98,6 @@ pub struct App {
     token_alerts_seen: u64,
     last_target_since: u64,
     progress_shown: f32,
-    dps_boss: Option<String>,
-    taken_peak: u64,
-    taken_frac_shown: f32,
     taken_flash_at: Option<Instant>,
     last_taken_seq: u64,
     primed: bool,
@@ -131,27 +131,12 @@ fn play(wav: &'static [u8]) {
     }
 }
 
-fn backfill(gs: &mut GameState, dir: &Path) {
-    let logs = all_logs(dir);
-    let Some((_, old)) = logs.split_last() else {
-        return;
-    };
-    for path in old {
-        if read_lines(path, |line| {
-            gs.feed(line);
-        })
-        .is_ok()
-        {
-            gs.log_rotated();
-        }
-    }
-}
-
 impl App {
     pub fn new(dpi: u32) -> Self {
         App {
             gs: GameState::default(),
             watch: LogWatch::new(),
+            archive: archive::Archive::default(),
             renderer: Renderer::new(dpi, LOGICAL_W, LOGICAL_H),
             log: LogState {
                 hwnd: std::ptr::null_mut(),
@@ -198,6 +183,7 @@ impl App {
             sound_on: true,
             topmost: true,
             discord_on: false,
+            usage_on: false,
             party_on: false,
             party: party::PartyState::new(),
             presence: None,
@@ -217,9 +203,6 @@ impl App {
             token_alerts_seen: 0,
             last_target_since: 0,
             progress_shown: 0.0,
-            dps_boss: None,
-            taken_peak: 0,
-            taken_frac_shown: 0.0,
             taken_flash_at: None,
             last_taken_seq: 0,
             primed: false,
@@ -265,10 +248,13 @@ impl App {
         tag
     }
 
+    pub fn set_history(&mut self, db: Option<History>) {
+        self.archive.db = db;
+    }
+
     pub fn backfill_history(&mut self) {
-        if let Some(dir) = log_dir() {
-            backfill(&mut self.gs, &dir);
-        }
+        let dir = log_dir();
+        archive::backfill(&mut self.gs, dir.as_deref(), self.archive.db.as_mut());
     }
 
     pub fn env(&self) -> Env {
@@ -292,7 +278,7 @@ impl App {
         }
         match hit {
             Hit::Close | Hit::Log | Hit::Pin | Hit::Settings | Hit::Party => true,
-            Hit::Discord | Hit::Sound => self.settings_open,
+            Hit::Discord | Hit::Sound | Hit::Usage => self.settings_open,
             Hit::ScaleDown => self.settings_open && self.scale > MIN_SCALE + 0.001,
             Hit::ScaleUp => self.settings_open && self.scale < MAX_SCALE - 0.001,
             Hit::AlphaDown => self.settings_open && self.alpha > MIN_ALPHA,
@@ -350,6 +336,10 @@ impl App {
                 self.set_discord(!self.discord_on);
                 true
             }
+            Hit::Usage => {
+                self.set_usage(!self.usage_on, true);
+                true
+            }
             Hit::Settings => {
                 self.settings_open = !self.settings_open;
                 true
@@ -374,6 +364,18 @@ impl App {
             }
             Hit::Close | Hit::UpdateNow | Hit::UpdateSkip | Hit::Info(_) => false,
         }
+    }
+
+    pub fn set_usage(&mut self, on: bool, fresh: bool) {
+        if on {
+            if let Some(db) = self.archive.db.as_mut() {
+                if fresh || !db.usage_cursors().contains_key("") {
+                    db.usage_start();
+                }
+            }
+        }
+        self.usage_on = on;
+        crate::usage::ON.store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn set_discord(&mut self, on: bool) {

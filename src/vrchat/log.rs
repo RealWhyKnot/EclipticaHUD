@@ -56,6 +56,7 @@ pub fn read_lines(path: &Path, mut f: impl FnMut(&str)) -> std::io::Result<()> {
 pub struct LogWatch {
     dir: Option<PathBuf>,
     pub path: Option<PathBuf>,
+    pub pass: u64,
     file: Option<File>,
     offset: u64,
     carry: Vec<u8>,
@@ -93,6 +94,7 @@ impl LogWatch {
                 self.file = newest.as_deref().and_then(|p| open_shared(p).ok());
                 self.path = newest;
                 self.offset = 0;
+                self.pass += 1;
                 self.carry.clear();
                 if rotated {
                     return true;
@@ -108,6 +110,7 @@ impl LogWatch {
         };
         if len < self.offset {
             self.offset = 0;
+            self.pass += 1;
             self.carry.clear();
         }
         if len == self.offset || file.seek(SeekFrom::Start(self.offset)).is_err() {

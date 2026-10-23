@@ -158,6 +158,10 @@ pub(super) unsafe extern "system" fn wndproc(
                                 app.activate(hit);
                                 save_discord(app.discord_on);
                             }
+                            Hit::Usage => {
+                                app.activate(hit);
+                                save_usage(app.usage_on);
+                            }
                             Hit::Party => {
                                 app.activate(hit);
                                 sync_party(hwnd);

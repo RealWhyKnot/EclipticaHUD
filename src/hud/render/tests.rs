@@ -31,7 +31,6 @@ pub(super) fn frame() -> Frame {
         log_open: false,
         topmost: true,
         progress_shown: 0.5,
-        taken_frac_shown: 0.5,
         dps_shown: 0.0,
         fight_dps_shown: 0.0,
         taken_shown: 0.0,
@@ -41,6 +40,7 @@ pub(super) fn frame() -> Frame {
         sound_on: true,
         discord: Link::Off,
         discord_on: false,
+        usage_on: false,
         party_open: false,
         view_run: Some(0),
         view_group: Some(0),
@@ -50,7 +50,7 @@ pub(super) fn frame() -> Frame {
     }
 }
 
-fn pix(r: &Renderer, x: i32, y: i32) -> u32 {
+pub(super) fn pix(r: &Renderer, x: i32, y: i32) -> u32 {
     let s = unsafe { std::slice::from_raw_parts(r.bits, (r.width * r.height * 4) as usize) };
     let i = ((y * r.width + x) * 4) as usize;
     rgb(s[i + 2] as u32, s[i + 1] as u32, s[i] as u32)
@@ -161,6 +161,7 @@ fn settings_hit(h: Hit) -> bool {
             | Hit::WindowUp
             | Hit::Sound
             | Hit::Discord
+            | Hit::Usage
     )
 }
 
@@ -168,7 +169,7 @@ fn settings_hit(h: Hit) -> bool {
 fn hit_test_regions() {
     let r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
     let closed = |x, y| r.hit_test_where(x, y, |h| !settings_hit(h));
-    let (tx, ty, tw, th) = MUTE_HIT;
+    let (tx, ty, tw, th) = Hit::Mute.rect();
     assert!(tx >= 14 && tx + tw <= LOGICAL_W - 14);
     assert!(ty >= 82 && ty + th <= 178);
     assert_eq!(closed(tx, ty), Some(Hit::Mute));
@@ -191,20 +192,22 @@ fn hit_test_regions() {
     assert_eq!(SETTINGS_HIT.0 + SETTINGS_HIT.2, PIN_HIT.0);
     assert_eq!(PARTY_HIT.0 + PARTY_HIT.2, SETTINGS_HIT.0);
     for (rect, hit) in [
-        (SCALE_DOWN_HIT, Hit::ScaleDown),
-        (SCALE_UP_HIT, Hit::ScaleUp),
-        (ALPHA_DOWN_HIT, Hit::AlphaDown),
-        (ALPHA_UP_HIT, Hit::AlphaUp),
-        (WINDOW_DOWN_HIT, Hit::WindowDown),
-        (WINDOW_UP_HIT, Hit::WindowUp),
-        (SOUND_HIT, Hit::Sound),
-        (DISCORD_HIT, Hit::Discord),
+        (Hit::ScaleDown.rect(), Hit::ScaleDown),
+        (Hit::ScaleUp.rect(), Hit::ScaleUp),
+        (Hit::AlphaDown.rect(), Hit::AlphaDown),
+        (Hit::AlphaUp.rect(), Hit::AlphaUp),
+        (Hit::WindowDown.rect(), Hit::WindowDown),
+        (Hit::WindowUp.rect(), Hit::WindowUp),
+        (Hit::Sound.rect(), Hit::Sound),
+        (Hit::Discord.rect(), Hit::Discord),
+        (Hit::Usage.rect(), Hit::Usage),
     ] {
         let (x, y, w, h) = rect;
         assert!(settings_hit(hit));
         assert_eq!(r.hit_test(x, y), Some(hit));
         assert_eq!(r.hit_test(x + w - 1, y + h - 1), Some(hit));
         let (cx, cy, cw, ch) = SETTINGS_CARD;
+        let cy = cy + BODY_DY;
         assert!(x >= cx + 12 && x + w <= cx + cw - 12, "{hit:?}");
         assert!(y >= cy + 12 && y + h <= cy + ch - 12, "{hit:?}");
     }
@@ -222,10 +225,10 @@ fn hit_test_regions() {
     assert_ne!(r.hit_test(dx + dw, dy), dot);
     assert!(dx + dw <= UPDATE_HIT.0);
     for (rect, hit) in [
-        (RUN_PREV_HIT, Hit::RunPrev),
-        (RUN_NEXT_HIT, Hit::RunNext),
-        (FIGHT_PREV_HIT, Hit::FightPrev),
-        (FIGHT_NEXT_HIT, Hit::FightNext),
+        (Hit::RunPrev.rect(), Hit::RunPrev),
+        (Hit::RunNext.rect(), Hit::RunNext),
+        (Hit::FightPrev.rect(), Hit::FightPrev),
+        (Hit::FightNext.rect(), Hit::FightNext),
     ] {
         let (x, y, w, h) = rect;
         assert_eq!(r.hit_test_where(x, y, |h| h == hit), Some(hit));
@@ -303,33 +306,34 @@ fn draw_smoke_bars() {
     let f = frame();
     r.draw_main(&gs, &f);
     assert_eq!(pix(&r, 0, 0), BG);
-    assert_eq!(pix(&r, 100, 49), GOOD);
-    assert_eq!(pix(&r, 300, 49), CARD);
-    assert_eq!(pix(&r, 100, 250), mix(CARD, BG, 0.55));
-    assert_eq!(pix(&r, 20, 90), CARD);
+    assert_eq!(pix(&r, 100, 55), GOOD);
+    assert_eq!(pix(&r, 300, 55), CARD);
+    assert_eq!(pix(&r, 100, 256), mix(CARD, BG, 0.55));
+    assert_eq!(pix(&r, 20, 96), CARD);
     assert_eq!(pix(&r, 336, 11), CTRL_HOVER);
-    assert_eq!(pix(&r, 20, 340), CARD);
-    assert_eq!(pix(&r, 100, 437), DANGER);
-    assert_eq!(pix(&r, 300, 437), BG);
-    assert_eq!(pix(&r, 30, 489), DANGER);
-    assert_eq!(pix(&r, 20, 160), CARD);
+    assert_eq!(pix(&r, 20, 346), CARD);
+    let tk = TAKEN_CARD_Y + GRAPH_DY + BODY_DY;
+    let hot = mix(CARD, DANGER, 0.7);
+    assert_eq!(pix(&r, 196, tk + 199), hot);
+    assert_eq!(pix(&r, 254, tk + 221), BG);
+    assert_eq!(pix(&r, 254, tk + 243), CARD);
+    assert_eq!(pix(&r, 20, 166), CARD);
     let warned = Frame {
         warn_t: 0.5,
         ..frame()
     };
     r.draw_main(&gs, &warned);
-    assert_eq!(pix(&r, 20, 160), mix(BG, AMBER, 0.18));
+    assert_eq!(pix(&r, 20, 166), mix(BG, AMBER, 0.18));
     assert!(text_w(&r, F_BIG, "COLLECT YOUR TOKENS") <= LOGICAL_W - 28);
     r.draw_main(&gs, &frame());
-    assert_eq!(pix(&r, 20, 160), CARD);
+    assert_eq!(pix(&r, 20, 166), CARD);
 
     for env in [Env::NotInWorld, Env::NoVrchat] {
         let away = Frame { env, ..frame() };
         r.draw_main(&gs, &away);
-        assert_eq!(pix(&r, 100, 49), BG);
-        assert_eq!(pix(&r, 100, 234), CARD);
-        assert_eq!(pix(&r, 100, 437), CARD);
-        assert_eq!(pix(&r, 30, 489), CARD);
+        assert_eq!(pix(&r, 100, 55), BG);
+        assert_eq!(pix(&r, 100, 240), CARD);
+        assert_eq!(pix(&r, 196, tk + 199), CARD);
     }
     gs.feed(&format!("{P}ECLIPTICA - now in lobby"));
     let ended = Frame {
@@ -340,10 +344,9 @@ fn draw_smoke_bars() {
         ..frame()
     };
     r.draw_main(&gs, &ended);
-    assert_eq!(pix(&r, 100, 49), BG);
-    assert_eq!(pix(&r, 100, 234), CARD);
-    assert_eq!(pix(&r, 100, 437), CARD);
-    assert_eq!(pix(&r, 30, 489), CARD);
+    assert_eq!(pix(&r, 100, 55), BG);
+    assert_eq!(pix(&r, 100, 240), CARD);
+    assert_eq!(pix(&r, 196, tk + 199), CARD);
     r.draw_main(&gs, &frame());
     let settings = Frame {
         settings_open: true,
@@ -352,12 +355,12 @@ fn draw_smoke_bars() {
         ..frame()
     };
     r.draw_main(&gs, &settings);
-    assert_eq!(pix(&r, 120, 100), CARD_HI);
-    assert_eq!(pix(&r, 120, 150), CARD_HI);
-    assert_eq!(pix(&r, 120, 250), CARD_HI);
+    assert_eq!(pix(&r, 120, 106), CARD_HI);
+    assert_eq!(pix(&r, 120, 156), CARD_HI);
+    assert_eq!(pix(&r, 120, 242), CARD_HI);
     r.draw_main(&gs, &frame());
-    assert_eq!(pix(&r, 20, 100), CARD);
-    assert_eq!(pix(&r, 120, 232), CARD);
+    assert_eq!(pix(&r, 20, 106), CARD);
+    assert_eq!(pix(&r, 120, 238), CARD);
 
     let mut pre = GameState::default();
     pre.feed(&format!(
@@ -368,8 +371,9 @@ fn draw_smoke_bars() {
         "{P}damage has been taken: 12, from source: machinegunShooter1"
     ));
     r.draw_main(&pre, &frame());
-    assert_eq!(pix(&r, 100, 234), CARD);
-    assert_eq!(pix(&r, 100, 437), CARD);
+    assert_eq!(pix(&r, 100, 240), CARD);
+    assert_eq!(pix(&r, 196, tk + 199), hot);
+    assert_eq!(pix(&r, 254, tk + 221), CARD);
     pre.feed(&format!(
         "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.5"
     ));
@@ -378,7 +382,7 @@ fn draw_smoke_bars() {
     pre.feed(&format!("{P}NON-STRIKE DMG: 0"));
     pre.feed(&format!("{P}ECLIPTICA - now in intermission"));
     r.draw_main(&pre, &frame());
-    assert_eq!(pix(&r, 100, 234), CARD);
+    assert_eq!(pix(&r, 100, 240), CARD);
 
     let flashing = Frame {
         taken_flash_t: 0.0,
@@ -387,7 +391,7 @@ fn draw_smoke_bars() {
         ..frame()
     };
     r.draw_main(&gs, &flashing);
-    assert_ne!(pix(&r, 20, 340), CARD);
+    assert_ne!(pix(&r, 20, 346), CARD);
     assert_eq!(pix(&r, 304, 11), CTRL_HOVER);
 
     let group = Frame {
@@ -396,8 +400,8 @@ fn draw_smoke_bars() {
         ..frame()
     };
     r.draw_main(&gs, &group);
-    assert_eq!(pix(&r, 300, 437), CARD);
-    assert_eq!(pix(&r, 30, 459), DANGER);
+    assert_eq!(pix(&r, 196, tk + 199), hot);
+    assert_eq!(pix(&r, 254, tk + 243), CARD);
 
     let tipped = Frame {
         tip: Some(Hit::Log),
@@ -446,19 +450,20 @@ fn draw_smoke_bars() {
         );
     }
     assert!(Hit::Log.clickable());
-    assert_eq!(r.hit_test(150, 30), Some(Hit::Info(Info::Status)));
+    assert_eq!(r.hit_test(150, 36), Some(Hit::Info(Info::Status)));
     assert_eq!(r.hit_test(200, 30), Some(Hit::Party));
     assert_eq!(r.hit_test(200, 40), Some(Hit::Info(Info::Status)));
     assert_eq!(r.hit_test(200, 295), Some(Hit::Info(Info::LastKill)));
     assert_eq!(r.hit_test(200, 250), Some(Hit::Info(Info::DealtGraph)));
     assert_eq!(r.hit_test(30, 200), Some(Hit::Info(Info::Dealt(0))));
-    assert_eq!(r.hit_test(300, 410), Some(Hit::Info(Info::TakenMore(2))));
+    assert_eq!(r.hit_test(300, 470), Some(Hit::Info(Info::TakenMore(2))));
     let ctx = TipCtx {
         live: true,
         topmost: false,
         sound_on: false,
         log_open: true,
         discord_on: false,
+        usage_on: false,
         party_open: false,
     };
     assert!(Hit::Pin.tip(ctx).contains("keep it on top"));
@@ -471,6 +476,15 @@ fn draw_smoke_bars() {
         .ends_with("click to stop"));
     assert!(Hit::Discord.tip(ctx).chars().count() <= 70);
     assert!(Hit::Settings.tip(ctx).chars().count() <= 70);
+    assert!(Hit::Usage.tip(ctx).starts_with("Send boss"));
+    let on = TipCtx {
+        usage_on: true,
+        ..ctx
+    };
+    assert!(Hit::Usage.tip(on).ends_with("click to stop"));
+    for c in [ctx, on] {
+        assert!(Hit::Usage.tip(c).chars().count() <= 70);
+    }
     assert!(Hit::ScaleUp.tip(ctx).contains("bigger"));
     assert!(Hit::Mute.tip(ctx).starts_with("Unmute"));
     assert_eq!(Hit::Sound.tip(ctx), Hit::Mute.tip(ctx));
@@ -625,6 +639,7 @@ fn damage_graph_draws_fight_columns() {
     let (gx, gy, gw, gh) = GRAPH_RECT;
     assert_eq!(gx + gw, LOGICAL_W - M - 12);
     assert!(gy - 2 > 228 && gy + gh + 2 < 288);
+    let gy = gy + BODY_DY;
     let well = mix(CARD, BG, 0.55);
     let x0 = gx + 28 * gw / 30;
     assert_eq!(pix(&r, x0 + 2, gy), AMBER);
@@ -633,7 +648,7 @@ fn damage_graph_draws_fight_columns() {
     assert_eq!(pix(&r, gx + 2, gy + gh - 1), well);
     assert_eq!(pix(&r, gx - 3, gy + 10), CARD);
     assert_eq!(pix(&r, gx + gw + 2, gy + 10), CARD);
-    assert_eq!(pix(&r, 20, 100), CARD);
+    assert_eq!(pix(&r, 20, 106), CARD);
 }
 
 #[test]
@@ -645,12 +660,13 @@ fn damage_graph_fits_any_fight_length() {
     let mut r = Renderer::new(192, LOGICAL_W, LOGICAL_H);
     r.draw_main(&gs, &Frame { now, ..frame() });
     let (gx, gy, gw, gh) = GRAPH_RECT;
+    let gy = gy + BODY_DY;
     for y in [gy - 4, gy + gh + 3] {
         for x in (gx..gx + gw).step_by(7) {
             assert_eq!(pix(&r, x * 2, y * 2), CARD, "{x},{y}");
         }
     }
-    assert_eq!(pix(&r, 20 * 2, 300 * 2), CARD);
+    assert_eq!(pix(&r, 20 * 2, 306 * 2), CARD);
 }
 
 #[test]
@@ -699,11 +715,11 @@ fn update_prompt_covers_panel_below_status() {
         },
     );
     let (top, h) = PROMPT_AREA;
-    assert!(top > 51 && top < 61);
+    assert!(top > 57 && top < 67);
     assert!(top + h < LOGICAL_H - 26);
     assert_eq!(pix(&r, 20, 100), BG);
     assert_eq!(pix(&r, 20, 500), BG);
-    assert_eq!(pix(&r, 100, 49), GOOD);
+    assert_eq!(pix(&r, 100, 55), GOOD);
     let (nx, ny, nw, nh) = UPDATE_NOW_HIT;
     let (lx, ly, lw, lh) = UPDATE_LATER_HIT;
     assert_eq!(pix(&r, nx + 6, ny + nh / 2), mix(BG, GOOD, 0.25));
@@ -794,6 +810,7 @@ pub(super) fn party_row(
     you: bool,
     live: bool,
     dmg: u64,
+    taken: u64,
     share: Option<u32>,
     dps: u64,
 ) -> PartyRow {
@@ -802,6 +819,7 @@ pub(super) fn party_row(
         you,
         live,
         dmg,
+        taken,
         share,
         dps,
     }
@@ -833,6 +851,7 @@ pub(super) fn pane(rows: Vec<PartyRow>) -> PartyPane {
             down: false,
         }),
         rows,
+        ..PartyPane::default()
     }
 }
 
@@ -843,20 +862,22 @@ pub(super) fn sample_party() -> Vec<PartyRow> {
             false,
             true,
             1_284_310,
+            4_120,
             Some(41),
             18_420,
         ),
-        party_row("Me (Alt)", true, true, 902_115, Some(29), 12_007),
-        party_row("Mira", false, true, 610_002, Some(19), 9_880),
+        party_row("Me (Alt)", true, true, 902_115, 18_904, Some(29), 12_007),
+        party_row("Mira", false, true, 610_002, 655, Some(19), 9_880),
         party_row(
             "\u{6c17}\u{307e}\u{3050}\u{308c} Sora",
             false,
             false,
             230_440,
+            31_377,
             Some(7),
             3_120,
         ),
-        party_row("Tobias_77", false, true, 118_900, Some(4), 2_500),
+        party_row("Tobias_77", false, true, 118_900, 0, Some(4), 2_500),
     ]
 }
 
@@ -874,7 +895,7 @@ pub(super) fn stress_party(long_names: bool, long_numbers: bool) -> Vec<PartyRow
             } else {
                 (5_000 - i as u64, 120)
             };
-            party_row(&name, i == 3, i % 5 != 4, dmg, Some(100), dps)
+            party_row(&name, i == 3, i % 5 != 4, dmg, dmg, Some(100), dps)
         })
         .collect()
 }
@@ -1102,12 +1123,13 @@ fn write_tooltip_wrap_images() {
         sound_on: false,
         log_open: false,
         discord_on: false,
+        usage_on: false,
         party_open: false,
     };
     let cases = [
         (96, Hit::Party),
         (192, Hit::Party),
-        (96, Hit::Info(Info::TakenBar)),
+        (96, Hit::Info(Info::TopAttacks)),
         (96, Hit::Info(Info::RunRow)),
     ];
     let gs = GameState::default();

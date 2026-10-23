@@ -73,6 +73,7 @@ pub struct BossFight {
     pub kill: Option<(u64, u64)>,
     pub lost: bool,
     pub series: Vec<u32>,
+    pub taken_series: Vec<u32>,
 }
 
 const SERIES_CAP: usize = 7200;
@@ -83,15 +84,23 @@ impl BossFight {
     }
 
     pub fn add_dmg(&mut self, ts: u64, n: u64) {
-        let i = ts.saturating_sub(self.start_ts) as usize;
-        if i >= SERIES_CAP {
-            return;
-        }
-        if self.series.len() <= i {
-            self.series.resize(i + 1, 0);
-        }
-        self.series[i] = self.series[i].saturating_add(n.min(u32::MAX as u64) as u32);
+        add_at(&mut self.series, ts.saturating_sub(self.start_ts), n);
     }
+
+    pub fn add_taken(&mut self, ts: u64, n: u64) {
+        add_at(&mut self.taken_series, ts.saturating_sub(self.start_ts), n);
+    }
+}
+
+fn add_at(series: &mut Vec<u32>, i: u64, n: u64) {
+    let i = i as usize;
+    if i >= SERIES_CAP {
+        return;
+    }
+    if series.len() <= i {
+        series.resize(i + 1, 0);
+    }
+    series[i] = series[i].saturating_add(n.min(u32::MAX as u64) as u32);
 }
 
 #[derive(Debug, Clone, Default)]
@@ -241,13 +250,21 @@ impl FightGroup<'_> {
     }
 
     pub fn graph(&self, now: u64, max_cols: usize) -> Graph {
+        self.graph_of(now, max_cols, |f| &f.series)
+    }
+
+    pub fn taken_graph(&self, now: u64, max_cols: usize) -> Graph {
+        self.graph_of(now, max_cols, |f| &f.taken_series)
+    }
+
+    fn graph_of(&self, now: u64, max_cols: usize, pick: fn(&BossFight) -> &[u32]) -> Graph {
         let secs = (self.duration(now) as usize + 1).min(SERIES_CAP);
         let per = secs.div_ceil(max_cols.max(1));
         let n = secs.div_ceil(per);
         let col = |t: u64| (t.saturating_sub(self.start) as usize / per).min(n - 1);
         let mut sum = vec![0u64; n];
         for f in self.fights {
-            for (i, &d) in f.series.iter().enumerate() {
+            for (i, &d) in pick(f).iter().enumerate() {
                 sum[col(f.start_ts + i as u64)] += d as u64;
             }
         }
@@ -331,6 +348,7 @@ mod tests {
             kill: None,
             lost: false,
             series: Vec::new(),
+            taken_series: Vec::new(),
         };
         let run = Run {
             fights: vec![
@@ -360,6 +378,7 @@ mod tests {
             kill: None,
             lost: false,
             series: Vec::new(),
+            taken_series: Vec::new(),
         }
     }
 
@@ -409,6 +428,23 @@ mod tests {
         assert!(g.cols.len() <= 77);
         assert!(g.cols.iter().all(|&c| c == 100));
         assert!(g.marks.is_empty());
+    }
+
+    #[test]
+    fn taken_graph_reads_its_own_series() {
+        let mut f = timed("Yuki", 0, Some(3));
+        f.add_dmg(0, 500);
+        f.add_taken(1, 40);
+        f.add_taken(1, 2);
+        f.add_taken(3, 9);
+        assert_eq!(f.taken_series, vec![0, 42, 0, 9]);
+        let run = Run {
+            fights: vec![f],
+            ..Default::default()
+        };
+        let g = run.group(0).unwrap();
+        assert_eq!(g.taken_graph(3, 77).cols, vec![0, 42, 0, 9]);
+        assert_eq!(g.graph(3, 77).cols, vec![500, 0, 0, 0]);
     }
 
     #[test]

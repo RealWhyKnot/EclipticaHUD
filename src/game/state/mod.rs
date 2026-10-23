@@ -100,8 +100,8 @@ impl GameState {
         self.me.is_some() && self.target == self.me
     }
 
-    pub fn relay_dmg(&self) -> Option<u64> {
-        (self.fight_start != 0).then_some(self.fight_dmg)
+    pub fn relay_dmg(&self) -> Option<(u64, u64)> {
+        (self.fight_start != 0).then_some((self.fight_dmg, self.fight_taken))
     }
 
     pub fn in_ecliptica(&self) -> bool {
@@ -160,19 +160,34 @@ impl GameState {
     }
 
     pub fn feed(&mut self, raw: &str) -> Option<u64> {
+        self.feed_kept(raw).map(|(ts, _)| ts)
+    }
+
+    pub fn feed_kept(&mut self, raw: &str) -> Option<(u64, Option<usize>)> {
         let line = split_line(raw)?;
-        self.last_ts = self.last_ts.max(line.ts);
-        let ev = parse_msg(line.msg);
+        let kept = self.feed_msg(line.ts, line.msg);
+        Some((line.ts, kept.then(|| raw.len() - line.msg.len())))
+    }
+
+    pub fn feed_msg(&mut self, ts: u64, msg: &str) -> bool {
+        self.last_ts = self.last_ts.max(ts);
+        let ev = parse_msg(msg);
+        let mut kept = ev.is_some();
         if !matches!(ev, Some(Event::PlayerDead))
             && self.alive_since.is_none()
-            && self.last_death.is_some_and(|d| line.ts > d)
+            && self.last_death.is_some_and(|d| ts > d)
         {
-            self.alive_since = Some(line.ts);
+            self.alive_since = Some(ts);
+            kept = true;
         }
         if let Some(ev) = ev {
-            self.apply(line.ts, ev);
+            self.apply(ts, ev);
         }
-        Some(line.ts)
+        kept
+    }
+
+    pub fn seen(&mut self, ts: u64) {
+        self.last_ts = self.last_ts.max(ts);
     }
 
     pub fn last_kill_total(&self) -> Option<(String, u64, u64)> {

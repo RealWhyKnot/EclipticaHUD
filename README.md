@@ -22,9 +22,19 @@ EclipticaHUD reads your VRChat log and shows the boss, who it's targeting, your 
 
 ## Shared damage
 
-Open the party window (the button next to settings) and turn sharing on to see boss damage from everyone in your instance who shares too. It's off by default.
+Open the party window (the button next to settings) and turn sharing on to see the boss damage dealt and taken by everyone in your instance who also shares. It's off by default.
 
-During a boss fight the HUD sends your damage total to `ecliptica.whyknot.dev` at most once a second, along with hashes of the instance and your VRChat user ID. Names come from each player's own log, and the server keeps nothing on disk.
+During a boss fight the HUD sends your damage dealt and taken to `ecliptica.whyknot.dev` at most once a second, along with hashes of the instance and your VRChat user ID. Names come from each player's own log, and the server keeps nothing on disk.
+
+## Sharing fight data
+
+Settings has a Share fight data switch, off by default. With it on, the HUD sends the Ecliptica lines it reads from your log to `ecliptica.whyknot.dev` about every ten minutes, to help us improve the HUD. That includes boss and enemy names, stages, the damage you dealt and took and what hit you, the player count, the world ID, the date and the HUD version. In other worlds it only notes that you left Ecliptica. Saved shared fights go too, as numbers with no names attached.
+
+Player names and user IDs are taken out on your PC before anything is sent, along with the instance that follows the world ID. Clock times are dropped too; each line only keeps how long after the previous one it came. Nothing from before you turned the switch on is sent. The server keeps the uploads as files.
+
+## History
+
+The HUD copies the Ecliptica lines it uses from your VRChat log into `%APPDATA%\EclipticaHUD\history.db`, so your runs stay in the panel after VRChat deletes its old logs. Shared fights get saved there when they end, and the arrows at the bottom of the party window page back through them. The file stays on your PC.
 
 ## Install
 

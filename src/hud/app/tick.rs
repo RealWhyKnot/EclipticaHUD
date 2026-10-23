@@ -1,7 +1,6 @@
 use super::anim::*;
 use super::{play, App, BLIP, TOKENS, YOU};
 use crate::discord;
-use crate::game::run::base_name;
 use crate::hud::render::{Env, Frame, LogHit};
 use crate::update;
 use std::time::Instant;
@@ -47,7 +46,6 @@ impl App {
             log_ok: env != Env::NoVrchat && self.watch.path.is_some(),
             log_open: self.log.visible,
             progress_shown: self.progress_shown,
-            taken_frac_shown: self.taken_frac_shown,
             dps_shown: self.dps_shown,
             fight_dps_shown: self.fight_dps_shown,
             taken_shown: self.taken_shown,
@@ -58,6 +56,7 @@ impl App {
             topmost: self.topmost,
             discord: self.link,
             discord_on: self.discord_on,
+            usage_on: self.usage_on,
             party_open: self.party_win.visible,
             view_run: self.shown_run().map(|(i, _)| i),
             view_group: self.viewed_group().map(|(i, _)| i),
@@ -140,11 +139,17 @@ impl App {
     fn pump_log(&mut self) -> bool {
         let gs = &mut self.gs;
         let mut newest = 0u64;
+        let mut kept = Vec::new();
         let rotated = self.watch.poll(|line| {
-            if let Some(ts) = gs.feed(line) {
+            if let Some((ts, keep)) = gs.feed_kept(line) {
                 newest = newest.max(ts);
+                if let Some(at) = keep {
+                    kept.push((ts, line[at..].to_string()));
+                }
             }
         });
+        let w = &self.watch;
+        self.archive.flush(w.path.as_deref(), w.pass, &kept, newest);
         if rotated {
             self.gs.log_rotated();
         }
@@ -196,11 +201,6 @@ impl App {
                 self.taken_flash_at = Some(Instant::now());
             }
         }
-        let dps_base = self.gs.boss.as_deref().map(base_name);
-        if dps_base != self.dps_boss.as_deref() {
-            self.dps_boss = dps_base.map(str::to_string);
-            self.taken_peak = 0;
-        }
     }
 
     fn poll_services(&mut self, now: u64) -> bool {
@@ -227,16 +227,9 @@ impl App {
     fn animate(&mut self, env: Env, now: u64) -> bool {
         let rolling = self.gs.rolling_dps(now);
         let rolling_taken = self.gs.rolling_taken(now);
-        self.taken_peak = self.taken_peak.max(rolling_taken);
-        let taken_target = if self.gs.boss.is_some() && self.taken_peak > 0 {
-            rolling_taken as f32 / self.taken_peak as f32
-        } else {
-            0.0
-        };
         let tip_pending = self.hover.is_some() && self.tip().is_none();
         let mut anim = approach(&mut self.progress_shown, self.gs.progress, 0.002);
         anim |= tip_pending;
-        anim |= approach(&mut self.taken_frac_shown, taken_target, 0.002);
         anim |= approach(&mut self.dps_shown, rolling as f32, 0.5);
         anim |= approach(
             &mut self.fight_dps_shown,

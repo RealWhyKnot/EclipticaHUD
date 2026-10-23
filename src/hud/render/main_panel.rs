@@ -48,6 +48,14 @@ fn or_dash(f: &Frame, s: String) -> String {
     }
 }
 
+fn or_none(n: u64) -> String {
+    if n > 0 {
+        n.to_string()
+    } else {
+        DASH.to_string()
+    }
+}
+
 fn avg_hit(taken: u64, hits: u32) -> String {
     if hits > 0 {
         (taken / hits as u64).to_string()
@@ -63,81 +71,80 @@ struct LiveTaken {
     v1: String,
     l2: &'static str,
     v2: String,
+    hits: String,
     big: String,
     avg: String,
-    rate: String,
     attacks: Vec<Tally>,
-    total: u64,
     empty: &'static str,
 }
 
 impl LiveTaken {
     fn of(f: &Frame, gs: &GameState) -> Self {
         let now = f.now;
-        let win = format!("TAKEN {}s", f.window);
+        let win = format!("DTPS {}s", f.window);
         let s = &gs.stage_stats;
         match live_kind(f, gs) {
             Live::Pre => LiveTaken {
                 l0: win,
                 v0: or_dash(f, fmt_anim(f.taken_shown)),
-                l1: "STAGE TAKEN",
-                v1: group_digits(s.taken),
-                l2: "HITS",
-                v2: s.hits.to_string(),
+                l1: "STAGE DTPS",
+                v1: group_digits(gs.stage_taken_rate(now)),
+                l2: "STAGE TAKEN",
+                v2: group_digits(s.taken),
+                hits: s.hits.to_string(),
                 big: s.max_hit.to_string(),
                 avg: avg_hit(s.taken, s.hits),
-                rate: group_digits(gs.stage_taken_rate(now)),
                 attacks: s.attacks.clone(),
-                total: s.taken,
                 empty: "nothing has hit you this stage",
             },
             Live::Inter(r) => {
                 let active = r.active_secs(now).max(1);
                 LiveTaken {
-                    l0: "RUN TAKEN".to_string(),
-                    v0: group_digits(r.taken()),
-                    l1: "HITS",
-                    v1: r.hit_count().to_string(),
+                    l0: "RUN DTPS".to_string(),
+                    v0: group_digits(r.taken() / active),
+                    l1: "RUN TAKEN",
+                    v1: group_digits(r.taken()),
                     l2: "DEATHS",
                     v2: r.deaths.to_string(),
+                    hits: r.hit_count().to_string(),
                     big: r.max_hit().to_string(),
                     avg: avg_hit(r.taken(), r.hit_count()),
-                    rate: group_digits(r.taken() / active),
                     attacks: r.attacks(),
-                    total: r.taken(),
                     empty: "nothing has hit you this run",
                 }
             }
             Live::Fight => LiveTaken {
                 l0: win,
                 v0: fmt_anim(f.taken_shown),
-                l1: "FIGHT TAKEN",
-                v1: group_digits(gs.fight_taken),
-                l2: "HITS",
-                v2: gs.fight_hits.to_string(),
+                l1: "FIGHT DTPS",
+                v1: fmt_anim(f.taken_rate_shown),
+                l2: "FIGHT TAKEN",
+                v2: group_digits(gs.fight_taken),
+                hits: gs.fight_hits.to_string(),
                 big: gs.fight_max_hit.to_string(),
                 avg: avg_hit(gs.fight_taken, gs.fight_hits),
-                rate: fmt_anim(f.taken_rate_shown),
                 attacks: gs.fight_attacks.clone(),
-                total: gs.fight_taken,
                 empty: "nothing has hit you this fight",
             },
             Live::Idle => LiveTaken {
                 l0: win,
                 v0: or_dash(f, fmt_anim(f.taken_shown)),
-                l1: "FIGHT TAKEN",
+                l1: "FIGHT DTPS",
                 v1: DASH.to_string(),
-                l2: "HITS",
+                l2: "FIGHT TAKEN",
                 v2: DASH.to_string(),
+                hits: DASH.to_string(),
                 big: DASH.to_string(),
                 avg: DASH.to_string(),
-                rate: DASH.to_string(),
                 attacks: Vec::new(),
-                total: 0,
                 empty: "attack breakdown starts with the next boss",
             },
         }
     }
+}
+
+fn fmt_deaths(n: u32) -> String {
+    format!("{n} death{}", if n == 1 { "" } else { "s" })
 }
 
 impl Renderer {
@@ -148,14 +155,18 @@ impl Renderer {
             .and_then(|(r, g)| gs.runs[r].group(g));
         self.fill(0, 0, LOGICAL_W, LOGICAL_H, BG);
         self.draw_titlebar(f);
-        self.draw_status(f, gs);
-        self.draw_run_pager(f, gs);
-        self.draw_boss_card(f, gs, hist.as_ref());
-        self.draw_dealt_card(f, gs, hist.as_ref());
-        if f.settings_open {
-            self.draw_settings(f);
-        }
-        self.shifted(GRAPH_DY, || self.draw_taken_card(f, gs, hist.as_ref()));
+        self.shifted(BODY_DY, || {
+            self.draw_status(f, gs);
+            self.draw_run_pager(f, gs);
+            self.draw_boss_card(f, gs, hist.as_ref());
+            self.draw_dealt_card(f, gs, hist.as_ref());
+            if f.settings_open {
+                self.draw_settings(f);
+            }
+        });
+        self.shifted(GRAPH_DY + BODY_DY, || {
+            self.draw_taken_card(f, gs, hist.as_ref())
+        });
         self.draw_footer(f);
         if f.prompt {
             self.draw_update_prompt(f);
@@ -170,6 +181,7 @@ impl Renderer {
                 sound_on: f.sound_on,
                 log_open: f.log_open,
                 discord_on: f.discord_on,
+                usage_on: f.usage_on,
                 party_open: f.party_open,
             };
             self.tooltip(hit.rect(), hit.tip(ctx), LOGICAL_W, LOGICAL_H);
@@ -539,9 +551,14 @@ impl Renderer {
         );
     }
 
-    fn draw_dealt_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
-        let now = f.now;
-        self.rround(M, 186, W, 92 + GRAPH_DY, 8, CARD);
+    fn card_graph(
+        &self,
+        f: &Frame,
+        gs: &GameState,
+        hist: Option<&FightGroup>,
+        gy: i32,
+        taken: bool,
+    ) {
         let live_group = match live_kind(f, gs) {
             Live::Fight | Live::Inter(_) => gs
                 .live_run()
@@ -549,9 +566,12 @@ impl Renderer {
             _ => None,
         };
         let shown = if f.live() { live_group.as_ref() } else { hist };
-        let (gx, gy, gw, gh) = GRAPH_RECT;
+        let (gx, _, gw, gh) = GRAPH_RECT;
         match shown {
-            Some(g) => self.graph(gx, gy, gw, gh, &g.graph(now, GRAPH_COLS)),
+            Some(g) if taken => {
+                self.graph(gx, gy, gw, gh, &g.taken_graph(f.now, GRAPH_COLS), DANGER)
+            }
+            Some(g) => self.graph(gx, gy, gw, gh, &g.graph(f.now, GRAPH_COLS), AMBER),
             None if f.live() => {
                 self.graph_well(gx, gy, gw, gh);
                 self.text_rect(
@@ -567,6 +587,12 @@ impl Renderer {
             }
             None => {}
         }
+    }
+
+    fn draw_dealt_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
+        let now = f.now;
+        self.rround(M, 186, W, 92 + GRAPH_DY, 8, CARD);
+        self.card_graph(f, gs, hist, GRAPH_RECT.1, false);
         let line_y = 288;
         if f.live() {
             let kind = live_kind(f, gs);
@@ -709,6 +735,7 @@ impl Renderer {
         for (label, hit, rect, on) in [
             ("AGGRO SOUND", Hit::Sound, SOUND_HIT, f.sound_on),
             ("DISCORD STATUS", Hit::Discord, DISCORD_HIT, f.discord_on),
+            ("SHARE FIGHT DATA", Hit::Usage, USAGE_HIT, f.usage_on),
         ] {
             self.setting_label(rect.1, label);
             let word = if on { "On" } else { "Off" };
@@ -732,40 +759,27 @@ impl Renderer {
     fn draw_taken_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
         let now = f.now;
         let card = mix(CARD, DANGER, 0.22 * (1.0 - ease_out_cubic(f.taken_flash_t)));
-        self.rround(M, 286, W, 276, 8, card);
-        self.text(M + 12, 292, W - 24, F_LABEL, DIM, DT_LEFT, "DAMAGE TAKEN");
-        let live_deaths = gs.live_run().map_or(0, |r| r.deaths);
-        if f.live() && !f.empty() && live_deaths > 0 {
-            self.text(
-                M + 12,
-                292,
-                W - 24,
-                F_TINY,
-                DIM,
-                DT_RIGHT,
-                &fmt_run_deaths(live_deaths),
-            );
-        }
+        let top = TAKEN_CARD_Y;
+        self.rround(M, top, W, TAKEN_CARD_H, 8, card);
+        let stat_y = top + 6;
+        let line_y = top + 102;
+        let small_y = top + 128;
+        let list_y = top + 170;
         if f.live() {
             let t = LiveTaken::of(f, gs);
-            self.stat(312, 0, &t.l0, &t.v0, DANGER);
-            self.stat(308, 1, t.l1, &t.v1, DANGER);
-            self.stat(308, 2, t.l2, &t.v2, DANGER);
-            self.small_stat(350, 0, "BIGGEST HIT", &t.big);
-            self.small_stat(356, 1, "AVG HIT", &t.avg);
-            self.small_stat(350, 2, "TAKEN/S", &t.rate);
-            if matches!(live_kind(f, gs), Live::Fight) {
-                self.bar_on(M + 12, 396, W - 24, 3, f.taken_frac_shown, DANGER, BG);
-            }
+            self.stat(stat_y, 0, &t.l0, &t.v0, DANGER);
+            self.stat(stat_y, 1, t.l1, &t.v1, DANGER);
+            self.stat(stat_y, 2, t.l2, &t.v2, DANGER);
+            self.card_graph(f, gs, hist, top + 54, true);
             match gs.taken.back().filter(|_| !f.empty()) {
                 Some(hit) => {
                     let (who, attack) = describe_source(&hit.source);
                     let line = format!("last hit  {}   {who}   {attack}", hit.amount);
                     self.text_rect(
                         M + 12,
-                        402,
+                        line_y,
                         W - 80,
-                        20,
+                        18,
                         F_BODY,
                         TEXT,
                         DT_LEFT | DT_VCENTER,
@@ -773,70 +787,54 @@ impl Renderer {
                     );
                     self.text_rect(
                         M + 12,
-                        402,
+                        line_y,
                         W - 24,
-                        20,
+                        18,
                         F_TINY,
                         DIM,
                         DT_RIGHT | DT_VCENTER,
                         &fmt_ago(now, hit.ts),
                     );
                 }
-                None => self.text(M + 12, 404, W - 24, F_BODY, DIM, DT_LEFT, "no hits yet"),
+                None => self.text(M + 12, line_y, W - 24, F_BODY, DIM, DT_LEFT, "no hits yet"),
             }
-            if t.attacks.is_empty() {
-                self.text_rect(
-                    M + 12,
-                    430,
-                    W - 24,
-                    120,
-                    F_BODY,
-                    DIM,
-                    DT_CENTER | DT_VCENTER,
-                    t.empty,
-                );
-            } else {
-                self.breakdown(430, &t.attacks, t.total);
-            }
+            self.small_stat(small_y, 0, "HITS", &t.hits);
+            self.small_stat(small_y, 1, "BIGGEST HIT", &t.big);
+            self.small_stat(small_y, 2, "AVG HIT", &t.avg);
+            let deaths = gs.live_run().map_or(0, |r| r.deaths);
+            let note = (!f.empty() && deaths > 0).then(|| fmt_run_deaths(deaths));
+            self.breakdown(list_y, &t.attacks, note.as_deref(), t.empty);
         } else if let Some(h) = hist {
-            let dur = h.duration(now);
-            self.stat(312, 0, "TAKEN", &group_digits(h.taken), DANGER);
-            self.stat(312, 1, "HITS", &h.hits.to_string(), DANGER);
-            self.stat(
-                312,
-                2,
-                "TAKEN/S",
-                &(h.taken / dur.max(1)).to_string(),
-                DANGER,
-            );
-            let avg = if h.hits > 0 {
-                h.taken / h.hits as u64
-            } else {
-                0
-            };
-            let big = if h.taken > 0 {
-                avg.to_string()
-            } else {
-                DASH.to_string()
-            };
-            self.small_stat(356, 0, "AVG HIT", &big);
+            let dur = h.duration(now).max(1);
+            self.stat(stat_y, 0, "TAKEN", &group_digits(h.taken), DANGER);
+            self.stat(stat_y, 1, "DTPS", &(h.taken / dur).to_string(), DANGER);
+            self.stat(stat_y, 2, "HITS", &h.hits.to_string(), DANGER);
+            self.card_graph(f, gs, hist, top + 54, true);
+            let deaths: u32 = h.fights.iter().map(|f| f.deaths).sum();
+            self.deaths_line(line_y, deaths);
+            let big = h.fights.iter().map(|f| f.max_hit).max().unwrap_or(0);
+            self.small_stat(small_y, 0, "BIGGEST HIT", &or_none(big));
+            self.small_stat(small_y, 1, "AVG HIT", &avg_hit(h.taken, h.hits));
             let attacks = merge_tallies(h.fights.iter().map(|f| f.attacks.as_slice()));
-            self.breakdown(400, &attacks, h.taken);
+            self.breakdown(list_y, &attacks, None, "nothing hit you");
         } else if let Some(r) = f.view_run.map(|i| &gs.runs[i]) {
-            let active = r.active_secs(r.end_ts.unwrap_or(now));
-            self.stat(312, 0, "TAKEN", &group_digits(r.taken()), DANGER);
-            self.stat(312, 1, "HITS", &r.hit_count().to_string(), DANGER);
-            self.stat(
-                312,
-                2,
-                "TAKEN/S",
-                &(r.taken() / active.max(1)).to_string(),
-                DANGER,
-            );
-            self.small_stat(356, 0, "AVG HIT", &avg_hit(r.taken(), r.hit_count()));
-            self.breakdown(400, &r.attacks(), r.taken());
+            let active = r.active_secs(r.end_ts.unwrap_or(now)).max(1);
+            self.stat(stat_y, 0, "TAKEN", &group_digits(r.taken()), DANGER);
+            self.stat(stat_y, 1, "DTPS", &(r.taken() / active).to_string(), DANGER);
+            self.stat(stat_y, 2, "HITS", &r.hit_count().to_string(), DANGER);
+            self.deaths_line(line_y, r.deaths);
+            self.small_stat(small_y, 0, "BIGGEST HIT", &or_none(r.max_hit()));
+            self.small_stat(small_y, 1, "AVG HIT", &avg_hit(r.taken(), r.hit_count()));
+            self.breakdown(list_y, &r.attacks(), None, "nothing hit you");
         } else {
-            self.text(M + 12, 324, W - 24, F_BODY, DIM, DT_LEFT, "no data");
+            self.text(M + 12, stat_y + 16, W - 24, F_BODY, DIM, DT_LEFT, "no data");
+        }
+    }
+
+    fn deaths_line(&self, y: i32, deaths: u32) {
+        match deaths {
+            0 => self.text(M + 12, y, W - 24, F_BODY, DIM, DT_LEFT, "no deaths"),
+            n => self.text(M + 12, y, W - 24, F_BODY, TEXT, DT_LEFT, &fmt_deaths(n)),
         }
     }
 

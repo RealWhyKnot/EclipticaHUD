@@ -133,6 +133,7 @@ impl GameState {
             kill: None,
             lost: false,
             series: Vec::new(),
+            taken_series: Vec::new(),
         });
     }
 
@@ -191,6 +192,7 @@ impl GameState {
                 f.hits += 1;
                 f.max_hit = f.max_hit.max(amount);
                 tally(&mut f.attacks, &who, &attack, amount);
+                f.add_taken(ts, amount);
             }
         }
         self.taken.push_back(TakenEntry {

@@ -1,5 +1,9 @@
 use super::proto::tests::{LOC, USR};
-use super::proto::{claim_hash, member_hash, room_hash, Msg};
+use super::proto::{claim_hash, member_hash, room_hash, Msg, Totals, MAX_DMG};
+
+fn dealt(n: u64) -> Totals {
+    Totals { dealt: n, taken: 0 }
+}
 use super::*;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -33,32 +37,62 @@ fn backoff_doubles_to_sixty_with_bounded_jitter() {
 }
 
 #[test]
+fn throttle_sends_a_change_in_taken_alone() {
+    let mut t = Throttle::default();
+    let a = Totals {
+        dealt: 50,
+        taken: 4,
+    };
+    let b = Totals {
+        dealt: 50,
+        taken: 9,
+    };
+    assert_eq!(t.due(0, Some(a)), Some(Msg::Dmg(a)));
+    assert_eq!(t.wait_ms(500, Some(b)), 500);
+    assert_eq!(t.due(1000, Some(b)), Some(Msg::Dmg(b)));
+    let big = Totals {
+        dealt: 1,
+        taken: u64::MAX,
+    };
+    assert_eq!(
+        t.due(2000, Some(big)),
+        Some(Msg::Dmg(Totals {
+            dealt: 1,
+            taken: MAX_DMG
+        }))
+    );
+}
+
+#[test]
 fn throttle_sends_changes_at_most_once_a_second() {
     let mut t = Throttle::default();
     assert_eq!(t.due(0, None), None);
     assert_eq!(t.wait_ms(0, None), 1000);
-    assert_eq!(t.wait_ms(0, Some(5)), 1);
-    assert_eq!(t.due(0, Some(5)), Some(Msg::Dmg(5)));
-    assert_eq!(t.due(10, Some(5)), None);
-    assert_eq!(t.wait_ms(10, Some(5)), 1000);
-    assert_eq!(t.due(300, Some(9)), None);
-    assert_eq!(t.wait_ms(300, Some(9)), 700);
-    assert_eq!(t.due(999, Some(12)), None);
-    assert_eq!(t.due(1000, Some(12)), Some(Msg::Dmg(12)));
-    assert_eq!(t.due(5000, Some(12)), None);
+    assert_eq!(t.wait_ms(0, Some(dealt(5))), 1);
+    assert_eq!(t.due(0, Some(dealt(5))), Some(Msg::Dmg(dealt(5))));
+    assert_eq!(t.due(10, Some(dealt(5))), None);
+    assert_eq!(t.wait_ms(10, Some(dealt(5))), 1000);
+    assert_eq!(t.due(300, Some(dealt(9))), None);
+    assert_eq!(t.wait_ms(300, Some(dealt(9))), 700);
+    assert_eq!(t.due(999, Some(dealt(12))), None);
+    assert_eq!(t.due(1000, Some(dealt(12))), Some(Msg::Dmg(dealt(12))));
+    assert_eq!(t.due(5000, Some(dealt(12))), None);
     assert_eq!(t.wait_ms(5000, None), 1);
     assert_eq!(t.due(5000, None), Some(Msg::End));
     assert_eq!(t.due(7000, None), None);
     assert_eq!(t.wait_ms(7000, None), 1000);
-    assert_eq!(t.due(7000, Some(0)), Some(Msg::Dmg(0)));
+    assert_eq!(t.due(7000, Some(dealt(0))), Some(Msg::Dmg(dealt(0))));
     assert_eq!(t.due(7500, None), None);
     assert_eq!(t.wait_ms(7500, None), 500);
     assert_eq!(t.due(8000, None), Some(Msg::End));
-    assert_eq!(t.due(9000, Some(u64::MAX)), Some(Msg::Dmg(MAX_DMG)));
-    assert_eq!(t.due(20000, Some(MAX_DMG + 7)), None);
+    assert_eq!(
+        t.due(9000, Some(dealt(u64::MAX))),
+        Some(Msg::Dmg(dealt(MAX_DMG)))
+    );
+    assert_eq!(t.due(20000, Some(dealt(MAX_DMG + 7))), None);
     let mut sent = 0;
     for ms in (0..10_000).step_by(16) {
-        if t.due(30_000 + ms, Some(ms)).is_some() {
+        if t.due(30_000 + ms, Some(dealt(ms))).is_some() {
             sent += 1;
         }
     }
@@ -191,21 +225,21 @@ fn hub_queue_is_bounded_and_session_scoped() {
             Snap {
                 at: Instant::now(),
                 room: [0; 16],
-                entries: vec![([1; 8], i)],
+                entries: vec![([1; 8], dealt(i))],
             },
         );
     }
     let p = hub.poll();
     assert_eq!(p.link, Link::Connected);
     assert_eq!(p.snaps.len(), SNAP_QUEUE);
-    assert_eq!(p.snaps.last().unwrap().entries[0].1, 99);
+    assert_eq!(p.snaps.last().unwrap().entries[0].1, dealt(99));
     assert!(hub.poll().snaps.is_empty());
     hub.push_snap(
         id,
         Snap {
             at: Instant::now(),
             room: [0; 16],
-            entries: vec![([1; 8], 7)],
+            entries: vec![([1; 8], dealt(7))],
         },
     );
     let next = hub.set_link(Link::Retrying);
@@ -444,23 +478,42 @@ fn client_joins_sends_damage_and_reads_snaps() {
     assert_eq!(join[25..], claim_hash(&[0x42; 32], LOC));
     assert_eq!(w.claim(), claim_hash(&[0x42; 32], LOC));
     wait_for(|| (hub.poll().link == Link::Connected).then_some(()));
-    hub.sync(Some(w.clone()), Some(100));
+    hub.sync(Some(w.clone()), Some(dealt(100)));
     let (op, d) = p.data().unwrap();
     let first = Instant::now();
-    assert_eq!((op, Msg::decode(&d)), (0x2, Some(Msg::Dmg(100))));
-    hub.sync(Some(w.clone()), Some(200));
-    hub.sync(Some(w.clone()), Some(300));
+    assert_eq!((op, Msg::decode(&d)), (0x2, Some(Msg::Dmg(dealt(100)))));
+    hub.sync(Some(w.clone()), Some(dealt(200)));
+    hub.sync(Some(w.clone()), Some(dealt(300)));
     let (_, d) = p.data().unwrap();
-    assert_eq!(Msg::decode(&d), Some(Msg::Dmg(300)));
+    assert_eq!(Msg::decode(&d), Some(Msg::Dmg(dealt(300))));
     assert!(first.elapsed() >= Duration::from_millis(850));
     let other = [7u8; 8];
     p.send(
         0x2,
-        &Msg::Snap(vec![(member_hash(LOC, USR), 300), (other, 4242)]).encode(),
+        &Msg::Snap(vec![
+            (member_hash(LOC, USR), dealt(300)),
+            (
+                other,
+                Totals {
+                    dealt: 4242,
+                    taken: 77,
+                },
+            ),
+        ])
+        .encode(),
     );
     let snaps = wait_for(|| Some(hub.poll().snaps).filter(|s| !s.is_empty()));
     assert_eq!(snaps[0].room, room_hash(LOC));
-    assert_eq!(snaps[0].entries[1], (other, 4242));
+    assert_eq!(
+        snaps[0].entries[1],
+        (
+            other,
+            Totals {
+                dealt: 4242,
+                taken: 77
+            }
+        )
+    );
     p.send(0x2, &[0x03]);
     let snaps = wait_for(|| Some(hub.poll().snaps).filter(|s| !s.is_empty()));
     assert!(snaps[0].entries.is_empty());
@@ -483,7 +536,7 @@ fn client_reconnects_when_location_changes() {
     let (_, join) = a.data().unwrap();
     assert_eq!(&join[1..17], &room_hash(LOC));
     let other = "wrld_00000000-0000-0000-0000-000000000000:99999~region(eu)";
-    hub.sync(Some(test_want(port, other)), Some(5));
+    hub.sync(Some(test_want(port, other)), Some(dealt(5)));
     assert_eq!(a.expect_close(), 1000);
     let mut b = Peer::accept(&l);
     let (_, join) = b.data().unwrap();
@@ -496,7 +549,7 @@ fn client_reconnects_when_location_changes() {
         })
     );
     let (_, d) = b.data().unwrap();
-    assert_eq!(Msg::decode(&d), Some(Msg::Dmg(5)));
+    assert_eq!(Msg::decode(&d), Some(Msg::Dmg(dealt(5))));
     let closed = b.close_later();
     assert!(hub.shutdown(Duration::from_secs(5)));
     assert_eq!(closed.join().unwrap(), 1001);
@@ -647,7 +700,7 @@ fn unreachable_server_retries_without_blocking_sync() {
         l.local_addr().unwrap().port()
     };
     let t = Instant::now();
-    hub.sync(Some(test_want(port, LOC)), Some(1));
+    hub.sync(Some(test_want(port, LOC)), Some(dealt(1)));
     assert!(t.elapsed() < Duration::from_millis(50));
     wait_for(|| (hub.poll().link == Link::Retrying).then_some(()));
     let t = Instant::now();
@@ -665,10 +718,11 @@ fn live_want(url: &str, location: &str, usr: &str) -> Want {
 }
 
 fn live_seen(hub: &Hub, member: proto::Member, dmg: u64) -> bool {
-    hub.poll()
-        .snaps
-        .iter()
-        .any(|s| s.entries.contains(&(member, dmg)))
+    hub.poll().snaps.iter().any(|s| {
+        s.entries
+            .iter()
+            .any(|(m, t)| *m == member && t.dealt == dmg)
+    })
 }
 
 #[test]
@@ -696,9 +750,9 @@ fn live_relay_round_trip() {
     for hub in [a1, a2, b1] {
         wait_for(|| (hub.poll().link == Link::Connected).then_some(()));
     }
-    a1.sync(Some(w1.clone()), Some(1111));
-    a2.sync(Some(w2.clone()), Some(2222));
-    b1.sync(Some(w3.clone()), Some(3333));
+    a1.sync(Some(w1.clone()), Some(dealt(1111)));
+    a2.sync(Some(w2.clone()), Some(dealt(2222)));
+    b1.sync(Some(w3.clone()), Some(dealt(3333)));
     wait_for(|| live_seen(a1, w2.member(), 2222).then_some(()));
     wait_for(|| live_seen(a2, w1.member(), 1111).then_some(()));
     std::thread::sleep(Duration::from_millis(1500));
@@ -720,7 +774,7 @@ fn live_relay_round_trip() {
             assert_eq!(hub.poll().link, Link::Connected, "dropped after {tick} s");
         }
     }
-    a1.sync(Some(w1.clone()), Some(5555));
+    a1.sync(Some(w1.clone()), Some(dealt(5555)));
     wait_for(|| live_seen(a2, w1.member(), 5555).then_some(()));
     for hub in [a1, a2, b1, b2] {
         assert!(hub.shutdown(Duration::from_secs(5)));
@@ -741,7 +795,7 @@ fn live_relay_rejoins_after_restart() {
     for hub in [a1, a2] {
         wait_for(|| (hub.poll().link == Link::Connected).then_some(()));
     }
-    a1.sync(Some(w1.clone()), Some(10));
+    a1.sync(Some(w1.clone()), Some(dealt(10)));
     wait_for(|| live_seen(a2, w1.member(), 10).then_some(()));
     println!("ready for restart");
     let end = Instant::now() + Duration::from_secs(120);
@@ -758,7 +812,7 @@ fn live_relay_rejoins_after_restart() {
         }
     }
     println!("rejoined after {} ms", lost.elapsed().as_millis());
-    a1.sync(Some(w1.clone()), Some(20));
+    a1.sync(Some(w1.clone()), Some(dealt(20)));
     let end = Instant::now() + Duration::from_secs(10);
     while !live_seen(a2, w1.member(), 20) {
         assert!(Instant::now() < end, "no snap after rejoin");

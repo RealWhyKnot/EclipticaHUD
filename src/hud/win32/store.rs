@@ -54,6 +54,14 @@ pub(super) fn save_discord(on: bool) {
     save_flag("discord.txt", on);
 }
 
+pub(super) fn load_usage() -> bool {
+    load_text("usage.txt").is_some_and(|t| discord_on_from(&t))
+}
+
+pub(super) fn save_usage(on: bool) {
+    save_flag("usage.txt", on);
+}
+
 pub(super) fn party_on_from(text: &str) -> bool {
     text.trim() == "1"
 }

@@ -3,17 +3,19 @@ use super::App;
 use crate::game::names::boss_name;
 use crate::game::run::base_name;
 use crate::game::state::GameState;
+use crate::history::{History, PartyRecord, SavedRow};
 use crate::hud::render::{
     ease_out_cubic, tip_ready, Env, PartyFight, PartyHit, PartyPane, PartyView,
 };
-use crate::relay::party::Party;
-use crate::relay::proto::{member_hash, room_hash, Member, Room};
+use crate::relay::party::{Party, PartyRow};
+use crate::relay::proto::{member_hash, room_hash, Member, Room, Totals};
 use crate::relay::{self, Link, Poll, Relay, Want};
 use std::time::Instant;
 
 pub(super) struct PartyState {
     table: Party,
     pane: PartyPane,
+    live: PartyPane,
     epoch: Instant,
     session: u64,
     room: Option<String>,
@@ -21,7 +23,11 @@ pub(super) struct PartyState {
     own_usr: Option<String>,
     own: Option<Member>,
     fight: u64,
+    progress: f32,
     roster_seq: Option<u64>,
+    saved: Option<PartyRecord>,
+    page: usize,
+    pages: Option<usize>,
     pub(super) relay: &'static dyn Relay,
 }
 
@@ -30,6 +36,7 @@ impl PartyState {
         PartyState {
             table: Party::default(),
             pane: PartyPane::default(),
+            live: PartyPane::default(),
             epoch: Instant::now(),
             session: 0,
             room: None,
@@ -37,7 +44,11 @@ impl PartyState {
             own_usr: None,
             own: None,
             fight: 0,
+            progress: 0.0,
             roster_seq: None,
+            saved: None,
+            page: 0,
+            pages: None,
             relay: &relay::HUB,
         }
     }
@@ -49,6 +60,88 @@ impl PartyState {
 
     fn ms(&self, at: Instant) -> u64 {
         at.saturating_duration_since(self.epoch).as_millis() as u64
+    }
+
+    fn record(&self) -> Option<PartyRecord> {
+        let pane = &self.live;
+        let f = pane.fight.as_ref()?;
+        let shared = pane.rows.iter().any(|r| !r.you);
+        if self.fight == 0 || !shared {
+            return None;
+        }
+        Some(PartyRecord {
+            at: self.fight,
+            boss: f.name.clone(),
+            progress: self.progress,
+            secs: f.secs,
+            down: f.down,
+            here: pane.here,
+            rows: pane
+                .rows
+                .iter()
+                .map(|r| SavedRow {
+                    name: r.name.clone(),
+                    you: r.you,
+                    dealt: r.dmg,
+                    taken: r.taken,
+                })
+                .collect(),
+        })
+    }
+
+    fn save(&mut self, db: Option<&mut History>) {
+        let Some(db) = db else {
+            return;
+        };
+        let Some(rec) = self.record().filter(|r| self.saved.as_ref() != Some(r)) else {
+            return;
+        };
+        db.save_party(&rec);
+        self.saved = Some(rec);
+        self.pages = None;
+    }
+
+    fn saved_pane(&mut self, db: Option<&History>, live: PartyPane) -> PartyPane {
+        let Some(db) = db else {
+            self.page = 0;
+            return live;
+        };
+        let pages = *self.pages.get_or_insert_with(|| db.party_count(self.fight));
+        self.page = self.page.min(pages);
+        let rec = match self.page {
+            0 => None,
+            n => db.party_page(self.fight, n - 1),
+        };
+        let Some(rec) = rec else {
+            self.page = 0;
+            return PartyPane { pages, ..live };
+        };
+        PartyPane {
+            here: rec.here,
+            fight: Some(PartyFight {
+                name: rec.boss,
+                secs: rec.secs,
+                live: false,
+                down: rec.down,
+            }),
+            rows: rec
+                .rows
+                .into_iter()
+                .map(|r| PartyRow {
+                    name: r.name,
+                    you: r.you,
+                    live: true,
+                    dmg: r.dealt,
+                    taken: r.taken,
+                    share: None,
+                    dps: 0,
+                })
+                .collect(),
+            saved: Some(rec.at),
+            page: self.page,
+            pages,
+            ..live
+        }
     }
 }
 
@@ -71,7 +164,7 @@ impl App {
             self.gs.location.as_deref(),
             self.gs.me_usr.as_deref(),
         );
-        let dmg = want.as_ref().and(self.gs.relay_dmg());
+        let dmg = want.as_ref().and(self.gs.relay_dmg()).map(Totals::from);
         let relay = self.party.relay;
         relay.sync(want.clone(), dmg);
         let poll = relay.poll();
@@ -90,6 +183,10 @@ impl App {
         let now = p.ms(at);
         let room = gs.location.as_deref().filter(|l| l.starts_with("wrld_"));
         let moved = room != p.room.as_deref();
+        let new_fight = gs.fight_start != p.fight && gs.fight_start != 0;
+        if moved || new_fight {
+            p.save(self.archive.db.as_mut());
+        }
         if moved {
             p.table.reset_room();
             p.room = room.map(str::to_string);
@@ -105,8 +202,13 @@ impl App {
         if gs.fight_start != p.fight {
             if gs.fight_start != 0 {
                 p.table.clear();
+                p.page = 0;
             }
             p.fight = gs.fight_start;
+            p.pages = None;
+        }
+        if gs.boss.is_some() {
+            p.progress = gs.progress;
         }
         if p.roster_seq != Some(gs.roster_seq) {
             p.roster_seq = Some(gs.roster_seq);
@@ -137,7 +239,7 @@ impl App {
             }
         }
         if let Some(own) = p.own.filter(|_| self.party_on) {
-            p.table.set_own(now, own, gs.relay_dmg());
+            p.table.set_own(now, own, gs.relay_dmg().map(Totals::from));
         }
         let mut rows = if self.party_on {
             p.table.view(now)
@@ -148,14 +250,21 @@ impl App {
         for row in rows.iter_mut().filter(|r| r.you) {
             row.name = me.to_string();
         }
-        let pane = PartyPane {
+        let live = PartyPane {
             on: self.party_on,
             ready: want.is_some(),
             link,
             here: gs.roster.len(),
             fight: party_fight(gs, clock),
             rows,
+            ..PartyPane::default()
         };
+        let over = live.fight.as_ref().is_some_and(|f| !f.live);
+        p.live = live.clone();
+        if over {
+            p.save(self.archive.db.as_mut());
+        }
+        let pane = p.saved_pane(self.archive.db.as_ref(), live);
         let changed = pane != p.pane;
         p.pane = pane;
         changed
@@ -185,7 +294,9 @@ impl App {
     }
 
     pub fn party_hit(&self, x: i32, y: i32) -> Option<PartyHit> {
-        self.party_win.renderer.party_hit_test(x, y, false)
+        self.party_win
+            .renderer
+            .party_hit_test(x, y, false, self.party.pane.pages > 0)
     }
 
     pub fn party_set_hover(&mut self, over: Option<PartyHit>) -> bool {
@@ -213,6 +324,19 @@ impl App {
                 self.set_party(!self.party_on);
                 self.poll_party();
                 true
+            }
+            PartyHit::Older | PartyHit::Newer => {
+                let p = &mut self.party;
+                let pages = p.pane.pages;
+                p.page = match hit {
+                    PartyHit::Older => (p.page + 1).min(pages),
+                    _ => p.page.saturating_sub(1),
+                };
+                let live = p.live.clone();
+                let pane = p.saved_pane(self.archive.db.as_ref(), live);
+                let changed = pane != p.pane;
+                p.pane = pane;
+                changed
             }
             PartyHit::Status | PartyHit::Rank | PartyHit::Board => false,
         }
