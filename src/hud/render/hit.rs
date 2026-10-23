@@ -129,9 +129,13 @@ impl Info {
             }
             (Info::Dealt(0), true) => "Damage per second over the stat window, or across the run",
             (Info::Dealt(0), false) => "All damage you dealt in this fight, across phases",
-            (Info::Dealt(1), true) => "Your DPS this fight or stage; between bosses, all run damage",
+            (Info::Dealt(1), true) => {
+                "Your DPS this fight or stage; between bosses, all run damage"
+            }
             (Info::Dealt(1), false) => "Your fight damage divided by the fight time",
-            (Info::Dealt(2), true) => "Your damage this fight or stage; between bosses, kills out of fights",
+            (Info::Dealt(2), true) => {
+                "Your damage this fight or stage; between bosses, kills out of fights"
+            }
             (Info::Dealt(2), false) => "How long the fight lasted",
             (Info::Dealt(_), _) => "",
             (Info::DealtGraph, _) => {
@@ -168,9 +172,13 @@ impl Info {
             }
             (Info::TopAttacks, false) => "The attacks that hurt most and how often each hit",
             (Info::Vr, _) => "SteamVR overlay: green when on, grey without SteamVR, red on errors",
-            (Info::LogDot, _) => "VRChat log: green while it's being read, amber while waiting for it",
+            (Info::LogDot, _) => {
+                "VRChat log: green while it's being read, amber while waiting for it"
+            }
             (Info::Target, _) => "Who the boss is after, and for how long",
-            (Info::Discord, _) => "Discord status: green showing, amber waiting, red refused, grey off",
+            (Info::Discord, _) => {
+                "Discord status: green showing, amber waiting, red refused, grey off"
+            }
             (Info::Version, _) => "Running version; a new release shows here when available",
         }
     }

@@ -13,10 +13,13 @@ pub const ROSTER_CAP: usize = 128;
 
 impl GameState {
     pub fn apply(&mut self, ts: u64, ev: Event) {
+        if matches!(ev, Event::WorldLine(_)) {
+            return;
+        }
         self.changed = true;
         self.seq += 1;
         match ev {
-            Event::BossFight { name } => self.boss_fight(ts, name),
+            Event::BossFight { name, .. } => self.boss_fight(ts, name),
             Event::BossDead { name } => self.boss_dead(ts, name),
             Event::StrikeTotal(n) => {
                 if let Some(k) = self.pending_kill.as_mut() {
@@ -50,7 +53,7 @@ impl GameState {
                 self.world = Some(name);
             }
             Event::TokenSpawn { rune, chance } => self.pending_tokens.push((rune, chance)),
-            Event::SessionSave => {
+            Event::SessionSave(_) => {
                 if self.mode == Mode::Stage
                     && !self.level_tokens.is_empty()
                     && !self.stage_boss_seen
@@ -80,6 +83,7 @@ impl GameState {
             Event::EnemyRetire(slot) => self.enemy_retire(ts, slot),
             Event::EnemyName(name) => self.enemy_name(name),
             Event::PlayerDead => self.player_dead(ts),
+            Event::WorldLine(_) => {}
         }
     }
 
@@ -239,6 +243,7 @@ impl GameState {
             self.stage_boss_seen = false;
             self.pool_known = std::mem::take(&mut self.pool_reset_seen);
             self.stage_stats = StageStats {
+                name: name.clone(),
                 start_ts: ts,
                 ..Default::default()
             };
@@ -275,6 +280,7 @@ impl GameState {
         self.last_death = Some(ts);
         self.alive_since = None;
         if new {
+            self.deaths_total += 1;
             if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
                 r.deaths += 1;
             }

@@ -60,6 +60,7 @@ pub struct GameState {
     clear_ts: Option<u64>,
     last_clear: Option<u64>,
     pub token_alerts: u64,
+    pub deaths_total: u64,
     pub location: Option<String>,
     pub world: Option<String>,
     pub window: u64,

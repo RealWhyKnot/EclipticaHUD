@@ -27,6 +27,7 @@ features = [
     "Win32_System_Pipes",
     "Win32_Networking_WinHttp",
     "Win32_Security_Cryptography",
+    "Win32_System_Time",
 ]
 
 [profile.release]

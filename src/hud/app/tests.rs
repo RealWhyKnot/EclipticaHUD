@@ -1319,6 +1319,84 @@ fn archived_logs_replay_after_vrchat_deletes_them() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+fn kept_of(text: &str, old: bool) -> Vec<(u64, String)> {
+    let mut gs = GameState::default();
+    let mut kept = Vec::new();
+    for line in text.lines() {
+        if let Some((ts, Some(at))) = gs.feed_kept(line) {
+            let msg = &line[at..];
+            let world = matches!(
+                crate::game::event::parse_msg(msg),
+                Some(crate::game::event::Event::WorldLine(_))
+            );
+            if !(old && world) {
+                kept.push((ts, msg.to_string()));
+            }
+        }
+    }
+    kept
+}
+
+#[test]
+fn archives_from_older_builds_line_up_after_an_upgrade() {
+    let dir = temp_logs("upgrade");
+    let world = |t: &str, m: &str| format!("2026.01.01 10:00:{t} Debug      -  {m}\n");
+    let mut text = String::new();
+    for (i, line) in DEATHS.lines().enumerate() {
+        text.push_str(line);
+        text.push('\n');
+        if i == 1 {
+            text.push_str(&world("01", "ECLIPTICA - some new message"));
+        }
+        if i == 4 {
+            text.push_str(&world("08", "Removed player Bob"));
+        }
+    }
+    let closed = "output_log_2026-01-01_00-00-00.txt";
+    let live = "output_log_2026-01-02_00-00-00.txt";
+    std::fs::write(dir.join(closed), &text).unwrap();
+    std::fs::write(dir.join(live), &text).unwrap();
+    let old = kept_of(&text, true);
+    assert_eq!(kept_of(&text, false).len(), old.len() + 2);
+    let mut db = crate::history::History::in_memory().unwrap();
+    for name in [closed, live] {
+        db.archive(name, 0, &old, old.last().unwrap().0);
+    }
+    db.forget_skew();
+    let mut app = App::new(96);
+    app.set_history(Some(db));
+    archive::backfill(&mut app.gs, Some(&dir), app.archive.db.as_mut());
+    assert_eq!(
+        app.archive.db.as_ref().unwrap().stored(closed),
+        old.len() as u64
+    );
+    app.watch = LogWatch::for_dir(dir.clone());
+    app.tick();
+    let tail = format!(
+        "{}{}",
+        world("40", "Dealing 5 STRIKE damage"),
+        world("41", "ECLIPTICA - another new message")
+    );
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join(live))
+        .unwrap()
+        .write_all(tail.as_bytes())
+        .unwrap();
+    app.tick();
+    let db = app.archive.db.as_mut().unwrap();
+    let mut got = Vec::new();
+    db.replay(closed, |ts, m| got.push((ts, m.to_string())));
+    assert_eq!(got, old);
+    let mut got = Vec::new();
+    db.replay(live, |ts, m| got.push((ts, m.to_string())));
+    let mut want = old.clone();
+    want.extend(kept_of(&tail, false));
+    assert_eq!(got.len(), old.len() + 2);
+    assert_eq!(got, want);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn live_log_is_archived_as_it_is_read() {
     let dir = temp_logs("live_archive");

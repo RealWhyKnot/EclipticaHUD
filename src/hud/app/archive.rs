@@ -9,7 +9,7 @@ pub(super) struct Archive {
     pub(super) db: Option<History>,
     key: Option<(String, u64)>,
     next: u64,
-    have: u64,
+    have: Option<(u64, u64)>,
     end: u64,
 }
 
@@ -36,14 +36,22 @@ impl Archive {
             .as_ref()
             .is_none_or(|(k, p)| *k != name || *p != pass)
         {
-            self.have = db.stored(&name);
+            self.have = None;
             self.next = 0;
             self.end = 0;
             self.key = Some((name.clone(), pass));
         }
+        if kept.is_empty() && self.have.is_none() {
+            if end > self.end {
+                db.archive(&name, 0, &[], end);
+                self.end = end;
+            }
+            return;
+        }
+        let (have, skew) = *self.have.get_or_insert_with(|| db.resume(&name, kept));
         let n = kept.len() as u64;
-        let skip = self.have.saturating_sub(self.next).min(n);
-        let first = self.next + skip;
+        let skip = have.saturating_sub(self.next).min(n);
+        let first = (self.next + skip).saturating_sub(skew);
         self.next += n;
         if skip < n || end > self.end {
             db.archive(&name, first, &kept[skip as usize..], end);
@@ -82,8 +90,10 @@ pub(super) fn backfill(gs: &mut GameState, dir: Option<&Path>, mut db: Option<&m
                 });
                 if read.is_ok() {
                     if let Some(db) = db.as_deref_mut() {
-                        let have = (db.stored(&name) as usize).min(kept.len());
-                        db.archive(&name, have as u64, &kept[have..], end);
+                        let (have, skew) = db.resume(&name, &kept);
+                        let have = (have as usize).min(kept.len());
+                        let first = (have as u64).saturating_sub(skew);
+                        db.archive(&name, first, &kept[have..], end);
                     }
                     gs.log_rotated();
                 }

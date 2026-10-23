@@ -135,3 +135,151 @@ fn file_store_reopens() {
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn rows(items: &[(u64, &str)]) -> Vec<(u64, String)> {
+    items.iter().map(|&(t, m)| (t, m.to_string())).collect()
+}
+
+#[test]
+fn old_archives_line_up_with_new_kept_lines() {
+    let mut h = History::in_memory().unwrap();
+    h.archive("l", 0, &rows(&[(100, "a"), (101, "b"), (102, "c")]), 102);
+    h.forget_skew();
+    let kept = rows(&[
+        (100, "a"),
+        (100, "w1"),
+        (101, "b"),
+        (101, "w2"),
+        (102, "c"),
+        (102, "w3"),
+        (103, "d"),
+    ]);
+    assert_eq!(h.resume("l", &kept), (5, 2));
+    h.archive("l", 3, &kept[5..], 103);
+    assert_eq!(h.resume("l", &kept), (7, 2));
+    assert_eq!(
+        replayed(&h, "l").0,
+        rows(&[(100, "a"), (101, "b"), (102, "c"), (102, "w3"), (103, "d")])
+    );
+    h.archive("m", 0, &kept, 103);
+    assert_eq!(h.resume("m", &kept), (7, 0));
+    assert_eq!(h.resume("new", &kept), (0, 0));
+    h.archive("z", 0, &rows(&[(100, "q")]), 100);
+    h.forget_skew();
+    let moved = rows(&[(100, "x"), (100, "y"), (101, "z")]);
+    assert_eq!(h.resume("z", &moved), (2, 1));
+    assert_eq!(h.resume("m", &kept), (7, 0));
+}
+
+#[test]
+fn upgrading_keeps_upload_cursors_in_place() {
+    let dir = std::env::temp_dir().join(format!("ehud-v1-{}", std::process::id()));
+    let path = dir.join("history.db");
+    {
+        let mut h = History::open(&path).unwrap();
+        h.archive("a", 0, &lines(&["x", "y"]), 99);
+        h.archive("b", 0, &lines(&["x", "y", "z"]), 9);
+        h.archive("c", 0, &lines(&["x"]), 9);
+        h.save_party(&record(50, &[("a", true, 1, 1)]));
+        h.save_party(&record(60, &[("a", true, 1, 1)]));
+        h.save_party(&record(70, &[("a", true, 1, 1)]));
+        h.db.execute_batch(
+            "DELETE FROM party_saves; DELETE FROM sqlite_sequence;
+             INSERT INTO usage_cursor (name, n) VALUES ('', 60), ('a', 2), ('b', 1), ('c', 1);
+             ALTER TABLE logs DROP COLUMN skew; DROP TABLE usage_floor; DELETE FROM meta;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+    let mut h = History::open(&path).unwrap();
+    let mut got: Vec<(String, u64)> = h.usage_cursors().into_iter().collect();
+    got.sort();
+    let want = [("", 60), ("#party", 2), ("a", 3), ("b", 1), ("c", 1)];
+    assert_eq!(got, want.map(|(n, c)| (n.to_string(), c)).to_vec());
+    assert_eq!(h.party_saved_after(2, 10).len(), 1);
+    let mut floors: Vec<(String, u64)> = h.usage_floors().into_iter().collect();
+    floors.sort();
+    assert_eq!(floors, got[2..].to_vec());
+    let floor: String =
+        h.db.query_row(
+            "SELECT value FROM meta WHERE key = 'party_floor'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(floor, "60");
+    let wider = rows(&[(100, "x"), (100, "new"), (101, "y")]);
+    assert_eq!(h.resume("a", &wider), (3, 1));
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_older_build_opening_the_file_leaves_it_working() {
+    let dir = std::env::temp_dir().join(format!("ehud-back-{}", std::process::id()));
+    let path = dir.join("history.db");
+    {
+        let mut h = History::open(&path).unwrap();
+        h.archive("a", 0, &lines(&["x", "y"]), 40);
+        h.save_party(&record(50, &[("a", true, 1, 1)]));
+        h.usage_start();
+        h.save_party(&record(60, &[("a", true, 1, 1)]));
+        h.db.execute_batch(
+            "UPDATE usage_cursor SET n = 60 WHERE name = '';
+             INSERT INTO party_fights (at, boss, progress, secs, down, here)
+                 VALUES (70, 'Kakarot', 0.5, 9, 0, 3);
+             UPDATE logs SET skew = 5;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+    let h = History::open(&path).unwrap();
+    let count = |sql: &str| h.db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+    assert_eq!(count("PRAGMA user_version"), 3);
+    assert_eq!(count("SELECT COUNT(*) FROM party_saves"), 3);
+    assert_eq!(count("SELECT COUNT(*) FROM logs WHERE skew IS NOT NULL"), 0);
+    let cursor = h.usage_cursors()["#party"];
+    assert_eq!(cursor, 1);
+    let ats: Vec<u64> = h
+        .party_saved_after(cursor, 10)
+        .into_iter()
+        .map(|(_, r)| r.at)
+        .collect();
+    assert_eq!(ats, vec![70]);
+    assert_eq!(replayed(&h, "a").0, lines(&["x", "y"]));
+    drop(h);
+    let h = History::open(&path).unwrap();
+    assert_eq!(h.usage_cursors()["#party"], 1);
+    assert_eq!(h.usage_cursors()[""], 60);
+    assert_eq!(h.party_saved_after(1, 10).len(), 1);
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn opting_in_on_an_older_build_still_keeps_earlier_data_out() {
+    let dir = std::env::temp_dir().join(format!("ehud-v1-in-{}", std::process::id()));
+    let path = dir.join("history.db");
+    {
+        let mut h = History::open(&path).unwrap();
+        h.archive("a", 0, &lines(&["x", "y"]), 101);
+        h.archive("b", 0, &lines(&["x"]), 100);
+        h.save_party(&record(50, &[("a", true, 1, 1)]));
+        h.db.execute_batch(
+            "INSERT INTO usage_cursor (name, n) VALUES ('', 50), ('a', 2), ('b', 1);
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+    let h = History::open(&path).unwrap();
+    let mut got: Vec<(String, u64)> = h.usage_cursors().into_iter().collect();
+    got.sort();
+    let want = [("", 50), ("#party", 1), ("a", 3), ("b", 1)];
+    assert_eq!(got, want.map(|(n, c)| (n.to_string(), c)).to_vec());
+    let mut floors: Vec<(String, u64)> = h.usage_floors().into_iter().collect();
+    floors.sort();
+    assert_eq!(floors, got[2..].to_vec());
+    assert!(h.party_saved_after(0, 10).is_empty());
+    drop(h);
+    let _ = std::fs::remove_dir_all(&dir);
+}

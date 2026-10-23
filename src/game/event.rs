@@ -2,6 +2,7 @@
 pub enum Event {
     BossFight {
         name: String,
+        phase: String,
     },
     BossDead {
         name: String,
@@ -39,7 +40,7 @@ pub enum Event {
         rune: bool,
         chance: u32,
     },
-    SessionSave,
+    SessionSave(String),
     RoomJoin(String),
     RoomEnter(String),
     SelfName {
@@ -54,7 +55,33 @@ pub enum Event {
         name: String,
         usr: String,
     },
+    WorldLine(String),
 }
+
+const WORLD_PREFIXES: &[&str] = &[
+    "ECLIPTICA",
+    "ENEMY ",
+    "Enemy ",
+    "Boss ",
+    "Tracking boss",
+    "Backup Active",
+    "No backup active",
+    "Advancing Stage",
+    "fading out music",
+    "Local controller",
+    "STRIKE DMG",
+    "NON-STRIKE DMG",
+    "Dealing ",
+    "damage has been taken",
+    "spawn token",
+    "Initializing Enemy",
+    "Retiring Enemy",
+    "Removed player",
+    "ownership of ",
+    "[Behaviour] Restored player",
+    "[Behaviour] I am MASTER",
+    "[Behaviour] No targets to encode on ",
+];
 
 impl Event {
     pub fn label(&self) -> &'static str {
@@ -75,12 +102,13 @@ impl Event {
             Event::RoomLeft => "room_left",
             Event::PlayerDead => "player_dead",
             Event::TokenSpawn { .. } => "token_spawn",
-            Event::SessionSave => "session_save",
+            Event::SessionSave(_) => "session_save",
             Event::RoomJoin(_) => "room_join",
             Event::RoomEnter(_) => "room_enter",
             Event::SelfName { .. } => "self_name",
             Event::PlayerJoined { .. } => "player_joined",
             Event::PlayerLeft { .. } => "player_left",
+            Event::WorldLine(_) => "world_line",
         }
     }
 }
@@ -121,6 +149,16 @@ fn parse_ts(s: &str) -> Option<u64> {
 }
 
 pub fn parse_msg(msg: &str) -> Option<Event> {
+    parse_known(msg).or_else(|| {
+        let msg = msg.trim_end();
+        WORLD_PREFIXES
+            .iter()
+            .any(|p| msg.starts_with(p))
+            .then(|| Event::WorldLine(msg.to_string()))
+    })
+}
+
+fn parse_known(msg: &str) -> Option<Event> {
     if let Some(rest) = msg.strip_prefix("ownership of ") {
         let (object, player) = rest.split_once(" transferred to ")?;
         let player = player.trim_end();
@@ -153,9 +191,11 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
     }
     if let Some(rest) = msg.strip_prefix("ECLIPTICA - now ") {
         if let Some(rest) = rest.strip_prefix("fighting boss: ") {
-            let (name, _) = rest.split_once("(Clone)")?;
+            let (name, rest) = rest.split_once("(Clone)")?;
+            let phase = rest.split_once(" on phase: ").map_or("", |(_, p)| p.trim());
             return Some(Event::BossFight {
                 name: name.to_string(),
+                phase: phase.to_string(),
             });
         }
         if let Some(rest) = rest.strip_prefix("in stage: ") {
@@ -202,8 +242,8 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
         let (name, usr) = name_and_usr(rest)?;
         return Some(Event::PlayerLeft { name, usr });
     }
-    if msg.starts_with("ECLIPTICA saving SESSION ID ") {
-        return Some(Event::SessionSave);
+    if let Some(rest) = msg.strip_prefix("ECLIPTICA saving SESSION ID ") {
+        return Some(Event::SessionSave(rest.trim().to_string()));
     }
     if msg.trim_end() == "[Behaviour] OnLeftRoom"
         || msg.starts_with("VRCApplication: HandleApplicationQuit")
@@ -347,7 +387,15 @@ mod tests {
         assert_eq!(
             parse_msg("ECLIPTICA - now fighting boss: ObisidusPhase2(Clone) on phase: 0.7223684"),
             Some(Event::BossFight {
-                name: "ObisidusPhase2".into()
+                name: "ObisidusPhase2".into(),
+                phase: "0.7223684".into()
+            })
+        );
+        assert_eq!(
+            parse_msg("ECLIPTICA - now fighting boss: Hakli(Clone) (UnityEngine.GameObject)"),
+            Some(Event::BossFight {
+                name: "Hakli".into(),
+                phase: String::new()
             })
         );
         assert_eq!(
@@ -382,7 +430,7 @@ mod tests {
                 strike: false
             })
         );
-        assert_eq!(parse_msg("Dealing 5 MAGIC damage"), None);
+        assert_eq!(parse_known("Dealing 5 MAGIC damage"), None);
         assert_eq!(
             parse_msg("damage has been taken: 12, from source: (Khepri) attack_Claws2"),
             Some(Event::DamageTaken {
@@ -446,7 +494,7 @@ mod tests {
             split_line("2026.09.08 08:20:42 Debug      -  Local controller dead, switching off.")
                 .unwrap();
         assert_eq!(parse_msg(l.msg), Some(Event::PlayerDead));
-        assert_eq!(parse_msg("Tracking boss as defeated in-run."), None);
+        assert_eq!(parse_known("Tracking boss as defeated in-run."), None);
     }
 
     #[test]
@@ -465,17 +513,17 @@ mod tests {
                 chance: 55
             })
         );
-        assert_eq!(parse_msg("spawn token, Maybe, 5"), None);
+        assert_eq!(parse_known("spawn token, Maybe, 5"), None);
     }
 
     #[test]
     fn session_save_and_room_join() {
         assert_eq!(
             parse_msg("ECLIPTICA saving SESSION ID 19854"),
-            Some(Event::SessionSave)
+            Some(Event::SessionSave("19854".into()))
         );
         assert_eq!(
-            parse_msg("ECLIPTICA MASTER Setting SESSION ID to 2505"),
+            parse_known("ECLIPTICA MASTER Setting SESSION ID to 2505"),
             None
         );
         assert_eq!(
@@ -485,7 +533,7 @@ mod tests {
             ))
         );
         assert_eq!(
-            parse_msg("[Behaviour] Joining or Creating Room: Ecliptica - Demo Playtest"),
+            parse_known("[Behaviour] Joining or Creating Room: Ecliptica - Demo Playtest"),
             None
         );
         assert_eq!(
@@ -518,11 +566,11 @@ mod tests {
                 usr: "usr_1".into()
             })
         );
-        assert_eq!(parse_msg("User Authenticated:  (usr_1)"), None);
-        assert_eq!(parse_msg("User Authenticated: WhyKnot"), None);
-        assert_eq!(parse_msg("User Authenticated: WhyKnot (usr_)"), None);
-        assert_eq!(parse_msg("User Authenticated: WhyKnot (usr_1"), None);
-        assert_eq!(parse_msg("User Authenticated: WhyKnot (usr_a b)"), None);
+        assert_eq!(parse_known("User Authenticated:  (usr_1)"), None);
+        assert_eq!(parse_known("User Authenticated: WhyKnot"), None);
+        assert_eq!(parse_known("User Authenticated: WhyKnot (usr_)"), None);
+        assert_eq!(parse_known("User Authenticated: WhyKnot (usr_1"), None);
+        assert_eq!(parse_known("User Authenticated: WhyKnot (usr_a b)"), None);
     }
 
     fn joined(name: &str, usr: &str) -> Option<Event> {
@@ -577,27 +625,33 @@ mod tests {
 
     #[test]
     fn player_lines_that_are_not_join_or_leave() {
-        assert_eq!(parse_msg("[Behaviour] OnPlayerLeftRoom"), None);
-        assert_eq!(parse_msg("[Behaviour] OnPlayerLeftRoom\r"), None);
+        assert_eq!(parse_known("[Behaviour] OnPlayerLeftRoom"), None);
+        assert_eq!(parse_known("[Behaviour] OnPlayerLeftRoom\r"), None);
         assert_eq!(
-            parse_msg("[Behaviour] OnPlayerLeftRoom WhyKnot (usr_1)"),
+            parse_known("[Behaviour] OnPlayerLeftRoom WhyKnot (usr_1)"),
             None
         );
-        assert_eq!(parse_msg("[Behaviour] OnPlayerJoinComplete WhyKnot"), None);
         assert_eq!(
-            parse_msg("[Behaviour] OnPlayerEnteredRoom WhyKnot (usr_1)"),
+            parse_known("[Behaviour] OnPlayerJoinComplete WhyKnot"),
             None
         );
-        assert_eq!(parse_msg("[Behaviour] OnPlayerJoined WhyKnot"), None);
-        assert_eq!(parse_msg("[Behaviour] OnPlayerLeft WhyKnot"), None);
-        assert_eq!(parse_msg("[Behaviour] OnPlayerJoined (usr_1)"), None);
-        assert_eq!(parse_msg("[Behaviour] OnPlayerJoined  (usr_1)"), None);
-        assert_eq!(parse_msg("[Behaviour] OnPlayerJoined WhyKnot (usr_)"), None);
         assert_eq!(
-            parse_msg("[Behaviour] OnPlayerJoined WhyKnot (usr_1) trailing"),
+            parse_known("[Behaviour] OnPlayerEnteredRoom WhyKnot (usr_1)"),
             None
         );
-        assert_eq!(parse_msg("OnPlayerJoined WhyKnot (usr_1)"), None);
+        assert_eq!(parse_known("[Behaviour] OnPlayerJoined WhyKnot"), None);
+        assert_eq!(parse_known("[Behaviour] OnPlayerLeft WhyKnot"), None);
+        assert_eq!(parse_known("[Behaviour] OnPlayerJoined (usr_1)"), None);
+        assert_eq!(parse_known("[Behaviour] OnPlayerJoined  (usr_1)"), None);
+        assert_eq!(
+            parse_known("[Behaviour] OnPlayerJoined WhyKnot (usr_)"),
+            None
+        );
+        assert_eq!(
+            parse_known("[Behaviour] OnPlayerJoined WhyKnot (usr_1) trailing"),
+            None
+        );
+        assert_eq!(parse_known("OnPlayerJoined WhyKnot (usr_1)"), None);
         assert_eq!(
             parse_msg(&format!(
                 "[Behaviour] OnPlayerJoined A (usr_{})",
@@ -639,18 +693,45 @@ mod tests {
             Some(Event::EnemyName("Ice Squid".into()))
         );
         assert_eq!(
-            parse_msg("Initializing Enemy POOL IDx as ENEMY ID 45"),
+            parse_known("Initializing Enemy POOL IDx as ENEMY ID 45"),
             None
         );
-        assert_eq!(parse_msg("Backup Active, swapping..."), None);
-        assert_eq!(parse_msg("No backup active, creating new."), None);
+        assert_eq!(parse_known("Backup Active, swapping..."), None);
+        assert_eq!(parse_known("No backup active, creating new."), None);
+    }
+
+    #[test]
+    fn unparsed_world_lines_are_kept_whole() {
+        for msg in [
+            "Tracking boss as defeated in-run.",
+            "Backup Active, swapping...",
+            "No backup active, creating new.",
+            "Advancing Stage Progress to: 5",
+            "fading out music #3",
+            "ENEMY Kakarot INTRO SLAP.",
+            "ECLIPTICA MASTER Setting SESSION ID to 2505",
+            "spawn token, Maybe, 5",
+            "Removed player Lena",
+            "[Behaviour] I am MASTER",
+        ] {
+            assert_eq!(parse_msg(msg), Some(Event::WorldLine(msg.into())), "{msg}");
+        }
+        for msg in [
+            "2.5",
+            "[Behaviour] OnPlayerLeftRoom",
+            "OnPlayerJoined WhyKnot (usr_1)",
+            "[Behaviour] OnPlayerJoined WhyKnot",
+            "Microphone device changed",
+        ] {
+            assert_eq!(parse_msg(msg), None, "{msg}");
+        }
     }
 
     #[test]
     fn non_events() {
-        assert_eq!(parse_msg("Advancing Stage Progress to: 5"), None);
-        assert_eq!(parse_msg("2.5"), None);
-        assert_eq!(parse_msg("Tracking boss as defeated in-run."), None);
+        assert_eq!(parse_known("Advancing Stage Progress to: 5"), None);
+        assert_eq!(parse_known("2.5"), None);
+        assert_eq!(parse_known("Tracking boss as defeated in-run."), None);
     }
 
     #[test]

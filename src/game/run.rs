@@ -105,6 +105,7 @@ fn add_at(series: &mut Vec<u32>, i: u64, n: u64) {
 
 #[derive(Debug, Clone, Default)]
 pub struct StageStats {
+    pub name: String,
     pub start_ts: u64,
     pub end_ts: Option<u64>,
     pub dmg: u64,
