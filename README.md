@@ -20,6 +20,12 @@
 
 EclipticaHUD reads your VRChat log and shows the boss, who it's targeting, your damage and your runs in Ecliptica. It opens as a desktop panel and as a SteamVR overlay on your left controller.
 
+## Shared damage
+
+Open the party window (the button next to settings) and turn sharing on to see boss damage from everyone in your instance who shares too. It's off by default.
+
+During a boss fight the HUD sends your damage total to `ecliptica.whyknot.dev` at most once a second, along with hashes of the instance and your VRChat user ID. Names come from each player's own log, and the server keeps nothing on disk.
+
 ## Install
 
 Download `ecliptica-hud-<version>.exe` from the [latest release](https://github.com/RealWhyKnot/EclipticaHUD/releases/latest) and run it. It checks for a new version when it starts, and you can update from the panel.
