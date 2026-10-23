@@ -3,8 +3,9 @@ pub mod party;
 pub mod proto;
 pub mod sha256;
 
-use proto::{Member, Room, MAX_DMG};
+use proto::{Claim, Member, Msg, Room, MAX_DMG};
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,74 @@ impl Want {
 
     pub fn member(&self) -> Member {
         proto::member_hash(&self.location, &self.usr)
+    }
+
+    pub fn claim(&self) -> Claim {
+        proto::claim_hash(key(), &self.location)
+    }
+}
+
+fn key() -> &'static [u8; 32] {
+    static KEY: OnceLock<[u8; 32]> = OnceLock::new();
+    KEY.get_or_init(|| {
+        if cfg!(test) {
+            [0x42; 32]
+        } else {
+            let path = std::env::var_os("APPDATA")
+                .map(|b| PathBuf::from(b).join("EclipticaHUD").join("relay.key"));
+            load_or_make_key(path.as_deref(), fresh_key)
+        }
+    })
+}
+
+pub fn load_or_make_key(path: Option<&Path>, fresh: impl FnOnce() -> [u8; 32]) -> [u8; 32] {
+    if let Some(k) = path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| key_from_hex(&t))
+    {
+        return k;
+    }
+    let k = fresh();
+    if let Some(p) = path {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(p, sha256::hex(&k));
+    }
+    k
+}
+
+pub fn key_from_hex(text: &str) -> Option<[u8; 32]> {
+    let t = text.trim().as_bytes();
+    if t.len() != 64 || !t.iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, pair) in t.chunks(2).enumerate() {
+        let s = std::str::from_utf8(pair).ok()?;
+        out[i] = u8::from_str_radix(s, 16).ok()?;
+    }
+    Some(out)
+}
+
+fn fresh_key() -> [u8; 32] {
+    use windows_sys::Win32::Security::Cryptography::{
+        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+    };
+    let mut k = [0u8; 32];
+    let ok = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            k.as_mut_ptr(),
+            k.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    } >= 0;
+    if ok {
+        k
+    } else {
+        let seed: Vec<u8> = (0..8).flat_map(|_| rand().to_le_bytes()).collect();
+        sha256::sha256(&[&seed])
     }
 }
 
@@ -148,18 +217,18 @@ pub struct Throttle {
 }
 
 impl Throttle {
-    pub fn due(&mut self, now_ms: u64, dmg: Option<u64>) -> Option<u64> {
-        let v = dmg?.min(MAX_DMG);
-        if self.sent == Some(v) || self.at.is_some_and(|t| now_ms < t + SEND_GAP_MS) {
+    pub fn due(&mut self, now_ms: u64, dmg: Option<u64>) -> Option<Msg> {
+        let v = dmg.map(|d| d.min(MAX_DMG));
+        if self.sent == v || self.at.is_some_and(|t| now_ms < t + SEND_GAP_MS) {
             return None;
         }
-        self.sent = Some(v);
+        self.sent = v;
         self.at = Some(now_ms);
-        Some(v)
+        Some(v.map_or(Msg::End, Msg::Dmg))
     }
 
     pub fn wait_ms(&self, now_ms: u64, dmg: Option<u64>) -> u64 {
-        let pending = dmg.is_some_and(|v| self.sent != Some(v.min(MAX_DMG)));
+        let pending = self.sent != dmg.map(|d| d.min(MAX_DMG));
         match (pending, self.at) {
             (true, Some(t)) => (t + SEND_GAP_MS).saturating_sub(now_ms).max(1),
             (true, None) => 1,

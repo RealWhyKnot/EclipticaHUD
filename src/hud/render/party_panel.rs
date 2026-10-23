@@ -12,7 +12,7 @@ use windows_sys::Win32::Graphics::Gdi::*;
 const OFF_LINES: [&str; 3] = [
     "While a boss fight is on, the HUD sends your damage total for it to the server, at most once a second.",
     "Players in this instance who turn sharing on see it beside your VRChat name, and you see theirs.",
-    "The server keeps totals in memory only and drops yours 10 seconds after you stop sending.",
+    "The server keeps totals in memory only and drops yours when your run ends or you disconnect.",
 ];
 
 pub(super) fn ordinal(n: usize) -> String {

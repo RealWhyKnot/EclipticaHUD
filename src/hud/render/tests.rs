@@ -847,7 +847,7 @@ pub(super) fn sample_party() -> Vec<PartyRow> {
             18_420,
         ),
         party_row("Me (Alt)", true, true, 902_115, Some(29), 12_007),
-        party_row("Unknown player 1", false, true, 610_002, Some(19), 9_880),
+        party_row("Mira", false, true, 610_002, Some(19), 9_880),
         party_row(
             "\u{6c17}\u{307e}\u{3050}\u{308c} Sora",
             false,
@@ -856,7 +856,7 @@ pub(super) fn sample_party() -> Vec<PartyRow> {
             Some(7),
             3_120,
         ),
-        party_row("Unknown player 2", false, true, 118_900, Some(4), 2_500),
+        party_row("Tobias_77", false, true, 118_900, Some(4), 2_500),
     ]
 }
 

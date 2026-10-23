@@ -288,6 +288,7 @@ fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
     let join = Msg::Join {
         room,
         member: want.member(),
+        claim: want.claim(),
     };
     if hub.lock().want.as_ref() != Some(want) {
         return Outcome::Changed;
@@ -326,9 +327,9 @@ fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
         }
         let now = epoch.elapsed().as_millis() as u64;
         let dmg = s.dmg;
-        if let Some(v) = throttle.due(now, dmg) {
+        if let Some(msg) = throttle.due(now, dmg) {
             drop(s);
-            if !conn.ws.send(&Msg::Dmg(v).encode()) {
+            if !conn.ws.send(&msg.encode()) {
                 break Outcome::Lost;
             }
             continue;

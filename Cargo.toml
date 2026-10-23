@@ -24,6 +24,7 @@ features = [
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Pipes",
     "Win32_Networking_WinHttp",
+    "Win32_Security_Cryptography",
 ]
 
 [profile.release]

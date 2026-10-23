@@ -747,11 +747,7 @@ mod party_tests {
         assert!(app.party_step(t0, Some(&want), poll(Link::Connected, 1, vec![s])));
         assert_eq!(
             rows(&app),
-            [
-                row("Alice", false, true, 300),
-                row("Me", true, true, 100),
-                row("Unknown player 1", false, true, 100)
-            ]
+            [row("Alice", false, true, 300), row("Me", true, true, 100)]
         );
         assert_eq!(app.party.pane().status().0, "connected");
         assert!(app.party.pane().ready);
@@ -775,6 +771,14 @@ mod party_tests {
         app.party_step(t1, Some(&want), poll(Link::Connected, 1, vec![s]));
         assert_eq!(rows(&app)[0], row("Alice", false, true, 500));
         assert_eq!(app.party.pane().rows[0].dps, 200);
+        assert_eq!(rows(&app).len(), 2);
+        feed(
+            &mut app,
+            "09:13:02",
+            "[Behaviour] OnPlayerJoined Bob (usr_b)",
+        );
+        app.party_step(t1, Some(&want), poll(Link::Connected, 1, Vec::new()));
+        assert_eq!(rows(&app)[2], row("Bob", false, true, 100));
     }
 
     #[test]
@@ -796,11 +800,7 @@ mod party_tests {
         );
         assert_eq!(
             rows(&app),
-            [
-                row("Alice", false, true, 400),
-                row("Unknown player 1", false, false, 100),
-                row("Me", true, true, 0)
-            ]
+            [row("Alice", false, true, 400), row("Me", true, true, 0)]
         );
         app.party_step(t1, Some(&want), poll(Link::Retrying, 1, Vec::new()));
         assert_eq!(rows(&app)[0], row("Alice", false, false, 400));
@@ -818,6 +818,16 @@ mod party_tests {
     #[test]
     fn rows_clear_at_the_next_fight_and_reset_on_a_new_room() {
         let (mut app, want) = party_app();
+        feed(
+            &mut app,
+            "09:12:40",
+            "[Behaviour] OnPlayerJoined Bob (usr_b)",
+        );
+        feed(
+            &mut app,
+            "09:12:41",
+            "[Behaviour] OnPlayerJoined Cara (usr_c)",
+        );
         feed(
             &mut app,
             "09:13:00",
@@ -842,10 +852,7 @@ mod party_tests {
         );
         assert_eq!(
             rows(&app),
-            [
-                row("Unknown player 1", false, false, 300),
-                row("Me", true, true, 100)
-            ]
+            [row("Bob", false, false, 300), row("Me", true, true, 100)]
         );
         let fight = app.party.pane().fight.clone().unwrap();
         assert!(fight.down && !fight.live);
@@ -866,11 +873,16 @@ mod party_tests {
                 vec![snap(t0, &want, &[("usr_c", 5), ("usr_b", 9)])],
             ),
         );
-        assert_eq!(rows(&app)[0], row("Unknown player 1", false, true, 9));
-        assert_eq!(rows(&app)[1], row("Unknown player 2", false, true, 5));
+        assert_eq!(rows(&app)[0], row("Bob", false, true, 9));
+        assert_eq!(rows(&app)[1], row("Cara", false, true, 5));
         feed(&mut app, "09:15:00", "[Behaviour] OnLeftRoom");
         feed(&mut app, "09:15:01", ENTER);
         feed(&mut app, "09:15:01", W2);
+        feed(
+            &mut app,
+            "09:15:02",
+            "[Behaviour] OnPlayerJoined Cara (usr_c)",
+        );
         let want2 = relay::want(true, true, app.gs.location.as_deref(), Some("usr_me")).unwrap();
         assert_ne!(want2.room(), want.room());
         app.party_step(t0, Some(&want2), poll(Link::Connected, 1, Vec::new()));
@@ -880,7 +892,17 @@ mod party_tests {
             Some(&want2),
             poll(Link::Connected, 2, vec![snap(t0, &want2, &[("usr_c", 7)])]),
         );
-        assert_eq!(rows(&app), [row("Unknown player 1", false, true, 7)]);
+        assert_eq!(rows(&app), [row("Cara", false, true, 7)]);
+        app.party_step(
+            t0,
+            Some(&want2),
+            poll(
+                Link::Connected,
+                2,
+                vec![snap(t0, &want2, &[("usr_c", 8), ("usr_b", 50)])],
+            ),
+        );
+        assert_eq!(rows(&app), [row("Cara", false, true, 8)]);
     }
 
     #[test]

@@ -2,14 +2,16 @@ use super::sha256::sha256;
 
 pub type Room = [u8; 16];
 pub type Member = [u8; 8];
+pub type Claim = [u8; 16];
 
 pub const JOIN: u8 = 0x01;
 pub const DMG: u8 = 0x02;
 pub const SNAP: u8 = 0x03;
-pub const JOIN_LEN: usize = 25;
+pub const END: u8 = 0x04;
+pub const JOIN_LEN: usize = 41;
 pub const DMG_LEN: usize = 9;
 pub const SNAP_ENTRY: usize = 16;
-pub const MAX_MEMBERS: usize = 32;
+pub const MAX_MEMBERS: usize = 82;
 pub const MAX_SNAP_LEN: usize = 1 + SNAP_ENTRY * MAX_MEMBERS;
 pub const MAX_DMG: u64 = 1 << 40;
 
@@ -32,21 +34,38 @@ pub fn member_hash(location: &str, usr: &str) -> Member {
     out
 }
 
+pub fn claim_hash(key: &[u8; 32], location: &str) -> Claim {
+    let d = sha256(&[b"ehud-claim-v1\0", key, location.as_bytes()]);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&d[..16]);
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Msg {
-    Join { room: Room, member: Member },
+    Join {
+        room: Room,
+        member: Member,
+        claim: Claim,
+    },
     Dmg(u64),
+    End,
     Snap(Vec<(Member, u64)>),
 }
 
 impl Msg {
     pub fn encode(&self) -> Vec<u8> {
         match self {
-            Msg::Join { room, member } => {
+            Msg::Join {
+                room,
+                member,
+                claim,
+            } => {
                 let mut out = Vec::with_capacity(JOIN_LEN);
                 out.push(JOIN);
                 out.extend_from_slice(room);
                 out.extend_from_slice(member);
+                out.extend_from_slice(claim);
                 out
             }
             Msg::Dmg(n) => {
@@ -55,6 +74,7 @@ impl Msg {
                 out.extend_from_slice(&n.to_le_bytes());
                 out
             }
+            Msg::End => vec![END],
             Msg::Snap(entries) => {
                 let mut out = Vec::with_capacity(1 + SNAP_ENTRY * entries.len());
                 out.push(SNAP);
@@ -72,8 +92,10 @@ impl Msg {
         match kind {
             JOIN if b.len() == JOIN_LEN => Some(Msg::Join {
                 room: rest[..16].try_into().ok()?,
-                member: rest[16..].try_into().ok()?,
+                member: rest[16..24].try_into().ok()?,
+                claim: rest[24..].try_into().ok()?,
             }),
+            END if rest.is_empty() => Some(Msg::End),
             DMG if b.len() == DMG_LEN => {
                 let n = u64::from_le_bytes(rest.try_into().ok()?);
                 (n <= MAX_DMG).then_some(Msg::Dmg(n))
@@ -103,6 +125,7 @@ pub(crate) mod tests {
     pub(crate) const USR: &str = "usr_00000000-0000-0000-0000-000000000000";
     const ROOM_HEX: &str = "6e35fa9ce4780b2a38a74e3b8d9ce66b";
     const MEMBER_HEX: &str = "6a59070463d1200d";
+    const KEY: [u8; 32] = [0x42; 32];
 
     fn unhex(s: &str) -> Vec<u8> {
         (0..s.len())
@@ -124,15 +147,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn claim_depends_on_key_and_location() {
+        let mut input = b"ehud-claim-v1\0".to_vec();
+        input.extend_from_slice(&KEY);
+        input.extend_from_slice(LOC.as_bytes());
+        assert_eq!(
+            claim_hash(&KEY, LOC)[..],
+            crate::relay::sha256::sha256(&[&input])[..16]
+        );
+        assert_ne!(claim_hash(&KEY, LOC), claim_hash(&[0x43; 32], LOC));
+        assert_ne!(claim_hash(&KEY, LOC), claim_hash(&KEY, &format!("{LOC} ")));
+        assert_ne!(claim_hash(&KEY, LOC), room_hash(LOC));
+    }
+
+    #[test]
     fn join_fixture() {
         let msg = Msg::Join {
             room: room_hash(LOC),
             member: member_hash(LOC, USR),
+            claim: [0xC3; 16],
         };
         let bytes = msg.encode();
         assert_eq!(
             hex(&bytes),
-            "016e35fa9ce4780b2a38a74e3b8d9ce66b6a59070463d1200d"
+            "016e35fa9ce4780b2a38a74e3b8d9ce66b6a59070463d1200dc3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
         );
         assert_eq!(bytes.len(), JOIN_LEN);
         assert_eq!(Msg::decode(&bytes), Some(msg));
@@ -153,6 +191,13 @@ pub(crate) mod tests {
         );
         assert_eq!(Msg::decode(&unhex("020100000000010000")), None);
         assert_eq!(Msg::decode(&unhex("02ffffffffffffffff")), None);
+    }
+
+    #[test]
+    fn end_fixture() {
+        assert_eq!(hex(&Msg::End.encode()), "04");
+        assert_eq!(Msg::decode(&[END]), Some(Msg::End));
+        assert_eq!(Msg::decode(&[END, 0]), None);
     }
 
     #[test]
@@ -182,25 +227,30 @@ pub(crate) mod tests {
         let join = Msg::Join {
             room: [7; 16],
             member: [9; 8],
+            claim: [5; 16],
         }
         .encode();
-        for len in 0..600 {
+        for len in 0..1400 {
             let mut b = join.clone();
             b.resize(len, 0);
             assert_eq!(Msg::decode(&b).is_some(), len == JOIN_LEN, "join {len}");
             let mut d = Msg::Dmg(5).encode();
             d.resize(len, 0);
             assert_eq!(Msg::decode(&d).is_some(), len == DMG_LEN, "dmg {len}");
+            let mut e = Msg::End.encode();
+            e.resize(len, 0);
+            assert_eq!(Msg::decode(&e).is_some(), len == 1, "end {len}");
             let mut s = vec![SNAP];
             s.resize(len, 0);
             let ok = len >= 1 && (len - 1) % SNAP_ENTRY == 0 && len <= MAX_SNAP_LEN;
             assert_eq!(Msg::decode(&s).is_some(), ok, "snap {len}");
         }
         assert_eq!(Msg::decode(&[]), None);
-        for kind in [0x00, 0x04, 0x7f, 0xff] {
+        for kind in [0x00, 0x05, 0x7f, 0xff] {
             assert_eq!(Msg::decode(&[kind]), None);
             assert_eq!(Msg::decode(&[kind; 9]), None);
             assert_eq!(Msg::decode(&[kind; 25]), None);
+            assert_eq!(Msg::decode(&[kind; 41]), None);
         }
     }
 }

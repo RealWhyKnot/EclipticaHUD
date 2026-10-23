@@ -1,5 +1,5 @@
 use super::proto::tests::{LOC, USR};
-use super::proto::{member_hash, room_hash, Msg};
+use super::proto::{claim_hash, member_hash, room_hash, Msg};
 use super::*;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -38,17 +38,23 @@ fn throttle_sends_changes_at_most_once_a_second() {
     assert_eq!(t.due(0, None), None);
     assert_eq!(t.wait_ms(0, None), 1000);
     assert_eq!(t.wait_ms(0, Some(5)), 1);
-    assert_eq!(t.due(0, Some(5)), Some(5));
+    assert_eq!(t.due(0, Some(5)), Some(Msg::Dmg(5)));
     assert_eq!(t.due(10, Some(5)), None);
     assert_eq!(t.wait_ms(10, Some(5)), 1000);
     assert_eq!(t.due(300, Some(9)), None);
     assert_eq!(t.wait_ms(300, Some(9)), 700);
     assert_eq!(t.due(999, Some(12)), None);
-    assert_eq!(t.due(1000, Some(12)), Some(12));
+    assert_eq!(t.due(1000, Some(12)), Some(Msg::Dmg(12)));
     assert_eq!(t.due(5000, Some(12)), None);
-    assert_eq!(t.due(5000, None), None);
-    assert_eq!(t.due(5001, Some(0)), Some(0));
-    assert_eq!(t.due(9000, Some(u64::MAX)), Some(MAX_DMG));
+    assert_eq!(t.wait_ms(5000, None), 1);
+    assert_eq!(t.due(5000, None), Some(Msg::End));
+    assert_eq!(t.due(7000, None), None);
+    assert_eq!(t.wait_ms(7000, None), 1000);
+    assert_eq!(t.due(7000, Some(0)), Some(Msg::Dmg(0)));
+    assert_eq!(t.due(7500, None), None);
+    assert_eq!(t.wait_ms(7500, None), 500);
+    assert_eq!(t.due(8000, None), Some(Msg::End));
+    assert_eq!(t.due(9000, Some(u64::MAX)), Some(Msg::Dmg(MAX_DMG)));
     assert_eq!(t.due(20000, Some(MAX_DMG + 7)), None);
     let mut sent = 0;
     for ms in (0..10_000).step_by(16) {
@@ -57,6 +63,41 @@ fn throttle_sends_changes_at_most_once_a_second() {
         }
     }
     assert_eq!(sent, 10);
+}
+
+#[test]
+fn key_file_is_made_once_and_read_back() {
+    let dir = std::env::temp_dir().join(format!("ehud-key-{}", rand()));
+    let path = dir.join("EclipticaHUD").join("relay.key");
+    let made = load_or_make_key(Some(&path), || [7; 32]);
+    assert_eq!(made, [7; 32]);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "07".repeat(32));
+    let again = load_or_make_key(Some(&path), || panic!("key was regenerated"));
+    assert_eq!(again, [7; 32]);
+    std::fs::write(&path, "not a key").unwrap();
+    assert_eq!(load_or_make_key(Some(&path), || [9; 32]), [9; 32]);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "09".repeat(32));
+    assert_eq!(load_or_make_key(None, || [3; 32]), [3; 32]);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir(dir.join("EclipticaHUD")).unwrap();
+    std::fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn key_hex_must_be_exactly_sixty_four_hex_digits() {
+    let k: [u8; 32] = std::array::from_fn(|i| i as u8 * 7);
+    let h = crate::relay::sha256::hex(&k);
+    assert_eq!(key_from_hex(&h), Some(k));
+    assert_eq!(
+        key_from_hex(&format!("  {}\r\n", h.to_uppercase())),
+        Some(k)
+    );
+    assert_eq!(key_from_hex(&h[..62]), None);
+    assert_eq!(key_from_hex(&format!("{h}00")), None);
+    assert_eq!(key_from_hex(&format!("+f{}", &h[2..])), None);
+    assert_eq!(key_from_hex(&format!("zz{}", &h[2..])), None);
+    assert_eq!(key_from_hex(&format!("\u{e9}{}", &h[2..])), None);
+    assert_eq!(key_from_hex(""), None);
 }
 
 #[test]
@@ -395,10 +436,13 @@ fn client_joins_sends_damage_and_reads_snaps() {
     assert_eq!(p.path, "/ws");
     let (op, join) = p.data().unwrap();
     assert_eq!(op, 0x2);
+    assert_eq!(join.len(), 41);
     assert_eq!(
-        crate::relay::sha256::hex(&join),
+        crate::relay::sha256::hex(&join[..25]),
         "016e35fa9ce4780b2a38a74e3b8d9ce66b6a59070463d1200d"
     );
+    assert_eq!(join[25..], claim_hash(&[0x42; 32], LOC));
+    assert_eq!(w.claim(), claim_hash(&[0x42; 32], LOC));
     wait_for(|| (hub.poll().link == Link::Connected).then_some(()));
     hub.sync(Some(w.clone()), Some(100));
     let (op, d) = p.data().unwrap();
@@ -421,6 +465,8 @@ fn client_joins_sends_damage_and_reads_snaps() {
     let snaps = wait_for(|| Some(hub.poll().snaps).filter(|s| !s.is_empty()));
     assert!(snaps[0].entries.is_empty());
     hub.sync(Some(w.clone()), None);
+    let (_, d) = p.data().unwrap();
+    assert_eq!(Msg::decode(&d), Some(Msg::End));
     hub.sync(None, None);
     assert_eq!(p.expect_close(), 1001);
     assert!(hub.shutdown(Duration::from_secs(5)));
@@ -445,7 +491,8 @@ fn client_reconnects_when_location_changes() {
         Msg::decode(&join),
         Some(Msg::Join {
             room: room_hash(other),
-            member: member_hash(other, USR)
+            member: member_hash(other, USR),
+            claim: claim_hash(&[0x42; 32], other),
         })
     );
     let (_, d) = b.data().unwrap();
@@ -477,7 +524,7 @@ fn client_closes_on_bad_frames_and_backs_off() {
     let mut c = Peer::accept(&l);
     c.data().unwrap();
     let mut huge = vec![0x03];
-    huge.resize(1 + 16 * 33, 0);
+    huge.resize(1 + 16 * (proto::MAX_MEMBERS + 1), 0);
     c.send(0x2, &huge);
     assert_eq!(c.expect_close(), 1008);
     let t = Instant::now();

@@ -109,7 +109,6 @@ pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
     s.finish()
 }
 
-#[cfg(test)]
 pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
