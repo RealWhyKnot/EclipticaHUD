@@ -10,7 +10,7 @@
   <a href="https://github.com/RealWhyKnot/EclipticaHUD/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/RealWhyKnot/EclipticaHUD?label=release&style=flat-square&labelColor=1a1226&color=b04ad8"></a>
   <a href="https://github.com/RealWhyKnot/EclipticaHUD/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/RealWhyKnot/EclipticaHUD/total?label=downloads&style=flat-square&labelColor=1a1226&color=7c4dff"></a>
   <img alt="Windows x64" src="https://img.shields.io/badge/windows-x64-7c4dff?style=flat-square&labelColor=1a1226">
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-7c4dff?style=flat-square&labelColor=1a1226"></a>
+  <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-7c4dff?style=flat-square&labelColor=1a1226"></a>
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@ During a boss fight the HUD sends your damage dealt and taken to `ecliptica.whyk
 
 ## Sharing fight data
 
-Settings has a Share fight data switch, off by default. With it on, the HUD sends the Ecliptica lines it reads from your log to `ecliptica.whyknot.dev` about every ten minutes, to help us improve the HUD. That includes boss and enemy names, stages, the damage you dealt and took and what hit you, the player count, the world ID, the date and the HUD version. In other worlds it only notes that you left Ecliptica. Saved shared fights go too, as numbers with no names attached.
+The HUD asks once whether you want to share fight data, and it stays off unless you say yes. You can change your answer later with the Share fight data switch in settings. With it on, the HUD sends the Ecliptica lines it reads from your log to `ecliptica.whyknot.dev` about every ten minutes, to help us improve the HUD. That includes boss and enemy names, stages, the damage you dealt and took and what hit you, the player count, the world ID, the date and the HUD version. In other worlds it only notes that you left Ecliptica. Saved shared fights go too, as numbers with no names attached.
 
 Player names and user IDs are taken out on your PC before anything is sent, along with the instance that follows the world ID. Clock times are dropped too; each line only keeps how long after the previous one it came. Nothing from before you turned the switch on is sent. The server keeps the uploads as files.
 
@@ -46,4 +46,4 @@ You need MSVC, CMake and LLVM. Then run `cargo build --release`.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE).

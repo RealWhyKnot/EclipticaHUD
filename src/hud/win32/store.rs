@@ -58,6 +58,10 @@ pub(super) fn load_usage() -> bool {
     load_text("usage.txt").is_some_and(|t| discord_on_from(&t))
 }
 
+pub(super) fn usage_answered() -> bool {
+    load_text("usage.txt").is_some()
+}
+
 pub(super) fn save_usage(on: bool) {
     save_flag("usage.txt", on);
 }

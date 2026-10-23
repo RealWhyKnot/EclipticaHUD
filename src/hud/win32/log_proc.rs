@@ -154,23 +154,23 @@ pub(super) unsafe extern "system" fn log_wndproc(
             }
             0
         }
+        WM_ENTERSIZEMOVE => {
+            MOVING.store(true, Ordering::Relaxed);
+            0
+        }
         WM_EXITSIZEMOVE => {
+            MOVING.store(false, Ordering::Relaxed);
+            let owner = GetWindow(hwnd, GW_OWNER);
+            if let Some(app) = app_mut(hwnd) {
+                fit_windows(app, owner);
+            }
             save_log_pos(hwnd, true);
             0
         }
         WM_DPICHANGED => {
+            let owner = GetWindow(hwnd, GW_OWNER);
             if let Some(app) = app_mut(hwnd) {
-                let r = &*(lp as *const RECT);
-                SetWindowPos(
-                    hwnd,
-                    std::ptr::null_mut(),
-                    r.left,
-                    r.top,
-                    app.log.renderer.width,
-                    app.log.renderer.height,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-                repaint_log(app);
+                dpi_changed(app, owner, hwnd, wp, lp);
             }
             0
         }

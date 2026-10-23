@@ -276,7 +276,7 @@ impl Rx {
 enum Outcome {
     Failed,
     Lost,
-    Refused,
+    Refused(Link),
     Changed,
 }
 
@@ -295,26 +295,33 @@ fn current(hub: &Hub) -> Option<Want> {
 
 pub(super) fn run(hub: &'static Hub) {
     let mut backoff = Backoff::default();
+    let mut refused = None;
     while let Some(want) = current(hub) {
-        hub.set_link(Link::Connecting);
+        if refused.as_ref() != Some(&want) {
+            hub.set_link(Link::Connecting);
+        }
         let started = Instant::now();
         let outcome = match Url::parse(&want.url).and_then(|u| Conn::open(&u)) {
             Some(conn) => session(hub, conn, &want),
             None => Outcome::Failed,
         };
-        let delay = match outcome {
+        refused = None;
+        let (delay, link) = match outcome {
             Outcome::Changed => {
                 backoff.reset();
                 continue;
             }
-            Outcome::Refused => backoff.max_ms(rand()),
+            Outcome::Refused(link) => {
+                refused = Some(want.clone());
+                (backoff.max_ms(rand()), link)
+            }
             Outcome::Lost => {
                 backoff.after_session(started.elapsed());
-                backoff.next_ms(rand())
+                (backoff.next_ms(rand()), Link::Retrying)
             }
-            Outcome::Failed => backoff.next_ms(rand()),
+            Outcome::Failed => (backoff.next_ms(rand()), Link::Retrying),
         };
-        hub.set_link(Link::Retrying);
+        hub.set_link(link);
         let deadline = Instant::now() + Duration::from_millis(delay);
         let mut s = hub.lock();
         while s.want.as_ref() == Some(&want) {
@@ -395,7 +402,8 @@ fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
     }
     let _ = reader.join();
     match (outcome, rx.peer.load(Ordering::Acquire)) {
-        (Outcome::Lost, ROOM_FULL | MEMBER_TAKEN) => Outcome::Refused,
+        (Outcome::Lost, ROOM_FULL) => Outcome::Refused(Link::Full),
+        (Outcome::Lost, MEMBER_TAKEN) => Outcome::Refused(Link::Taken),
         (other, _) => other,
     }
 }

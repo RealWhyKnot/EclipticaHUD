@@ -244,6 +244,8 @@ pub enum Link {
     Connecting,
     Connected,
     Retrying,
+    Full,
+    Taken,
 }
 
 #[derive(Debug, Clone)]

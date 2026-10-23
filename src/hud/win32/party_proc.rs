@@ -132,23 +132,23 @@ pub(super) unsafe extern "system" fn party_wndproc(
             }
             0
         }
+        WM_ENTERSIZEMOVE => {
+            MOVING.store(true, Ordering::Relaxed);
+            0
+        }
         WM_EXITSIZEMOVE => {
+            MOVING.store(false, Ordering::Relaxed);
+            let owner = GetWindow(hwnd, GW_OWNER);
+            if let Some(app) = app_mut(hwnd) {
+                fit_windows(app, owner);
+            }
             save_party_pos(hwnd, true);
             0
         }
         WM_DPICHANGED => {
+            let owner = GetWindow(hwnd, GW_OWNER);
             if let Some(app) = app_mut(hwnd) {
-                let r = &*(lp as *const RECT);
-                SetWindowPos(
-                    hwnd,
-                    std::ptr::null_mut(),
-                    r.left,
-                    r.top,
-                    app.party_win.renderer.width,
-                    app.party_win.renderer.height,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-                repaint_party(app);
+                dpi_changed(app, owner, hwnd, wp, lp);
             }
             0
         }

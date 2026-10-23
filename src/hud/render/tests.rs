@@ -17,6 +17,7 @@ pub(super) fn frame() -> Frame {
         view_page: 0,
         settings_open: false,
         scale: 1.0,
+        scale_max: MAX_SCALE,
         alpha: 100,
         window: 10,
         flash_t: 1.0,
@@ -41,6 +42,8 @@ pub(super) fn frame() -> Frame {
         discord: Link::Off,
         discord_on: false,
         usage_on: false,
+        usage_failing: false,
+        ask_usage: false,
         party_open: false,
         view_run: Some(0),
         view_group: Some(0),
@@ -464,6 +467,7 @@ fn draw_smoke_bars() {
         log_open: true,
         discord_on: false,
         usage_on: false,
+        usage_failing: false,
         party_open: false,
     };
     assert!(Hit::Pin.tip(ctx).contains("keep it on top"));
@@ -479,6 +483,7 @@ fn draw_smoke_bars() {
     assert!(Hit::Usage.tip(ctx).starts_with("Send boss"));
     let on = TipCtx {
         usage_on: true,
+        usage_failing: false,
         ..ctx
     };
     assert!(Hit::Usage.tip(on).ends_with("click to stop"));
@@ -728,7 +733,7 @@ fn update_prompt_covers_panel_below_status() {
     assert_eq!(nx - M, LOGICAL_W - M - (lx + lw));
     assert!(nx + nw < lx && ny == ly && nh == lh);
     assert_eq!(pix(&r, 180, PROMPT_T - 4), BG);
-    assert!(text_w(&r, F_BIG, "Update available!") <= W - 24);
+    assert!(text_w(&r, F_BIG, "Update available") <= W - 24);
     let (sx, sy, sw, _) = UPDATE_SKIP_HIT;
     assert!(text_w(&r, F_TINY, "Skip this version") <= sw);
     assert_eq!(sx + sw / 2, LOGICAL_W / 2);
@@ -1124,6 +1129,7 @@ fn write_tooltip_wrap_images() {
         log_open: false,
         discord_on: false,
         usage_on: false,
+        usage_failing: false,
         party_open: false,
     };
     let cases = [
@@ -1198,4 +1204,12 @@ fn write_tooltip_wrap_images() {
         y += ((label_h + h) * s) as u32 + gap;
     }
     sheet.save("tooltip_wrap.png");
+}
+
+#[test]
+fn counts_use_the_singular_for_one() {
+    use super::fmt::fmt_count;
+    assert_eq!(fmt_count(0, "boss", "bosses"), "0 bosses");
+    assert_eq!(fmt_count(1, "boss", "bosses"), "1 boss");
+    assert_eq!(fmt_count(2, "token", "tokens"), "2 tokens");
 }

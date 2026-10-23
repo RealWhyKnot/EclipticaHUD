@@ -8,7 +8,7 @@ mod settings;
 mod tests;
 mod tick;
 
-pub use settings::WINDOW_STEPS;
+pub use settings::{fit_scale, WINDOW_STEPS};
 
 use crate::discord::{self, Link, Presence};
 use crate::game::state::GameState;
@@ -26,6 +26,7 @@ use windows_sys::Win32::Foundation::HWND;
 
 pub struct LogState {
     pub hwnd: HWND,
+    pub dpi: u32,
     pub renderer: Renderer,
     pub visible: bool,
     pub filter: Filter,
@@ -47,6 +48,7 @@ pub struct LogState {
 
 pub struct PartyWin {
     pub hwnd: HWND,
+    pub dpi: u32,
     pub renderer: Renderer,
     pub visible: bool,
     pub hover: Option<PartyHit>,
@@ -79,6 +81,8 @@ pub struct App {
     pub topmost: bool,
     pub discord_on: bool,
     pub usage_on: bool,
+    pub usage_failing: bool,
+    pub usage_ask: bool,
     pub party_on: bool,
     party: party::PartyState,
     presence: Option<Presence>,
@@ -91,6 +95,7 @@ pub struct App {
     last_env: Option<Env>,
     pub dpi: u32,
     pub scale: f32,
+    pub scale_cap: f32,
     pub alpha: u8,
     pub settings_open: bool,
     flash_at: Option<Instant>,
@@ -140,6 +145,7 @@ impl App {
             renderer: Renderer::new(dpi, LOGICAL_W, LOGICAL_H),
             log: LogState {
                 hwnd: std::ptr::null_mut(),
+                dpi,
                 renderer: Renderer::new(dpi, LOG_W, LOG_H),
                 visible: false,
                 filter: Filter::All,
@@ -160,6 +166,7 @@ impl App {
             },
             party_win: PartyWin {
                 hwnd: std::ptr::null_mut(),
+                dpi,
                 renderer: Renderer::new(dpi, PARTY_W, PARTY_H),
                 visible: false,
                 hover: None,
@@ -184,6 +191,8 @@ impl App {
             topmost: true,
             discord_on: false,
             usage_on: false,
+            usage_failing: false,
+            usage_ask: false,
             party_on: false,
             party: party::PartyState::new(),
             presence: None,
@@ -196,6 +205,7 @@ impl App {
             last_env: None,
             dpi,
             scale: 1.0,
+            scale_cap: MAX_SCALE,
             alpha: MAX_ALPHA,
             settings_open: false,
             flash_at: None,
@@ -221,10 +231,11 @@ impl App {
     }
 
     pub fn rescale(&mut self) {
-        let eff = (self.dpi as f32 * self.scale).round() as u32;
-        self.renderer = Renderer::new(eff, LOGICAL_W, LOGICAL_H);
-        self.log.renderer = Renderer::new(eff, LOG_W, LOG_H);
-        self.party_win.renderer = Renderer::new(eff, PARTY_W, PARTY_H);
+        let scale = self.shown_scale();
+        let eff = |dpi: u32| (dpi as f32 * scale).round() as u32;
+        self.renderer = Renderer::new(eff(self.dpi), LOGICAL_W, LOGICAL_H);
+        self.log.renderer = Renderer::new(eff(self.log.dpi), LOG_W, LOG_H);
+        self.party_win.renderer = Renderer::new(eff(self.party_win.dpi), PARTY_W, PARTY_H);
         self.rgba.clear();
         self.party_win.vr_rgba.clear();
     }
@@ -239,6 +250,10 @@ impl App {
 
     pub fn prompt_shown(&self) -> bool {
         self.prompt_open && self.badge != Badge::None && self.gs.boss.is_none()
+    }
+
+    pub fn usage_prompt_shown(&self) -> bool {
+        self.usage_ask && !self.prompt_shown() && self.gs.boss.is_none()
     }
 
     pub fn skip_update(&mut self) -> Option<String> {
@@ -276,11 +291,17 @@ impl App {
                 _ => false,
             };
         }
+        if self.usage_prompt_shown() {
+            return matches!(
+                hit,
+                Hit::Close | Hit::Log | Hit::Pin | Hit::Party | Hit::UsageYes | Hit::UsageNo
+            );
+        }
         match hit {
             Hit::Close | Hit::Log | Hit::Pin | Hit::Settings | Hit::Party => true,
             Hit::Discord | Hit::Sound | Hit::Usage => self.settings_open,
-            Hit::ScaleDown => self.settings_open && self.scale > MIN_SCALE + 0.001,
-            Hit::ScaleUp => self.settings_open && self.scale < MAX_SCALE - 0.001,
+            Hit::ScaleDown => self.settings_open && self.shown_scale() > MIN_SCALE + 0.001,
+            Hit::ScaleUp => self.settings_open && self.shown_scale() < self.scale_max() - 0.001,
             Hit::AlphaDown => self.settings_open && self.alpha > MIN_ALPHA,
             Hit::AlphaUp => self.settings_open && self.alpha < MAX_ALPHA,
             Hit::WindowDown => self.settings_open && self.gs.win() > WINDOW_STEPS[0],
@@ -302,6 +323,7 @@ impl App {
             Hit::Info(_) => true,
             Hit::Update => self.update_ready(),
             Hit::UpdateNow | Hit::UpdateLater | Hit::UpdateSkip => false,
+            Hit::UsageYes | Hit::UsageNo => false,
             Hit::Mute => self.is_live() && self.gs.boss.is_some(),
             Hit::RunPrev => self.viewed_page() > 0,
             Hit::RunNext => self.sel_run.is_some(),
@@ -360,6 +382,11 @@ impl App {
             }
             Hit::UpdateLater => {
                 self.prompt_open = false;
+                true
+            }
+            Hit::UsageYes | Hit::UsageNo => {
+                self.usage_ask = false;
+                self.set_usage(hit == Hit::UsageYes, true);
                 true
             }
             Hit::Close | Hit::UpdateNow | Hit::UpdateSkip | Hit::Info(_) => false,

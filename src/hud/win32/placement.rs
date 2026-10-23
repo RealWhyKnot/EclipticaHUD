@@ -12,6 +12,40 @@ pub(super) fn load_pos(name: &str) -> Option<(i32, i32, bool)> {
     parse_pos(&std::fs::read_to_string(data_file(name)?).ok()?)
 }
 
+pub(super) fn monitor_work(r: &RECT) -> Option<RECT> {
+    monitor_info(r, MONITOR_DEFAULTTONULL)
+}
+
+fn monitor_info(r: &RECT, flag: MONITOR_FROM_FLAGS) -> Option<RECT> {
+    unsafe {
+        let mon = MonitorFromRect(r, flag);
+        if mon.is_null() {
+            return None;
+        }
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        (GetMonitorInfoW(mon, &mut info) != 0).then_some(info.rcWork)
+    }
+}
+
+pub(super) fn fit_spot(work: Option<RECT>, x: i32, y: i32, w: i32, h: i32) -> Option<(i32, i32)> {
+    let work = work?;
+    let x = x.clamp(work.left, (work.right - w).max(work.left));
+    let y = y.clamp(work.top, (work.bottom - h).max(work.top));
+    Some((x, y))
+}
+
+pub(super) fn saved_pos(name: &str, w: i32, h: i32) -> Option<(i32, i32)> {
+    let (x, y, _) = load_pos(name)?;
+    let r = RECT {
+        left: x,
+        top: y,
+        right: x + w,
+        bottom: y + h,
+    };
+    fit_spot(monitor_work(&r), x, y, w, h)
+}
+
 pub(super) fn window_pos(hwnd: HWND) -> Option<(i32, i32)> {
     let mut r = RECT {
         left: 0,
@@ -63,8 +97,40 @@ pub(super) fn default_pos(w: i32, h: i32) -> (i32, i32) {
     (work.right - w - 24, work.bottom - h - 24)
 }
 
-pub(super) fn default_log_pos(main: HWND, w: i32) -> (i32, i32) {
-    let work = work_area();
+pub(super) fn work_of(hwnd: HWND) -> RECT {
+    rect_of(hwnd)
+        .and_then(|r| monitor_info(&r, MONITOR_DEFAULTTONEAREST))
+        .unwrap_or_else(work_area)
+}
+
+pub(super) fn keep_on_screen(hwnd: HWND) {
+    let Some(r) = rect_of(hwnd) else {
+        return;
+    };
+    let spot = fit_spot(
+        Some(work_of(hwnd)),
+        r.left,
+        r.top,
+        r.right - r.left,
+        r.bottom - r.top,
+    );
+    if let Some((x, y)) = spot.filter(|&p| p != (r.left, r.top)) {
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                std::ptr::null_mut(),
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+pub(super) fn default_log_pos(main: HWND, w: i32, h: i32) -> (i32, i32) {
+    let work = work_of(main);
     let (mx, my) = window_pos(main).unwrap_or((work.right, work.bottom));
     let mut mr = RECT {
         left: 0,
@@ -78,7 +144,7 @@ pub(super) fn default_log_pos(main: HWND, w: i32) -> (i32, i32) {
     } else {
         mr.right + 12
     };
-    (x, my)
+    fit_spot(Some(work), x, my, w, h).unwrap_or((x, my))
 }
 
 fn rect_of(hwnd: HWND) -> Option<RECT> {
@@ -98,7 +164,7 @@ pub(super) fn default_party_pos(main: HWND, log: Option<HWND>, w: i32, h: i32) -
     let left = log
         .and_then(rect_of)
         .map_or(mr.left, |lr| lr.left.min(mr.left));
-    party_spot(&work_area(), &mr, left, w, h)
+    party_spot(&work_of(main), &mr, left, w, h)
 }
 
 pub(super) fn party_spot(work: &RECT, main: &RECT, left: i32, w: i32, h: i32) -> (i32, i32) {
@@ -124,6 +190,42 @@ mod tests {
         assert_eq!(parse_pos("-5 7 1"), Some((-5, 7, true)));
         assert_eq!(parse_pos("x"), None);
         assert_eq!(parse_pos(""), None);
+    }
+
+    #[test]
+    fn saved_spot_on_a_missing_monitor_is_dropped() {
+        let far = RECT {
+            left: 1_000_000,
+            top: 1_000_000,
+            right: 1_000_360,
+            bottom: 1_000_392,
+        };
+        assert!(monitor_work(&far).is_none());
+        assert_eq!(fit_spot(None, 2686, 56, 360, 392), None);
+    }
+
+    #[test]
+    fn saved_spot_is_pulled_onto_its_monitor() {
+        let work = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        assert_eq!(fit_spot(Some(work), 1043, 203, 360, 640), Some((1043, 203)));
+        assert_eq!(fit_spot(Some(work), 1800, 56, 360, 392), Some((1560, 56)));
+        assert_eq!(fit_spot(Some(work), -200, 900, 360, 392), Some((0, 648)));
+        assert_eq!(fit_spot(Some(work), 50, 50, 2400, 1200), Some((0, 0)));
+        let left = RECT {
+            left: -3440,
+            top: 0,
+            right: 0,
+            bottom: 1400,
+        };
+        assert_eq!(
+            fit_spot(Some(left), -100, 1300, 360, 392),
+            Some((-360, 1008))
+        );
     }
 
     #[test]

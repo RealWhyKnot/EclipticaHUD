@@ -598,7 +598,7 @@ fn refused_backs_off_to_the_maximum() {
     assert_eq!(b.next_ms(0), 60_000);
 }
 
-fn refused_by_server(code: u16) {
+fn refused_by_server(code: u16, link: Link) {
     let hub: &'static Hub = Box::leak(Box::new(Hub::new()));
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
@@ -611,7 +611,7 @@ fn refused_by_server(code: u16) {
     assert_eq!(op, 0x8);
     assert_eq!(u16::from_be_bytes([p[0], p[1]]), 1000);
     assert!(a.data().is_none());
-    wait_for(|| (hub.poll().link == Link::Retrying).then_some(()));
+    wait_for(|| (hub.poll().link == link).then_some(()));
     l.set_nonblocking(true).unwrap();
     let t = Instant::now();
     while t.elapsed() < Duration::from_secs(4) {
@@ -619,7 +619,7 @@ fn refused_by_server(code: u16) {
             Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::WouldBlock),
             Ok(_) => panic!("reconnected after {code} in {:?}", t.elapsed()),
         }
-        assert_eq!(hub.poll().link, Link::Retrying);
+        assert_eq!(hub.poll().link, link);
         std::thread::sleep(Duration::from_millis(100));
     }
     let t = Instant::now();
@@ -630,12 +630,12 @@ fn refused_by_server(code: u16) {
 
 #[test]
 fn room_full_backs_off_to_the_maximum() {
-    refused_by_server(client::ROOM_FULL);
+    refused_by_server(client::ROOM_FULL, Link::Full);
 }
 
 #[test]
 fn member_taken_backs_off_to_the_maximum() {
-    refused_by_server(client::MEMBER_TAKEN);
+    refused_by_server(client::MEMBER_TAKEN, Link::Taken);
 }
 
 #[test]

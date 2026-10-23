@@ -212,6 +212,8 @@ fn status_words_follow_the_link() {
         (Link::Connecting, "connecting", AMBER),
         (Link::Connected, "connected", GOOD),
         (Link::Retrying, "can't reach the server", DANGER),
+        (Link::Full, "sharing is full", DANGER),
+        (Link::Taken, "already sharing", DANGER),
     ] {
         p.link = link;
         assert_eq!(p.status(), (word, color));
@@ -290,11 +292,15 @@ fn party_hit_regions() {
     }
 }
 
-fn tip_inside(dpi: u32, hit: PartyHit, on: bool) {
+fn tip_inside(dpi: u32, hit: PartyHit, on: bool, link: Link) {
     let p = PartyPane {
         on,
+        link,
         ..pane(sample_party())
     };
+    let tip = p.tip(hit);
+    assert!(!tip.is_empty() && tip.chars().count() <= 70, "{tip}");
+    assert!(!tip.contains(['\u{2014}', '\u{2013}']), "{tip}");
     let mut r = Renderer::new(dpi, PARTY_W, PARTY_H);
     r.draw_party(&PartyView {
         pane: &p,
@@ -303,7 +309,7 @@ fn tip_inside(dpi: u32, hit: PartyHit, on: bool) {
         tip: Some(hit),
         vr: false,
     });
-    let (w, lines) = r.tip_lines(hit.tip(on), PARTY_W);
+    let (w, lines) = r.tip_lines(tip, PARTY_W);
     assert!(w <= PARTY_W - 16, "{hit:?} at {dpi}");
     assert!(lines.len() <= 2, "{hit:?} at {dpi}");
     for line in &lines {
@@ -325,7 +331,9 @@ fn party_tooltips_fit_the_window() {
                 PartyHit::Rank,
                 PartyHit::Board,
             ] {
-                tip_inside(dpi, hit, on);
+                for link in [Link::Connected, Link::Retrying, Link::Full, Link::Taken] {
+                    tip_inside(dpi, hit, on, link);
+                }
             }
         }
     }
@@ -536,6 +544,8 @@ fn every_empty_state_says_something_different() {
         base(Link::Off, false),
         base(Link::Connecting, true),
         base(Link::Retrying, true),
+        base(Link::Full, true),
+        base(Link::Taken, true),
         base(Link::Connected, true),
     ];
     for dpi in DPIS {
@@ -693,6 +703,8 @@ fn empty_board_messages_fit_and_name_the_fight() {
         base(Link::Connecting, true),
         base(Link::Off, true),
         base(Link::Retrying, true),
+        base(Link::Full, true),
+        base(Link::Taken, true),
         base(Link::Connected, true),
     ];
     let (_, _, cw, _) = PARTY_CARD2;
@@ -726,4 +738,34 @@ fn page_label_fits_five_digit_counts() {
         let need = r.unscale(r.text_w(F_TINY, "99999/99999"));
         assert!(need + 4 <= PARTY_PAGE.2, "{dpi}: {need}");
     }
+}
+
+#[test]
+fn usage_question_fits_at_every_dpi() {
+    for dpi in [96, 120, 144, 192] {
+        let r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        let w = |f: usize, s: &str| r.unscale(r.text_w(f, s));
+        let room = W - 24;
+        for line in ASK_LINES {
+            println!("{dpi} body {} of {room}: {line}", w(F_BODY, line));
+            assert!(w(F_BODY, line) <= room, "{dpi}: {line}");
+        }
+        let title = w(F_BIG, "Share fight data?");
+        let note = w(F_TINY, "You can change this in settings");
+        let no = w(F_BODY, "No thanks");
+        let yes = w(F_BODY, "Share");
+        println!(
+            "{dpi} title {title} note {note} no {no} of {} yes {yes}",
+            USAGE_NO_HIT.2
+        );
+        assert!(title <= room && note <= room, "{dpi}");
+        assert!(
+            no + 16 <= USAGE_NO_HIT.2 && yes + 16 <= USAGE_YES_HIT.2,
+            "{dpi}"
+        );
+    }
+    let bottom = USAGE_YES_HIT.1 + USAGE_YES_HIT.3 + 10 + 20;
+    assert!(bottom <= PROMPT_AREA.0 + PROMPT_AREA.1, "{bottom}");
+    assert!(ASK_T >= PROMPT_AREA.0, "{ASK_T}");
+    assert!(USAGE_YES_HIT.0 + USAGE_YES_HIT.2 < USAGE_NO_HIT.0);
 }

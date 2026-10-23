@@ -50,6 +50,8 @@ impl PartyPane {
         Some(match (self.ready, self.link) {
             (false, _) => "Nothing to show outside Ecliptica",
             (true, Link::Retrying) => "Can't reach the server. The HUD keeps trying.",
+            (true, Link::Full) => "Sharing is full here. The HUD keeps trying.",
+            (true, Link::Taken) => "Another HUD is sharing as you. Trying again soon.",
             (true, Link::Off | Link::Connecting) => "Connecting to the server",
             (true, Link::Connected) => "Damage shows up here once a boss fight starts",
         })
@@ -65,6 +67,18 @@ impl PartyPane {
         format!("{}/{}", total - self.page.min(self.pages), total)
     }
 
+    pub fn tip(&self, hit: PartyHit) -> &'static str {
+        match (hit, self.on, self.ready, self.link) {
+            (PartyHit::Status, true, true, Link::Full) => {
+                "Too many players are sharing in this instance right now"
+            }
+            (PartyHit::Status, true, true, Link::Taken) => {
+                "Your VRChat account is sharing here from another HUD; close that one"
+            }
+            _ => hit.tip(self.on),
+        }
+    }
+
     pub fn status(&self) -> (&'static str, u32) {
         match (self.on, self.ready, self.link) {
             (false, _, _) => ("off", DIM),
@@ -72,6 +86,8 @@ impl PartyPane {
             (true, true, Link::Connected) => ("connected", GOOD),
             (true, true, Link::Off | Link::Connecting) => ("connecting", AMBER),
             (true, true, Link::Retrying) => ("can't reach the server", DANGER),
+            (true, true, Link::Full) => ("sharing is full", DANGER),
+            (true, true, Link::Taken) => ("already sharing", DANGER),
         }
     }
 
@@ -137,7 +153,7 @@ impl Renderer {
             self.draw_party_pager(v);
         }
         if let Some(hit) = v.tip.filter(|_| !v.vr) {
-            self.tooltip(hit.rect(), hit.tip(p.on), PARTY_W, PARTY_H);
+            self.tooltip(hit.rect(), p.tip(hit), PARTY_W, PARTY_H);
         }
         unsafe { GdiFlush() };
     }

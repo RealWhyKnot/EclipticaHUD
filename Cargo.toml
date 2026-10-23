@@ -2,7 +2,7 @@
 name = "ecliptica-hud"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-or-later"
 description = "Boss target and damage HUD for Ecliptica in VRChat, desktop panel plus SteamVR overlay"
 
 [dependencies]

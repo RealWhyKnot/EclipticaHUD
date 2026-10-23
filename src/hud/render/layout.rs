@@ -42,6 +42,14 @@ pub const PROMPT_T: i32 = 250;
 pub const UPDATE_NOW_HIT: (i32, i32, i32, i32) = (50, PROMPT_T + 100, 168, 36);
 pub const UPDATE_LATER_HIT: (i32, i32, i32, i32) = (222, PROMPT_T + 100, 88, 36);
 pub const UPDATE_SKIP_HIT: (i32, i32, i32, i32) = (120, PROMPT_T + 142, 120, 20);
+pub const ASK_T: i32 = 240;
+pub const USAGE_YES_HIT: (i32, i32, i32, i32) = (50, ASK_T + 120, 168, 36);
+pub const USAGE_NO_HIT: (i32, i32, i32, i32) = (222, ASK_T + 120, 88, 36);
+pub const ASK_LINES: [&str; 3] = [
+    "Help improve the HUD by sending boss",
+    "and damage data from your log. Player",
+    "names and IDs are taken out first.",
+];
 pub const DISCORD_DOT: (i32, i32, i32, i32) = (136, LOGICAL_H - 30, 72, 24);
 pub const MUTE_HIT: (i32, i32, i32, i32) = (306, 108, 28, 22);
 pub const RUN_PREV_HIT: (i32, i32, i32, i32) = (14, 54, 26, 24);

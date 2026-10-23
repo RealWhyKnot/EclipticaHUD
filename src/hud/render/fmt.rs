@@ -13,6 +13,10 @@ pub(super) fn fmt_ago(now: u64, ts: u64) -> String {
     }
 }
 
+pub(super) fn fmt_count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 pub(super) fn fmt_run_deaths(n: u32) -> String {
     format!("{n} run death{}", if n == 1 { "" } else { "s" })
 }

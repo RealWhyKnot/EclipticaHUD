@@ -15,7 +15,7 @@ impl Renderer {
         self.fill(0, PROMPT_AREA.0, LOGICAL_W, PROMPT_AREA.1, BG);
         let c = DT_CENTER | DT_VCENTER;
         let (bx, bw) = (M + 12, W - 24);
-        self.text_rect(bx, PROMPT_T, bw, 32, F_BIG, TEXT, c, "Update available!");
+        self.text_rect(bx, PROMPT_T, bw, 32, F_BIG, TEXT, c, "Update available");
         let current = format!("Current version: {VERSION}");
         self.text_rect(bx, PROMPT_T + 44, bw, 20, F_BODY, DANGER, c, &current);
         let next = format!("New version: {}", tag.trim_start_matches(['v', 'V']));
@@ -41,6 +41,25 @@ impl Renderer {
                 }
             }
         }
+    }
+
+    pub(super) fn draw_usage_prompt(&self, f: &Frame) {
+        self.fill(0, PROMPT_AREA.0, LOGICAL_W, PROMPT_AREA.1, BG);
+        let c = DT_CENTER | DT_VCENTER;
+        let (bx, bw) = (M + 12, W - 24);
+        self.text_rect(bx, ASK_T, bw, 32, F_BIG, TEXT, c, "Share fight data?");
+        for (i, line) in ASK_LINES.iter().enumerate() {
+            let y = ASK_T + 44 + 20 * i as i32;
+            self.text_rect(bx, y, bw, 20, F_BODY, DIM, c, line);
+        }
+        self.choice(f, Hit::UsageYes, USAGE_YES_HIT, GOOD, "Share");
+        let no = f.ctl(Hit::UsageNo, true, false);
+        let ink = self.control(USAGE_NO_HIT, no);
+        let (nx, ny, nw, nh) = USAGE_NO_HIT;
+        self.text_rect(nx, ny, nw, nh, F_BODY, ink, c, "No thanks");
+        let note_y = USAGE_YES_HIT.1 + USAGE_YES_HIT.3 + 10;
+        let note = "You can change this in settings";
+        self.text_rect(bx, note_y, bw, 20, F_TINY, DIM, c, note);
     }
 
     fn choice(&self, f: &Frame, hit: Hit, r: (i32, i32, i32, i32), tint: u32, s: &str) {

@@ -18,6 +18,7 @@ const PARTY: &str = "";
 const MIN_TS: u64 = 86_400 * 366 * 1000;
 
 pub static ON: AtomicBool = AtomicBool::new(false);
+pub static FAILING: AtomicBool = AtomicBool::new(false);
 
 pub struct Batch {
     pub text: String,
@@ -424,13 +425,18 @@ pub fn spawn(path: Option<PathBuf>) {
                     if db.is_none() {
                         db = History::open(&path);
                     }
+                    let mut failed = db.is_none();
                     if let Some(db) = db.as_mut() {
                         pass(db, crate::update::VERSION, &ON, &mut pending, |body| {
-                            crate::relay::post_usage(body)
+                            let status = crate::relay::post_usage(body);
+                            failed = outcome(status) == Sent::Retry;
+                            status
                         });
                     }
+                    FAILING.store(failed && ON.load(Ordering::Relaxed), Ordering::Relaxed);
                 } else {
                     pending = None;
+                    FAILING.store(false, Ordering::Relaxed);
                 }
                 std::thread::sleep(EVERY);
             }

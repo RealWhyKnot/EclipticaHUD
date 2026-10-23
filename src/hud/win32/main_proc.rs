@@ -158,7 +158,7 @@ pub(super) unsafe extern "system" fn wndproc(
                                 app.activate(hit);
                                 save_discord(app.discord_on);
                             }
-                            Hit::Usage => {
+                            Hit::Usage | Hit::UsageYes | Hit::UsageNo => {
                                 app.activate(hit);
                                 save_usage(app.usage_on);
                             }
@@ -218,25 +218,28 @@ pub(super) unsafe extern "system" fn wndproc(
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
             0
         }
+        WM_ENTERSIZEMOVE => {
+            MOVING.store(true, Ordering::Relaxed);
+            0
+        }
         WM_EXITSIZEMOVE => {
+            MOVING.store(false, Ordering::Relaxed);
+            if let Some(app) = app_mut(hwnd) {
+                fit_windows(app, hwnd);
+            }
             save_pos(hwnd);
             0
         }
         WM_DPICHANGED => {
             if let Some(app) = app_mut(hwnd) {
-                app.dpi = (wp & 0xffff) as u32;
-                app.rescale();
-                let r = &*(lp as *const RECT);
-                SetWindowPos(
-                    hwnd,
-                    std::ptr::null_mut(),
-                    r.left,
-                    r.top,
-                    app.renderer.width,
-                    app.renderer.height,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-                repaint(app, hwnd);
+                dpi_changed(app, hwnd, hwnd, wp, lp);
+            }
+            0
+        }
+        WM_DISPLAYCHANGE => {
+            if let Some(app) = app_mut(hwnd) {
+                fit_windows(app, hwnd);
+                keep_all_on_screen(app, hwnd);
             }
             0
         }

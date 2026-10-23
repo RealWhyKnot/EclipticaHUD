@@ -32,7 +32,8 @@ impl App {
             pages: self.pages(),
             view_page: self.viewed_page(),
             settings_open: self.settings_open,
-            scale: self.scale,
+            scale: self.shown_scale(),
+            scale_max: self.scale_max(),
             alpha: self.alpha,
             window: self.gs.win(),
             flash_t: timed(self.flash_at, FLASH_MS),
@@ -57,6 +58,8 @@ impl App {
             discord: self.link,
             discord_on: self.discord_on,
             usage_on: self.usage_on,
+            usage_failing: self.usage_failing,
+            ask_usage: self.usage_prompt_shown(),
             party_open: self.party_win.visible,
             view_run: self.shown_run().map(|(i, _)| i),
             view_group: self.viewed_group().map(|(i, _)| i),
@@ -208,8 +211,12 @@ impl App {
         let link = discord::link();
         let link_changed = link != self.link;
         self.link = link;
+        let failing =
+            self.usage_on && crate::usage::FAILING.load(std::sync::atomic::Ordering::Relaxed);
+        let failing_changed = failing != self.usage_failing;
+        self.usage_failing = failing;
         let badge_changed = self.poll_badge();
-        link_changed || badge_changed
+        link_changed || failing_changed || badge_changed
     }
 
     pub fn poll_badge(&mut self) -> bool {

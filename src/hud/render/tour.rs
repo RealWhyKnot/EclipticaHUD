@@ -76,6 +76,32 @@ pub(super) fn tour_gs(me: bool, secs: u64) -> (GameState, u64) {
     (gs, now)
 }
 
+fn inter_gs() -> (GameState, u64) {
+    let mut gs = GameState::default();
+    let mut feed = |t: u64, m: &str| {
+        gs.feed(&line(t, m));
+    };
+    feed(0, "User Authenticated: Me (Alt) (usr_1)");
+    feed(0, "[Behaviour] Joining wrld_1:1~hidden(usr_1)~region(use)");
+    feed(
+        0,
+        "ECLIPTICA - now in stage: Stage_OuterHeven on phase: 0.4 as class: Blade",
+    );
+    feed(
+        1,
+        "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.4",
+    );
+    for t in 2..40 {
+        feed(t, &format!("Dealing {} STRIKE damage", 900 + t * 37 % 400));
+    }
+    feed(40, "Boss Kakarot dead, personal damage dealt: ");
+    feed(40, "STRIKE DMG: 900");
+    feed(40, "NON-STRIKE DMG: 0");
+    feed(44, "ECLIPTICA - now in intermission");
+    let now = crate::game::event::split_line(&line(50, "x")).unwrap().ts;
+    (gs, now)
+}
+
 fn out_dir() -> std::path::PathBuf {
     let tag = std::env::var("EHUD_TOUR").unwrap_or_else(|_| "after".to_string());
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -100,6 +126,7 @@ fn state_gs(kind: u8) -> GameState {
     match kind {
         0 => tour_gs(false, 60).0,
         1 => tour_gs(true, 60).0,
+        3 => inter_gs().0,
         _ => GameState::default(),
     }
 }
@@ -120,6 +147,14 @@ fn main_states() -> Vec<(&'static str, u8, Frame)> {
     };
     vec![
         ("main_fight", 0, live()),
+        (
+            "main_intermission",
+            3,
+            Frame {
+                now: inter_gs().1,
+                ..frame()
+            },
+        ),
         (
             "main_fight_you_muted",
             1,
@@ -176,6 +211,48 @@ fn main_states() -> Vec<(&'static str, u8, Frame)> {
             },
         ),
         (
+            "main_settings_usage_sending",
+            0,
+            Frame {
+                settings_open: true,
+                usage_on: true,
+                hover: Some(Hit::Usage),
+                tip: Some(Hit::Usage),
+                ..live()
+            },
+        ),
+        (
+            "main_settings_usage_failing",
+            0,
+            Frame {
+                settings_open: true,
+                usage_on: true,
+                usage_failing: true,
+                hover: Some(Hit::Usage),
+                tip: Some(Hit::Usage),
+                ..live()
+            },
+        ),
+        (
+            "main_settings_scale_max",
+            0,
+            Frame {
+                settings_open: true,
+                scale: MAX_SCALE,
+                ..live()
+            },
+        ),
+        (
+            "main_settings_scale_capped",
+            0,
+            Frame {
+                settings_open: true,
+                scale: 1.6,
+                scale_max: 1.6,
+                ..live()
+            },
+        ),
+        (
             "main_history",
             0,
             Frame {
@@ -210,6 +287,31 @@ fn main_states() -> Vec<(&'static str, u8, Frame)> {
                 group_pages: 0,
                 update: Badge::Ready("v2026.10.29.0".to_string()),
                 prompt: true,
+                ..live()
+            },
+        ),
+        (
+            "main_ask_usage",
+            2,
+            Frame {
+                env: Env::InWorld,
+                view_run: None,
+                view_group: None,
+                group_pages: 0,
+                ask_usage: true,
+                ..live()
+            },
+        ),
+        (
+            "main_ask_usage_hover",
+            2,
+            Frame {
+                env: Env::InWorld,
+                view_run: None,
+                view_group: None,
+                group_pages: 0,
+                hover: Some(Hit::UsageYes),
+                ask_usage: true,
                 ..live()
             },
         ),
@@ -259,6 +361,21 @@ fn write_ui_tour() {
             vr: false,
         });
         save(&r, &format!("party_hover_toggle{sfx}"));
+        let p = PartyPane {
+            rows: Vec::new(),
+            fight: None,
+            link: crate::relay::Link::Taken,
+            ..pane(Vec::new())
+        };
+        let mut r = Renderer::new(dpi, PARTY_W, PARTY_H);
+        r.draw_party(&PartyView {
+            pane: &p,
+            hover: Some(PartyHit::Status),
+            pressed: None,
+            tip: Some(PartyHit::Status),
+            vr: false,
+        });
+        save(&r, &format!("party_taken_tip{sfx}"));
     }
 }
 
@@ -315,6 +432,33 @@ fn party_states() -> Vec<(&'static str, PartyPane)> {
         ("four", four.clone()),
         ("thirty_two", big),
         ("link_lost", lost),
+        (
+            "lost_empty",
+            PartyPane {
+                rows: Vec::new(),
+                fight: None,
+                link: crate::relay::Link::Retrying,
+                ..pane(Vec::new())
+            },
+        ),
+        (
+            "full_empty",
+            PartyPane {
+                rows: Vec::new(),
+                fight: None,
+                link: crate::relay::Link::Full,
+                ..pane(Vec::new())
+            },
+        ),
+        (
+            "taken_empty",
+            PartyPane {
+                rows: Vec::new(),
+                fight: None,
+                link: crate::relay::Link::Taken,
+                ..pane(Vec::new())
+            },
+        ),
         ("after_kill", down.clone()),
         (
             "hist_live",

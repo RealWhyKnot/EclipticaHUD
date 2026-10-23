@@ -25,6 +25,8 @@ pub enum Hit {
     UpdateNow,
     UpdateLater,
     UpdateSkip,
+    UsageYes,
+    UsageNo,
     Mute,
     Sound,
     RunPrev,
@@ -123,13 +125,13 @@ impl Info {
             (Info::Boss, true) => "The boss you are fighting, or the stage you are clearing",
             (Info::Boss, false) => "The boss of this fight, all of its phases together",
             (Info::Result, _) => {
-                "killed, lost (run ended with it alive) or unfinished, plus fight time"
+                "Killed, lost (run ended with it alive) or unfinished, plus fight time"
             }
-            (Info::Dealt(0), true) => "Damage per second over the stat window from settings",
+            (Info::Dealt(0), true) => "Damage per second over the stat window, or across the run",
             (Info::Dealt(0), false) => "All damage you dealt in this fight, across phases",
-            (Info::Dealt(1), true) => "Damage divided by the time in this fight, stage or run",
+            (Info::Dealt(1), true) => "Your DPS this fight or stage; between bosses, all run damage",
             (Info::Dealt(1), false) => "Your fight damage divided by the fight time",
-            (Info::Dealt(2), true) => "All damage you dealt in this fight, stage or run",
+            (Info::Dealt(2), true) => "Your damage this fight or stage; between bosses, kills out of fights",
             (Info::Dealt(2), false) => "How long the fight lasted",
             (Info::Dealt(_), _) => "",
             (Info::DealtGraph, _) => {
@@ -142,11 +144,11 @@ impl Info {
             }
             (Info::Taken(0), false) => "All damage you took in this fight or run",
             (Info::Taken(1), true) => {
-                "Taken per second this fight or stage; between bosses, the run total"
+                "Damage taken per second this fight or stage; between bosses, run total"
             }
             (Info::Taken(1), false) => "Damage taken divided by the fight or run time",
             (Info::Taken(2), true) => {
-                "All damage you took this fight or stage; between bosses, deaths"
+                "Damage you took this fight or stage; between bosses, run deaths"
             }
             (Info::Taken(2), false) => "How many times you were hit",
             (Info::Taken(_), _) => "",
@@ -165,10 +167,10 @@ impl Info {
                 "The attacks that hurt most and how often each hit; run deaths at right"
             }
             (Info::TopAttacks, false) => "The attacks that hurt most and how often each hit",
-            (Info::Vr, _) => "SteamVR wrist overlay: green when attached, red when failing",
-            (Info::LogDot, _) => "VRChat log: green while VRChat runs and its log is open",
+            (Info::Vr, _) => "SteamVR overlay: green when on, grey without SteamVR, red on errors",
+            (Info::LogDot, _) => "VRChat log: green while it's being read, amber while waiting for it",
             (Info::Target, _) => "Who the boss is after, and for how long",
-            (Info::Discord, _) => "Discord status: green showing, amber waiting, red refused",
+            (Info::Discord, _) => "Discord status: green showing, amber waiting, red refused, grey off",
             (Info::Version, _) => "Running version; a new release shows here when available",
         }
     }
@@ -182,6 +184,7 @@ pub struct TipCtx {
     pub log_open: bool,
     pub discord_on: bool,
     pub usage_on: bool,
+    pub usage_failing: bool,
     pub party_open: bool,
 }
 
@@ -199,16 +202,19 @@ impl Hit {
             Hit::ScaleUp => "Make the HUD bigger",
             Hit::AlphaDown => "Make the HUD more see-through",
             Hit::AlphaUp => "Make the HUD less see-through",
-            Hit::WindowDown => "Shorter window for the live DPS and damage taken",
-            Hit::WindowUp => "Longer window for the live DPS and damage taken",
+            Hit::WindowDown => "Average the live DPS and damage taken over fewer seconds",
+            Hit::WindowUp => "Average the live DPS and damage taken over more seconds",
             Hit::Party if c.party_open => "Close the shared damage window",
             Hit::Party => "Open the shared damage window",
             Hit::Discord if c.discord_on => {
                 "Showing this run as your Discord status; click to stop"
             }
             Hit::Discord => "Show your run as your Discord status, with a join link",
+            Hit::Usage if c.usage_failing => {
+                "Can't send fight data right now; the HUD tries again every 10 minutes"
+            }
             Hit::Usage if c.usage_on => {
-                "Sending boss and damage data, player names removed; click to stop"
+                "Sending boss and damage data with player names removed; click to stop"
             }
             Hit::Usage => "Send boss and damage data to improve the HUD; player names are removed",
             Hit::Log if c.log_open => "Close the event log window",
@@ -218,12 +224,14 @@ impl Hit {
             Hit::UpdateNow => "Download the new version and restart the HUD",
             Hit::UpdateLater => "Hide this for now; the update label in the corner brings it back",
             Hit::UpdateSkip => "Don't offer this version again",
+            Hit::UsageYes => "Start sending fight data; settings can turn it off",
+            Hit::UsageNo => "Don't send anything; settings can turn it on later",
             Hit::Mute | Hit::Sound if c.sound_on => {
                 "Mute the sound that plays when the boss targets you"
             }
             Hit::Mute | Hit::Sound => "Unmute the sound that plays when the boss targets you",
             Hit::RunPrev => "Show the previous run",
-            Hit::RunNext => "Show the next run; past the newest returns to live",
+            Hit::RunNext => "Show the next run, or the live run after the newest",
             Hit::FightPrev => "Show the previous boss fight of this run",
             Hit::FightNext => "Show the next boss fight of this run",
             Hit::Info(i) => i.tip(c.live),
@@ -250,6 +258,8 @@ impl Hit {
             Hit::UpdateNow => UPDATE_NOW_HIT,
             Hit::UpdateLater => UPDATE_LATER_HIT,
             Hit::UpdateSkip => UPDATE_SKIP_HIT,
+            Hit::UsageYes => USAGE_YES_HIT,
+            Hit::UsageNo => USAGE_NO_HIT,
             Hit::Mute => body(MUTE_HIT),
             Hit::RunPrev => body(RUN_PREV_HIT),
             Hit::RunNext => body(RUN_NEXT_HIT),
@@ -286,7 +296,7 @@ impl LogHit {
     pub fn tip(self) -> &'static str {
         match self {
             LogHit::Title => "Every hit you took and every aggro switch, newest first",
-            LogHit::Count => "Events in the current filter; a grey line marks a boss fight start",
+            LogHit::Count => "Events in this filter; a grey line marks where a boss fight starts",
             LogHit::Close => "Close the log (Esc)",
             LogHit::Tab(Filter::All) => "Show hits and aggro switches",
             LogHit::Tab(Filter::Damage) => "Show only damage you took",
@@ -418,6 +428,8 @@ impl Renderer {
                 (UPDATE_NOW_HIT, Hit::UpdateNow),
                 (UPDATE_LATER_HIT, Hit::UpdateLater),
                 (UPDATE_SKIP_HIT, Hit::UpdateSkip),
+                (USAGE_YES_HIT, Hit::UsageYes),
+                (USAGE_NO_HIT, Hit::UsageNo),
             ])
             .find(|(r, h)| ok(*h) && self.in_rect(*r, x, y))
             .map(|(_, h)| h)

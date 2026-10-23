@@ -170,6 +170,8 @@ impl Renderer {
         self.draw_footer(f);
         if f.prompt {
             self.draw_update_prompt(f);
+        } else if f.ask_usage {
+            self.draw_usage_prompt(f);
         }
         if f.warn_t < 1.0 {
             self.draw_token_warning(f, gs);
@@ -182,6 +184,7 @@ impl Renderer {
                 log_open: f.log_open,
                 discord_on: f.discord_on,
                 usage_on: f.usage_on,
+                usage_failing: f.usage_failing,
                 party_open: f.party_open,
             };
             self.tooltip(hit.rect(), hit.tip(ctx), LOGICAL_W, LOGICAL_H);
@@ -449,7 +452,7 @@ impl Renderer {
                         F_TINY,
                         DIM,
                         DT_RIGHT | DT_VCENTER,
-                        &format!("{got}/{total} tokens"),
+                        &format!("{got}/{}", fmt_count(total as usize, "token", "tokens")),
                     );
                 }
             }
@@ -473,8 +476,8 @@ impl Renderer {
                 self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "INTERMISSION");
                 let line = match run {
                     Some(r) => format!(
-                        "{} bosses down   {} in the run",
-                        r.kills(),
+                        "{} down   {} in the run",
+                        fmt_count(r.kills(), "boss", "bosses"),
                         fmt_dur(now.saturating_sub(r.start_ts))
                     ),
                     None => DASH.to_string(),
@@ -703,7 +706,7 @@ impl Renderer {
                 "SIZE",
                 format!("{}%", (f.scale * 100.0).round() as i32),
                 (Hit::ScaleDown, SCALE_DOWN_HIT, f.scale > MIN_SCALE + 0.001),
-                (Hit::ScaleUp, SCALE_UP_HIT, f.scale < MAX_SCALE - 0.001),
+                (Hit::ScaleUp, SCALE_UP_HIT, f.scale < f.scale_max - 0.001),
             ),
             (
                 "OPACITY",
@@ -740,6 +743,9 @@ impl Renderer {
             self.setting_label(rect.1, label);
             let word = if on { "On" } else { "Off" };
             self.text_button(rect, f.ctl(hit, !f.prompt, on), word);
+        }
+        if f.usage_failing {
+            self.dot(USAGE_HIT.0 - 16, USAGE_HIT.1 + 8, 8, AMBER);
         }
     }
 

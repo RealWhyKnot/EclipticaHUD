@@ -99,6 +99,10 @@ fn class_art(class: &str) -> Option<String> {
         .then(|| format!("class_{key}"))
 }
 
+fn count(n: u64, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 fn short(n: u64) -> String {
     match n {
         0..=9_999 => n.to_string(),
@@ -154,12 +158,12 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
         Mode::Intermission => {
             if let Some(r) = run {
                 let mut facts = vec![
-                    format!("{} bosses down", r.kills()),
+                    format!("{} down", count(r.kills() as u64, "boss", "bosses")),
                     format!("{} damage dealt", short(r.dmg())),
                     format!("{} damage taken", short(r.taken())),
                 ];
                 if r.deaths > 0 {
-                    facts.push(format!("{} deaths", r.deaths));
+                    facts.push(count(r.deaths.into(), "death", "deaths"));
                 }
                 facts.push(format!(
                     "{}m in the run",
@@ -190,17 +194,17 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
                 let s = &gs.stage_stats;
                 let mut facts = Vec::new();
                 if let Some((got, total)) = gs.tokens_shown() {
-                    facts.push(format!("Tokens {got}/{total}"));
+                    facts.push(format!("{got}/{}", count(total as u64, "token", "tokens")));
                 }
                 if let Some(n) = gs.stage_no {
                     facts.push(format!("Stage {n}"));
                 }
-                facts.push(format!("{} DPS clearing", short(gs.stage_dps(now))));
+                facts.push(format!("{} DPS while clearing", short(gs.stage_dps(now))));
                 facts.push(format!("{} damage dealt", short(s.dmg)));
                 facts.push(format!("{} damage taken", short(s.taken)));
-                facts.push(format!("{} hits taken", s.hits));
+                facts.push(format!("{} taken", count(s.hits.into(), "hit", "hits")));
                 if let Some(d) = run.map(|r| r.deaths).filter(|d| *d > 0) {
-                    facts.push(format!("{d} deaths"));
+                    facts.push(count(d.into(), "death", "deaths"));
                 }
                 if s.start_ts > 0 {
                     facts.push(format!("Clearing for {}m", gs.stage_secs(now) / 60));
@@ -212,11 +216,7 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
     };
     if gs.boss.is_some() {
         if let Some(d) = run.map(|r| r.deaths).filter(|d| *d > 0) {
-            state.push(if d == 1 {
-                "1 death".to_string()
-            } else {
-                format!("{d} deaths")
-            });
+            state.push(count(d.into(), "death", "deaths"));
         }
     }
     if gs.is_dead(now) {
@@ -367,15 +367,15 @@ mod tests {
         let states: Vec<String> = (0..8)
             .map(|i| json_str(&activity(&gs, now, i * CYCLE_SECS).unwrap(), "state").unwrap())
             .collect();
-        assert!(states.contains(&"Tokens 0/3".to_string()), "{states:?}");
+        assert!(states.contains(&"0/3 tokens".to_string()), "{states:?}");
         assert!(
             states.contains(&"300 damage dealt".to_string()),
             "{states:?}"
         );
         assert!(states.contains(&"8 damage taken".to_string()), "{states:?}");
-        assert!(states.contains(&"1 hits taken".to_string()), "{states:?}");
+        assert!(states.contains(&"1 hit taken".to_string()), "{states:?}");
         assert!(
-            states.iter().any(|s| s.ends_with(" DPS clearing")),
+            states.iter().any(|s| s.ends_with(" DPS while clearing")),
             "{states:?}"
         );
         assert_ne!(states[0], states[1]);
@@ -395,7 +395,7 @@ mod tests {
         let states: Vec<String> = (0..5)
             .map(|i| json_str(&activity(&gs, now, i * CYCLE_SECS).unwrap(), "state").unwrap())
             .collect();
-        assert!(states.contains(&"1 bosses down".to_string()), "{states:?}");
+        assert!(states.contains(&"1 boss down".to_string()), "{states:?}");
         assert!(
             states.contains(&"300 damage dealt".to_string()),
             "{states:?}"
@@ -436,7 +436,7 @@ mod tests {
         assert!(a.contains("\"details\":\"Balboa Ruins | Primal\""), "{a}");
         assert!(a.contains("\"state\":\"Stage 1\""), "{a}");
         let b = activity(&gs, now, 1_799_999_985).unwrap();
-        assert!(b.contains("\"state\":\"Tokens 1/3\""), "{b}");
+        assert!(b.contains("\"state\":\"1/3 tokens\""), "{b}");
         assert!(a.contains(&format!(
             "\"timestamps\":{{\"start\":{}}}",
             1_800_000_000 - (now - start)

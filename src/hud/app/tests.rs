@@ -3,7 +3,9 @@ use super::logwin::*;
 use super::settings::*;
 use super::tick::*;
 use super::*;
-use crate::hud::render::{MUTE_HIT, UPDATE_LATER_HIT, UPDATE_NOW_HIT, UPDATE_SKIP_HIT};
+use crate::hud::render::{
+    MUTE_HIT, UPDATE_LATER_HIT, UPDATE_NOW_HIT, UPDATE_SKIP_HIT, USAGE_NO_HIT, USAGE_YES_HIT,
+};
 use crate::hud::timeline;
 use crate::relay::proto::Totals;
 use std::io::Write as _;
@@ -76,6 +78,68 @@ const STAGE_A: &str =
     "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Blade";
 const STAGE_B: &str =
     "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Twinmage";
+
+#[test]
+fn scale_fits_the_screen() {
+    assert_eq!(fit_scale(96, (LOGICAL_W, LOGICAL_H), (1920, 1040)), 1.6);
+    assert_eq!(
+        fit_scale(96, (LOGICAL_W, LOGICAL_H), (3440, 1400)),
+        MAX_SCALE
+    );
+    assert_eq!(fit_scale(144, (LOGICAL_W, LOGICAL_H), (1920, 1040)), 1.0);
+    assert_eq!(fit_scale(96, (LOGICAL_W, LOGICAL_H), (200, 200)), MIN_SCALE);
+    for dpi in [96, 120, 144, 168, 192] {
+        for work in [(1280, 680), (1920, 1040), (2560, 1400), (3440, 1400)] {
+            let s = fit_scale(dpi, (LOGICAL_W, LOGICAL_H), work);
+            let r = Renderer::new((dpi as f32 * s).round() as u32, LOGICAL_W, LOGICAL_H);
+            assert!(s <= MIN_SCALE || r.height <= work.1, "{dpi} {work:?} {s}");
+            if s < MAX_SCALE {
+                let up = ((s + 0.1) * 10.0).round() / 10.0;
+                let r = Renderer::new((dpi as f32 * up).round() as u32, LOGICAL_W, LOGICAL_H);
+                assert!(r.height > work.1 || r.width > work.0, "{dpi} {work:?} {up}");
+            }
+        }
+    }
+}
+
+#[test]
+fn scale_stops_where_the_screen_ends() {
+    let mut app = headless();
+    let base = app.renderer.height;
+    app.activate(Hit::Settings);
+    app.set_scale(MAX_SCALE);
+    assert!(app.set_scale_cap(1.6));
+    assert_eq!(app.scale, MAX_SCALE);
+    assert!((app.shown_scale() - 1.6).abs() < 0.001);
+    assert_eq!(
+        app.renderer.height,
+        Renderer::new(154, LOGICAL_W, LOGICAL_H).height
+    );
+    assert!(!app.hit_enabled(Hit::ScaleUp));
+    assert!(!app.activate(Hit::ScaleUp));
+    assert!(app.activate(Hit::ScaleDown));
+    assert!((app.scale - 1.5).abs() < 0.001);
+    assert!(app.activate(Hit::ScaleUp));
+    assert!((app.scale - 1.6).abs() < 0.001);
+    assert!(!app.set_scale_cap(1.8));
+    app.set_scale(MAX_SCALE);
+    assert!(app.set_scale_cap(MAX_SCALE));
+    assert_eq!(app.renderer.height, base * 2);
+    assert!(!app.set_scale_cap(MAX_SCALE));
+}
+
+#[test]
+fn each_window_keeps_its_own_dpi() {
+    let mut app = headless();
+    app.log.dpi = 144;
+    app.rescale();
+    assert_eq!(app.renderer.width, LOGICAL_W);
+    assert_eq!(app.log.renderer.width, LOG_W * 3 / 2);
+    assert_eq!(app.party_win.renderer.width, PARTY_W);
+    app.set_scale(2.0);
+    assert_eq!(app.log.renderer.width, LOG_W * 3);
+    assert_eq!(app.party_win.renderer.width, PARTY_W * 2);
+}
 
 #[test]
 fn settings_steps_and_clamps() {
@@ -602,6 +666,58 @@ fn update_prompt_is_modal_and_waits_for_boss_fights() {
     app.badge = Badge::Failed("v2026.10.29.0".into());
     assert_eq!(app.enabled_hit(nx, ny), Some(Hit::UpdateNow));
     assert_eq!(app.enabled_hit(sx, sy), None);
+}
+
+#[test]
+fn usage_question_waits_its_turn_and_saves_the_answer() {
+    let at = |r: (i32, i32, i32, i32)| (r.0 + r.2 / 2, r.1 + r.3 / 2);
+    let (yx, yy) = at(USAGE_YES_HIT);
+    let (nx, ny) = at(USAGE_NO_HIT);
+    let mut app = headless();
+    assert!(!app.usage_prompt_shown());
+    assert_ne!(app.enabled_hit(yx, yy), Some(Hit::UsageYes));
+    app.usage_ask = true;
+    assert!(app.usage_prompt_shown());
+    assert_eq!(app.enabled_hit(yx, yy), Some(Hit::UsageYes));
+    assert_eq!(app.enabled_hit(nx, ny), Some(Hit::UsageNo));
+    assert_eq!(app.enabled_hit(LOGICAL_W - 1, 0), Some(Hit::Close));
+    assert_eq!(app.enabled_hit(210, 10), Some(Hit::Party));
+    assert_eq!(app.enabled_hit(240, 10), None);
+    for h in [
+        Hit::Settings,
+        Hit::Usage,
+        Hit::RunPrev,
+        Hit::Info(Info::Boss),
+    ] {
+        assert!(!app.hit_enabled(h));
+    }
+    app.badge = Badge::Ready("v2026.10.29.0".into());
+    app.activate(Hit::Update);
+    assert!(app.prompt_shown());
+    assert!(!app.usage_prompt_shown());
+    assert!(!app.hit_enabled(Hit::UsageYes));
+    app.activate(Hit::UpdateLater);
+    assert!(app.usage_prompt_shown());
+    app.gs.feed(&format!(
+        "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"
+    ));
+    assert!(!app.usage_prompt_shown());
+    assert_ne!(app.enabled_hit(yx, yy), Some(Hit::UsageYes));
+    app.gs
+        .feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
+    assert!(app.usage_prompt_shown());
+    assert!(app.activate(Hit::UsageYes));
+    assert!(app.usage_on);
+    assert!(!app.usage_ask);
+    assert!(!app.usage_prompt_shown());
+
+    let mut app = headless();
+    app.usage_ask = true;
+    assert!(app.activate(Hit::UsageNo));
+    assert!(!app.usage_on);
+    assert!(!app.usage_ask);
+    assert!(!crate::usage::ON.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(app.hit_enabled(Hit::Settings));
 }
 
 mod party_tests {

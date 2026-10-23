@@ -8,10 +8,14 @@ mod window;
 
 use crate::history::History;
 use crate::hud::app::App;
-use crate::hud::app::WINDOW_STEPS;
-use crate::hud::render::{Hit, LogHit, PartyHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
+use crate::hud::app::{fit_scale, WINDOW_STEPS};
+use crate::hud::render::{
+    Hit, LogHit, PartyHit, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W, MAX_ALPHA, MAX_SCALE,
+    MIN_ALPHA, MIN_SCALE, PARTY_H, PARTY_W,
+};
 use crate::update;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Graphics::Dwm::*;
 use windows_sys::Win32::Graphics::Gdi::*;
@@ -54,6 +58,7 @@ pub fn run() {
         app.set_history(data_file("history.db").and_then(|p| History::open(&p)));
         app.backfill_history();
         app.set_usage(load_usage(), false);
+        app.usage_ask = !usage_answered();
         crate::usage::spawn(data_file("history.db"));
         if load_discord() {
             app.set_discord(true);
@@ -84,9 +89,7 @@ pub fn run() {
         pc.lpszClassName = party_class.as_ptr();
         RegisterClassW(&pc);
 
-        let (x, y) = load_pos("pos.txt")
-            .map(|(x, y, _)| (x, y))
-            .unwrap_or_else(|| default_pos(w, h));
+        let (x, y) = saved_pos("pos.txt", w, h).unwrap_or_else(|| default_pos(w, h));
         let title = wide("Ecliptica HUD");
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_APPWINDOW | WS_EX_LAYERED,
@@ -107,6 +110,7 @@ pub fn run() {
 
         app.tick();
         app.render();
+        fit_windows(&mut app, hwnd);
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         sync_topmost(hwnd);
         SetTimer(hwnd, TIMER_ID, 1000, None);
