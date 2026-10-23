@@ -1,4 +1,5 @@
-use super::hit::{Hit, LogHit};
+use super::hit::{Hit, LogHit, PartyHit};
+use super::Ctl;
 use crate::discord::Link;
 use crate::hud::timeline::Filter;
 use crate::relay::party::PartyRow;
@@ -43,7 +44,7 @@ pub struct Frame {
     pub sound_on: bool,
     pub discord: Link,
     pub discord_on: bool,
-    pub party_on: bool,
+    pub party_open: bool,
     pub view_run: Option<usize>,
     pub view_group: Option<usize>,
     pub group_pages: usize,
@@ -64,6 +65,10 @@ impl Frame {
         self.pressed == Some(h)
     }
 
+    pub(super) fn ctl(&self, h: Hit, enabled: bool, on: bool) -> Ctl {
+        Ctl::of(enabled, on, self.hov(h), self.prs(h))
+    }
+
     pub(super) fn empty(&self) -> bool {
         self.live() && (self.env != Env::InWorld || self.view_run.is_none())
     }
@@ -78,32 +83,42 @@ pub struct LogView {
     pub slide: f32,
     pub tip: Option<LogHit>,
     pub thumb: Option<(i32, i32)>,
-    pub party: PartyPane,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, PartialEq, Eq, Debug)]
+pub struct PartyFight {
+    pub name: String,
+    pub secs: u64,
+    pub live: bool,
+    pub down: bool,
+}
+
+#[derive(Default, Clone, PartialEq, Eq, Debug)]
 pub struct PartyPane {
     pub on: bool,
+    pub ready: bool,
     pub link: crate::relay::Link,
+    pub here: usize,
+    pub fight: Option<PartyFight>,
     pub rows: Vec<PartyRow>,
 }
 
 impl PartyPane {
-    pub fn shown(&self) -> &[PartyRow] {
-        if self.on && self.rows.iter().any(|r| !r.you) {
-            &self.rows
-        } else {
-            &[]
-        }
+    pub fn you(&self) -> Option<usize> {
+        self.rows.iter().position(|r| r.you)
     }
+}
 
-    pub fn status(&self) -> &'static str {
-        use crate::relay::Link as L;
-        match (self.on, self.link) {
-            (false, _) => "sharing off",
-            (true, L::Connected) => "connected",
-            (true, L::Connecting) => "connecting",
-            (true, L::Off | L::Retrying) => "not connected",
-        }
+pub struct PartyView<'a> {
+    pub pane: &'a PartyPane,
+    pub hover: Option<PartyHit>,
+    pub pressed: Option<PartyHit>,
+    pub tip: Option<PartyHit>,
+    pub vr: bool,
+}
+
+impl PartyView<'_> {
+    pub(super) fn ctl(&self, h: PartyHit, on: bool) -> Ctl {
+        Ctl::of(true, on, self.hover == Some(h), self.pressed == Some(h))
     }
 }

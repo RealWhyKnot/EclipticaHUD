@@ -170,6 +170,7 @@ impl Renderer {
                 sound_on: f.sound_on,
                 log_open: f.log_open,
                 discord_on: f.discord_on,
+                party_open: f.party_open,
             };
             self.tooltip(hit.rect(), hit.tip(ctx), LOGICAL_W, LOGICAL_H);
         }
@@ -199,34 +200,24 @@ impl Renderer {
             DT_LEFT | DT_VCENTER,
             "ECLIPTICA HUD",
         );
+        let free = !f.prompt;
         self.glyph_button(
-            PIN_BTN,
-            f.hov(Hit::Pin),
-            f.prs(Hit::Pin),
-            f.topmost,
-            if f.topmost { GLYPH_PIN } else { GLYPH_UNPIN },
-        );
-        self.glyph_button(
-            LOG_BTN,
-            f.hov(Hit::Log),
-            f.prs(Hit::Log),
-            f.log_open,
-            GLYPH_LOG,
+            PARTY_BTN,
+            f.ctl(Hit::Party, true, f.party_open),
+            GLYPH_PARTY,
         );
         self.glyph_button(
             SETTINGS_BTN,
-            f.hov(Hit::Settings),
-            f.prs(Hit::Settings),
-            f.settings_open,
+            f.ctl(Hit::Settings, free, f.settings_open),
             GLYPH_SETTINGS,
         );
         self.glyph_button(
-            CLOSE_BTN,
-            f.hov(Hit::Close),
-            f.prs(Hit::Close),
-            false,
-            GLYPH_CLOSE,
+            PIN_BTN,
+            f.ctl(Hit::Pin, true, false),
+            if f.topmost { GLYPH_PIN } else { GLYPH_UNPIN },
         );
+        self.glyph_button(LOG_BTN, f.ctl(Hit::Log, true, f.log_open), GLYPH_LOG);
+        self.glyph_button(CLOSE_BTN, f.ctl(Hit::Close, true, false), GLYPH_CLOSE);
     }
 
     fn draw_status(&self, f: &Frame, gs: &GameState) {
@@ -275,18 +266,15 @@ impl Renderer {
     }
 
     fn draw_run_pager(&self, f: &Frame, gs: &GameState) {
-        self.arrow(
+        let free = !f.prompt;
+        self.glyph_button(
             RUN_PREV_HIT,
-            f.view_page > 0,
-            f.hov(Hit::RunPrev),
-            f.prs(Hit::RunPrev),
+            f.ctl(Hit::RunPrev, free && f.view_page > 0, false),
             GLYPH_PREV,
         );
-        self.arrow(
+        self.glyph_button(
             RUN_NEXT_HIT,
-            f.run_sel,
-            f.hov(Hit::RunNext),
-            f.prs(Hit::RunNext),
+            f.ctl(Hit::RunNext, free && f.run_sel, false),
             GLYPH_NEXT,
         );
         let (run_label, run_color) = match f.view_run {
@@ -356,18 +344,16 @@ impl Renderer {
         };
         self.text(M + 12, 88, W - 24, F_LABEL, DIM, DT_LEFT, card_label);
         if has_fights {
-            self.arrow(
+            let free = !f.prompt && !f.settings_open;
+            let back = f.view_group.map_or(f.group_pages > 1, |i| i > 0);
+            self.glyph_button(
                 FIGHT_PREV_HIT,
-                f.view_group.map_or(f.group_pages > 1, |i| i > 0),
-                f.hov(Hit::FightPrev),
-                f.prs(Hit::FightPrev),
+                f.ctl(Hit::FightPrev, free && back, false),
                 GLYPH_PREV,
             );
-            self.arrow(
+            self.glyph_button(
                 FIGHT_NEXT_HIT,
-                f.group_sel,
-                f.hov(Hit::FightNext),
-                f.prs(Hit::FightNext),
+                f.ctl(Hit::FightNext, free && f.group_sel, false),
                 GLYPH_NEXT,
             );
             let idx = format!(
@@ -397,14 +383,13 @@ impl Renderer {
                 } else {
                     self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "TARGET");
                 }
-                let mut right = W - 24;
-                if !f.sound_on {
-                    self.text(M + 12, 114, right, F_GLYPH, DIM, DT_RIGHT, GLYPH_MUTE);
-                    right -= 20;
-                }
+                let glyph = if f.sound_on { GLYPH_VOLUME } else { GLYPH_MUTE };
+                let free = !f.prompt && !f.settings_open;
+                self.glyph_button(MUTE_HIT, f.ctl(Hit::Mute, free, false), glyph);
                 let pn = phase_num(boss);
                 if pn > 1 {
                     let hint = format!("phase {pn}");
+                    let right = MUTE_HIT.0 - 8 - (M + 12);
                     self.text(M + 12, 114, right, F_TINY, DIM, DT_RIGHT, &hint);
                 }
                 let color = if mine {
@@ -414,11 +399,6 @@ impl Renderer {
                 };
                 match target {
                     Some(t) => {
-                        if f.hov(Hit::Target) || f.prs(Hit::Target) {
-                            let (tx, ty, tw, th) = TARGET_HIT;
-                            let tint = if f.prs(Hit::Target) { ACCENT } else { CARD_HI };
-                            self.rround(tx - 6, ty - 2, tw + 6, th, 6, tint);
-                        }
                         self.text(M + 12, 128, W - 24, F_BIG, color, DT_LEFT, t);
                         let held = now.saturating_sub(gs.target_since);
                         self.text_rect(
@@ -690,8 +670,9 @@ impl Renderer {
     }
 
     fn draw_settings(&self, f: &Frame) {
-        self.rround(M, 82, W, 184, 8, CARD_HI);
-        let rows = [
+        let (cx, cy, cw, ch) = SETTINGS_CARD;
+        self.rround(cx, cy, cw, ch, 8, CARD_HI);
+        let steppers = [
             (
                 "SIZE",
                 format!("{}%", (f.scale * 100.0).round() as i32),
@@ -711,48 +692,41 @@ impl Renderer {
                 (Hit::WindowUp, WINDOW_UP_HIT, f.window < MAX_WINDOW),
             ),
         ];
-        for (label, value, down, up) in rows {
+        let (vx, vw) = SETTING_VALUE;
+        for (label, value, down, up) in steppers {
             let y = down.1 .1;
-            self.text_rect(
-                M + 12,
-                y,
-                150,
-                24,
-                F_LABEL,
-                DIM,
-                DT_LEFT | DT_VCENTER,
-                label,
-            );
-            self.text_rect(226, y, 80, 24, F_BOSS, TEXT, DT_CENTER | DT_VCENTER, &value);
+            self.setting_label(y, label);
+            self.text_rect(vx, y, vw, 24, F_BOSS, TEXT, DT_CENTER | DT_VCENTER, &value);
             for (hit, rect, on) in [down, up] {
                 let glyph = if hit == down.0 {
                     GLYPH_MINUS
                 } else {
                     GLYPH_PLUS
                 };
-                self.arrow(rect, on, f.hov(hit), f.prs(hit), glyph);
+                self.glyph_button(rect, f.ctl(hit, on && !f.prompt, false), glyph);
             }
         }
-        let (px, py, pw, ph) = PARTY_HIT;
+        for (label, hit, rect, on) in [
+            ("AGGRO SOUND", Hit::Sound, SOUND_HIT, f.sound_on),
+            ("DISCORD STATUS", Hit::Discord, DISCORD_HIT, f.discord_on),
+        ] {
+            self.setting_label(rect.1, label);
+            let word = if on { "On" } else { "Off" };
+            self.text_button(rect, f.ctl(hit, !f.prompt, on), word);
+        }
+    }
+
+    fn setting_label(&self, y: i32, label: &str) {
         self.text_rect(
             M + 12,
-            py,
-            150,
-            ph,
+            y,
+            SCALE_DOWN_HIT.0 - M - 20,
+            24,
             F_LABEL,
             DIM,
             DT_LEFT | DT_VCENTER,
-            "PARTY SHARING",
+            label,
         );
-        let (bg, fg) = match (f.party_on, f.hov(Hit::Party) || f.prs(Hit::Party)) {
-            (true, false) => (ACCENT, BG),
-            (true, true) => (mix(ACCENT, TEXT, 0.2), BG),
-            (false, true) => (BG, TEXT),
-            (false, false) => (CARD, DIM),
-        };
-        self.rround(px, py, pw, ph, 6, bg);
-        let label = if f.party_on { "On" } else { "Off" };
-        self.text_rect(px, py, pw, ph, F_LABEL, fg, DT_CENTER | DT_VCENTER, label);
     }
 
     fn draw_taken_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
@@ -884,18 +858,32 @@ impl Renderer {
             (true, Link::Connected) => GOOD,
             (true, Link::Rejected) => DANGER,
         };
-        let (dx, _, _, _) = DISCORD_HIT;
+        let (dx, _, _, _) = DISCORD_DOT;
         self.dot(dx + 4, fy + 4, 8, discord_color);
-        let label = if f.hov(Hit::Discord) { TEXT } else { DIM };
-        self.text(dx + 18, fy, 60, F_TINY, label, DT_LEFT, "DISCORD");
+        self.text(dx + 18, fy, 60, F_TINY, DIM, DT_LEFT, "DISCORD");
         let (utext, ucolor) = match &f.update {
+            Badge::Ready(_) if f.prompt => (VERSION.to_string(), DIM),
             Badge::None => (VERSION.to_string(), DIM),
             Badge::Ready(tag) => (format!("update {tag}"), ACCENT),
             Badge::Installing(_) => ("updating".to_string(), AMBER),
             Badge::Failed(_) => ("update failed".to_string(), DANGER),
         };
-        let ucolor = if f.hov(Hit::Update) { TEXT } else { ucolor };
-        self.text(M, fy, W, F_TINY, ucolor, DT_RIGHT, &utext);
+        if matches!(f.update, Badge::Ready(_)) && !f.prompt {
+            let color = if f.hov(Hit::Update) { TEXT } else { ucolor };
+            let x = UPDATE_HIT.0;
+            self.link(
+                x,
+                fy - 3,
+                LOGICAL_W - M - x,
+                20,
+                F_TINY,
+                color,
+                DT_RIGHT,
+                &utext,
+            );
+        } else {
+            self.text(M, fy, W, F_TINY, ucolor, DT_RIGHT, &utext);
+        }
     }
 
     fn draw_token_warning(&self, f: &Frame, gs: &GameState) {

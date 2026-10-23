@@ -10,7 +10,6 @@ pub enum Filter {
     All,
     Damage,
     Targets,
-    Party,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -59,7 +58,7 @@ pub fn of_run(r: &Run) -> Source<'_> {
 }
 
 pub fn timeline(src: Option<Source<'_>>, filter: Filter) -> Vec<Row<'_>> {
-    let Some(src) = src.filter(|_| filter != Filter::Party) else {
+    let Some(src) = src else {
         return Vec::new();
     };
     let mut hits = src.hits.iter().rev().peekable();

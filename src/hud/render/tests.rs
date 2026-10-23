@@ -9,7 +9,7 @@ use crate::update::Badge;
 use crate::vr::VrStatus;
 use windows_sys::Win32::Graphics::Gdi::*;
 
-fn frame() -> Frame {
+pub(super) fn frame() -> Frame {
     Frame {
         now: 0,
         env: Env::InWorld,
@@ -41,7 +41,7 @@ fn frame() -> Frame {
         sound_on: true,
         discord: Link::Off,
         discord_on: false,
-        party_on: false,
+        party_open: false,
         view_run: Some(0),
         view_group: Some(0),
         group_pages: 1,
@@ -87,6 +87,7 @@ fn toolbar_ink_gaps() {
     let r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
     r.fill(0, 0, LOGICAL_W, LOGICAL_H, BG);
     let buttons = [
+        (PARTY_BTN, GLYPH_PARTY),
         (SETTINGS_BTN, GLYPH_SETTINGS),
         (PIN_BTN, GLYPH_PIN),
         (LOG_BTN, GLYPH_LOG),
@@ -94,7 +95,7 @@ fn toolbar_ink_gaps() {
     ];
     let mut spans = Vec::new();
     for (b, g) in buttons {
-        r.glyph_button(b, false, false, false, g);
+        r.glyph_button(b, Ctl::Rest, g);
         unsafe { GdiFlush() };
         let (bx, by, bw, bh) = b;
         let inked = |x: i32| (by..by + bh).any(|y| pix(&r, x, y) != BG);
@@ -118,7 +119,7 @@ fn footer_text_fits_its_regions() {
     let region = |i: Info| INFO_REGIONS.iter().find(|(j, _)| *j == i).unwrap().1;
     let (vx, _, vw, _) = region(Info::Vr);
     let (lx, _, lw, _) = region(Info::LogDot);
-    let (dx, _, dw, _) = DISCORD_HIT;
+    let (dx, _, dw, _) = DISCORD_DOT;
     assert!(end(28, "STEAMVR") <= vx + vw);
     assert!(end(104, "LOG") <= lx + lw);
     assert!(lx + lw <= dx);
@@ -149,17 +150,33 @@ fn easing() {
     assert_eq!(lerp(2.0, 6.0, 1.0), 6.0);
 }
 
+fn settings_hit(h: Hit) -> bool {
+    matches!(
+        h,
+        Hit::ScaleDown
+            | Hit::ScaleUp
+            | Hit::AlphaDown
+            | Hit::AlphaUp
+            | Hit::WindowDown
+            | Hit::WindowUp
+            | Hit::Sound
+            | Hit::Discord
+    )
+}
+
 #[test]
 fn hit_test_regions() {
     let r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
-    let (tx, ty, tw, th) = TARGET_HIT;
+    let closed = |x, y| r.hit_test_where(x, y, |h| !settings_hit(h));
+    let (tx, ty, tw, th) = MUTE_HIT;
     assert!(tx >= 14 && tx + tw <= LOGICAL_W - 14);
     assert!(ty >= 82 && ty + th <= 178);
-    assert_eq!(r.hit_test(tx, ty), Some(Hit::Target));
-    assert_eq!(r.hit_test(tx + tw - 1, ty + th - 1), Some(Hit::Target));
-    assert_eq!(r.hit_test(tx - 1, ty), None);
-    assert_eq!(r.hit_test(tx, ty + th), None);
-    assert_eq!(r.hit_test(tx + tw, ty), None);
+    assert_eq!(closed(tx, ty), Some(Hit::Mute));
+    assert_eq!(closed(tx + tw - 1, ty + th - 1), Some(Hit::Mute));
+    assert_ne!(closed(tx - 1, ty), Some(Hit::Mute));
+    assert_ne!(closed(tx, ty + th), Some(Hit::Mute));
+    assert_eq!(closed(tx + tw, ty), None);
+    assert_eq!(closed(200, 140), Some(Hit::Info(Info::Result)));
     assert_eq!(r.hit_test(LOGICAL_W - 1, 0), Some(Hit::Close));
     assert_eq!(r.hit_test(324, 35), Some(Hit::Close));
     assert_eq!(r.hit_test(323, 35), Some(Hit::Log));
@@ -168,8 +185,11 @@ fn hit_test_regions() {
     assert_eq!(r.hit_test(260, 35), Some(Hit::Pin));
     assert_eq!(r.hit_test(259, 0), Some(Hit::Settings));
     assert_eq!(r.hit_test(228, 35), Some(Hit::Settings));
-    assert_eq!(r.hit_test(227, 0), None);
+    assert_eq!(r.hit_test(227, 0), Some(Hit::Party));
+    assert_eq!(r.hit_test(196, 35), Some(Hit::Party));
+    assert_eq!(r.hit_test(195, 0), None);
     assert_eq!(SETTINGS_HIT.0 + SETTINGS_HIT.2, PIN_HIT.0);
+    assert_eq!(PARTY_HIT.0 + PARTY_HIT.2, SETTINGS_HIT.0);
     for (rect, hit) in [
         (SCALE_DOWN_HIT, Hit::ScaleDown),
         (SCALE_UP_HIT, Hit::ScaleUp),
@@ -177,12 +197,16 @@ fn hit_test_regions() {
         (ALPHA_UP_HIT, Hit::AlphaUp),
         (WINDOW_DOWN_HIT, Hit::WindowDown),
         (WINDOW_UP_HIT, Hit::WindowUp),
-        (PARTY_HIT, Hit::Party),
+        (SOUND_HIT, Hit::Sound),
+        (DISCORD_HIT, Hit::Discord),
     ] {
         let (x, y, w, h) = rect;
+        assert!(settings_hit(hit));
         assert_eq!(r.hit_test(x, y), Some(hit));
         assert_eq!(r.hit_test(x + w - 1, y + h - 1), Some(hit));
-        assert!(x >= 14 && x + w <= LOGICAL_W - 14 && y >= 82 && y + h <= 266);
+        let (cx, cy, cw, ch) = SETTINGS_CARD;
+        assert!(x >= cx + 12 && x + w <= cx + cw - 12, "{hit:?}");
+        assert!(y >= cy + 12 && y + h <= cy + ch - 12, "{hit:?}");
     }
     let (px_, py_, pw_, ph_) = PIN_BTN;
     let (hx_, hy_, hw_, hh_) = PIN_HIT;
@@ -191,10 +215,11 @@ fn hit_test_regions() {
     assert_eq!(r.hit_test(323, 36), Some(Hit::Info(Info::Status)));
     assert_eq!(r.hit_test(230, LOGICAL_H - 32), Some(Hit::Update));
     assert_eq!(r.hit_test(229, LOGICAL_H - 1), None);
-    let (dx, dy, dw, dh) = DISCORD_HIT;
-    assert_eq!(r.hit_test(dx, dy), Some(Hit::Discord));
-    assert_eq!(r.hit_test(dx + dw - 1, dy + dh - 1), Some(Hit::Discord));
-    assert_ne!(r.hit_test(dx + dw, dy), Some(Hit::Discord));
+    let (dx, dy, dw, dh) = DISCORD_DOT;
+    let dot = Some(Hit::Info(Info::Discord));
+    assert_eq!(r.hit_test(dx, dy), dot);
+    assert_eq!(r.hit_test(dx + dw - 1, dy + dh - 1), dot);
+    assert_ne!(r.hit_test(dx + dw, dy), dot);
     assert!(dx + dw <= UPDATE_HIT.0);
     for (rect, hit) in [
         (RUN_PREV_HIT, Hit::RunPrev),
@@ -282,7 +307,7 @@ fn draw_smoke_bars() {
     assert_eq!(pix(&r, 300, 49), CARD);
     assert_eq!(pix(&r, 100, 250), mix(CARD, BG, 0.55));
     assert_eq!(pix(&r, 20, 90), CARD);
-    assert_eq!(pix(&r, 336, 11), CARD_HI);
+    assert_eq!(pix(&r, 336, 11), CTRL_HOVER);
     assert_eq!(pix(&r, 20, 340), CARD);
     assert_eq!(pix(&r, 100, 437), DANGER);
     assert_eq!(pix(&r, 300, 437), BG);
@@ -363,7 +388,7 @@ fn draw_smoke_bars() {
     };
     r.draw_main(&gs, &flashing);
     assert_ne!(pix(&r, 20, 340), CARD);
-    assert_eq!(pix(&r, 304, 11), CARD_HI);
+    assert_eq!(pix(&r, 304, 11), CTRL_HOVER);
 
     let group = Frame {
         run_sel: true,
@@ -421,7 +446,9 @@ fn draw_smoke_bars() {
         );
     }
     assert!(Hit::Log.clickable());
-    assert_eq!(r.hit_test(200, 30), Some(Hit::Info(Info::Status)));
+    assert_eq!(r.hit_test(150, 30), Some(Hit::Info(Info::Status)));
+    assert_eq!(r.hit_test(200, 30), Some(Hit::Party));
+    assert_eq!(r.hit_test(200, 40), Some(Hit::Info(Info::Status)));
     assert_eq!(r.hit_test(200, 295), Some(Hit::Info(Info::LastKill)));
     assert_eq!(r.hit_test(200, 250), Some(Hit::Info(Info::DealtGraph)));
     assert_eq!(r.hit_test(30, 200), Some(Hit::Info(Info::Dealt(0))));
@@ -432,9 +459,10 @@ fn draw_smoke_bars() {
         sound_on: false,
         log_open: true,
         discord_on: false,
+        party_open: false,
     };
     assert!(Hit::Pin.tip(ctx).contains("keep it on top"));
-    assert!(Hit::Discord.tip(ctx).starts_with("Click to show"));
+    assert!(Hit::Discord.tip(ctx).starts_with("Show your run"));
     assert!(Hit::Discord
         .tip(TipCtx {
             discord_on: true,
@@ -444,7 +472,15 @@ fn draw_smoke_bars() {
     assert!(Hit::Discord.tip(ctx).chars().count() <= 70);
     assert!(Hit::Settings.tip(ctx).chars().count() <= 70);
     assert!(Hit::ScaleUp.tip(ctx).contains("bigger"));
-    assert!(Hit::Target.tip(ctx).contains("unmute"));
+    assert!(Hit::Mute.tip(ctx).starts_with("Unmute"));
+    assert_eq!(Hit::Sound.tip(ctx), Hit::Mute.tip(ctx));
+    assert!(Hit::Party.tip(ctx).starts_with("Open"));
+    assert!(Hit::Party
+        .tip(TipCtx {
+            party_open: true,
+            ..ctx
+        })
+        .starts_with("Close"));
     assert!(Hit::Log.tip(ctx).starts_with("Close"));
     assert_eq!(
         r.hit_test_where(340, LOGICAL_H - 20, |h| h != Hit::Update),
@@ -465,7 +501,6 @@ fn draw_log_smoke() {
         slide: 0.0,
         tip: None,
         thumb: None,
-        party: PartyPane::default(),
     };
     r.draw_log(timeline::live(&gs), &lv);
     assert_eq!(pix(&r, 0, 0), BG);
@@ -492,7 +527,7 @@ fn draw_log_smoke() {
     lv.scroll = timeline::max_scroll(42, r.body_h());
     r.draw_log(timeline::live(&gs), &lv);
     assert_eq!(pix(&r, tx + 3, ty + 3), CARD);
-    assert_eq!(pix(&r, tx + 3, LOG_H - 12), CARD_HI);
+    assert_eq!(pix(&r, tx + 3, LOG_H - 12), EDGE);
     assert_eq!(pix(&r, bx + 1, by + 12), DANGER);
 }
 
@@ -672,7 +707,8 @@ fn update_prompt_covers_panel_below_status() {
     let (nx, ny, nw, nh) = UPDATE_NOW_HIT;
     let (lx, ly, lw, lh) = UPDATE_LATER_HIT;
     assert_eq!(pix(&r, nx + 6, ny + nh / 2), mix(BG, GOOD, 0.25));
-    assert_eq!(pix(&r, lx + 6, ly + lh / 2), mix(BG, DANGER, 0.25));
+    assert_eq!(pix(&r, lx + 6, ly + lh / 2), BG);
+    assert_eq!(pix(&r, lx, ly + lh / 2), EDGE);
     assert_eq!(nx - M, LOGICAL_W - M - (lx + lw));
     assert!(nx + nw < lx && ny == ly && nh == lh);
     assert_eq!(pix(&r, 180, PROMPT_T - 4), BG);
@@ -753,7 +789,7 @@ fn main_frame() -> Frame {
     }
 }
 
-fn party_row(
+pub(super) fn party_row(
     name: &str,
     you: bool,
     live: bool,
@@ -771,7 +807,7 @@ fn party_row(
     }
 }
 
-fn log_view(filter: Filter, party: PartyPane) -> LogView {
+pub(super) fn log_view(filter: Filter) -> LogView {
     LogView {
         scroll: 0.0,
         filter,
@@ -781,19 +817,26 @@ fn log_view(filter: Filter, party: PartyPane) -> LogView {
         slide: 0.0,
         tip: None,
         thumb: None,
-        party,
     }
 }
 
-fn pane(rows: Vec<PartyRow>) -> PartyPane {
+pub(super) fn pane(rows: Vec<PartyRow>) -> PartyPane {
     PartyPane {
         on: true,
+        ready: true,
         link: crate::relay::Link::Connected,
+        here: rows.len() + 2,
+        fight: Some(PartyFight {
+            name: "Ha'kli".to_string(),
+            secs: 83,
+            live: true,
+            down: false,
+        }),
         rows,
     }
 }
 
-fn sample_party() -> Vec<PartyRow> {
+pub(super) fn sample_party() -> Vec<PartyRow> {
     vec![
         party_row(
             "Be\u{430}r (Hands)",
@@ -803,8 +846,8 @@ fn sample_party() -> Vec<PartyRow> {
             Some(41),
             18_420,
         ),
-        party_row("you", true, true, 902_115, Some(29), 12_007),
-        party_row("Player 1", false, true, 610_002, Some(19), 9_880),
+        party_row("Me (Alt)", true, true, 902_115, Some(29), 12_007),
+        party_row("Unknown player 1", false, true, 610_002, Some(19), 9_880),
         party_row(
             "\u{6c17}\u{307e}\u{3050}\u{308c} Sora",
             false,
@@ -813,11 +856,11 @@ fn sample_party() -> Vec<PartyRow> {
             Some(7),
             3_120,
         ),
-        party_row("Player 2", false, true, 118_900, Some(4), 2_500),
+        party_row("Unknown player 2", false, true, 118_900, Some(4), 2_500),
     ]
 }
 
-fn stress_party(long_names: bool, long_numbers: bool) -> Vec<PartyRow> {
+pub(super) fn stress_party(long_names: bool, long_numbers: bool) -> Vec<PartyRow> {
     let scripts = ["W", "\u{6c17}", "\u{430}", "\u{1d04}", "m", "\u{5d0}"];
     (0..MAX_MEMBERS)
         .map(|i| {
@@ -839,16 +882,6 @@ fn stress_party(long_names: bool, long_numbers: bool) -> Vec<PartyRow> {
 use crate::relay::party::PartyRow;
 use crate::relay::proto::{MAX_DMG, MAX_MEMBERS};
 
-fn block(r: &Renderer, x0: i32, y0: i32, x1: i32, y1: i32) -> Vec<u32> {
-    let mut out = Vec::new();
-    for y in y0..y1 {
-        for x in x0..x1 {
-            out.push(pix(r, x, y));
-        }
-    }
-    out
-}
-
 #[test]
 fn log_tabs_fit_their_labels() {
     for dpi in [96, 120, 144, 192] {
@@ -861,13 +894,7 @@ fn log_tabs_fit_their_labels() {
                 r.px(w)
             );
         }
-        for status in [
-            "sharing off",
-            "connecting",
-            "connected",
-            "not connected",
-            "999 events",
-        ] {
+        for status in ["999 events", "nothing logged yet"] {
             assert!(
                 text_w(&r, F_TINY, status) <= r.px(LOG_COUNT.2),
                 "{status} at {dpi}"
@@ -878,107 +905,15 @@ fn log_tabs_fit_their_labels() {
     for (_, label, _, w) in LOG_TABS {
         assert_eq!(w - text_w(&r, F_LABEL, label), 14, "{label}");
     }
-    assert_eq!(LOG_TABS[0].2, LOG_COUNT.0 + LOG_COUNT.2 + 2);
+    assert!(LOG_TABS[0].2 >= LOG_COUNT.0 + LOG_COUNT.2 + 2);
+    let (_, _, lx, lw) = LOG_TABS[LOG_TABS.len() - 1];
+    assert_eq!(lx + lw, LOG_CLOSE_HIT.0 - 8);
     for pair in LOG_TABS.windows(2) {
         assert_eq!(pair[0].2 + pair[0].3 + 4, pair[1].2);
     }
     let last = LOG_TABS[LOG_TABS.len() - 1];
     assert!(last.2 + last.3 + 4 <= LOG_CLOSE_HIT.0);
     assert!(LOG_TABS.iter().all(|t| t.2 % 2 == 0 && t.3 % 2 == 0));
-}
-
-#[test]
-fn log_tab_hit_regions_cover_party() {
-    let r = Renderer::new(192, LOG_W, LOG_H);
-    let (_, _, x, w) = LOG_TABS[3];
-    assert_eq!(
-        r.log_hit_test(r.px(x), r.px(LOG_TAB_Y), None),
-        Some(LogHit::Tab(Filter::Party))
-    );
-    assert_eq!(
-        r.log_hit_test(r.px(x + w) - 1, r.px(LOG_TAB_Y + LOG_TAB_H) - 1, None),
-        Some(LogHit::Tab(Filter::Party))
-    );
-    assert_eq!(r.log_hit_test(r.px(x + w), r.px(LOG_TAB_Y), None), None);
-    assert_eq!(r.log_hit_test(r.px(x) - 1, r.px(LOG_TAB_Y), None), None);
-    assert!(LogHit::Tab(Filter::Party).clickable());
-    assert_ne!(
-        LogHit::Count.tip(Filter::Party),
-        LogHit::Count.tip(Filter::All)
-    );
-}
-
-#[test]
-fn party_settings_row() {
-    let gs = GameState::default();
-    let (px_, py_, pw, ph) = PARTY_HIT;
-    assert_eq!(py_, WINDOW_DOWN_HIT.1 + 44);
-    assert_eq!(px_, SCALE_DOWN_HIT.0 + SCALE_DOWN_HIT.2);
-    assert_eq!(px_ + pw, SCALE_UP_HIT.0);
-    assert!(py_ + ph <= 82 + 184 - 8);
-    for dpi in [96, 192] {
-        let mut r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
-        let at = |r: &Renderer, x: i32, y: i32| pix(r, r.px(x), r.px(y));
-        assert!(text_w(&r, F_LABEL, "PARTY SHARING") <= r.px(150));
-        assert!(r.px(M + 12) + text_w(&r, F_LABEL, "PARTY SHARING") < r.px(SCALE_DOWN_HIT.0));
-        assert!(text_w(&r, F_LABEL, "Off") + r.px(16) <= r.px(pw));
-        let base = Frame {
-            settings_open: true,
-            hover: None,
-            ..main_frame()
-        };
-        r.draw_main(&gs, &base);
-        assert_eq!(at(&r, px_ + 4, py_ + ph / 2), CARD, "off at {dpi}");
-        assert_eq!(at(&r, px_ - 2, py_ + ph / 2), CARD_HI);
-        assert_eq!(at(&r, px_ + pw + 2, py_ + ph / 2), CARD_HI);
-        r.draw_main(
-            &gs,
-            &Frame {
-                party_on: true,
-                ..base
-            },
-        );
-        assert_eq!(at(&r, px_ + 4, py_ + ph / 2), ACCENT, "on at {dpi}");
-        r.draw_main(
-            &gs,
-            &Frame {
-                hover: Some(Hit::Party),
-                ..Frame {
-                    settings_open: true,
-                    ..main_frame()
-                }
-            },
-        );
-        assert_eq!(at(&r, px_ + 4, py_ + ph / 2), BG, "hover at {dpi}");
-        r.draw_main(
-            &gs,
-            &Frame {
-                settings_open: false,
-                party_on: true,
-                hover: None,
-                ..main_frame()
-            },
-        );
-        assert_ne!(at(&r, px_ + 4, py_ + ph / 2), ACCENT);
-    }
-    let r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
-    let (x, y, w, h) = PARTY_HIT;
-    assert_eq!(r.hit_test(x, y), Some(Hit::Party));
-    assert_eq!(r.hit_test(x + w - 1, y + h - 1), Some(Hit::Party));
-    assert_ne!(r.hit_test(x - 1, y), Some(Hit::Party));
-    assert_ne!(r.hit_test(x, y + h), Some(Hit::Party));
-    let tip = Hit::Party.tip(TipCtx {
-        live: true,
-        topmost: true,
-        sound_on: true,
-        log_open: false,
-        discord_on: false,
-    });
-    assert_eq!(
-        tip,
-        "Share boss damage through a server with others here who also turn it on"
-    );
-    assert!(!tip.contains('\u{2014}') && !tip.contains('\u{2013}'));
 }
 
 fn tip_fits(r: &Renderer, tip: &str, win_w: i32) -> (i32, usize) {
@@ -995,46 +930,6 @@ fn tip_fits(r: &Renderer, tip: &str, win_w: i32) -> (i32, usize) {
         );
     }
     (w, lines.len())
-}
-
-#[test]
-fn party_tooltip_fits_without_clipping() {
-    let tip = Hit::Party.tip(TipCtx {
-        live: false,
-        topmost: false,
-        sound_on: false,
-        log_open: false,
-        discord_on: false,
-    });
-    for dpi in [96, 120, 144, 168, 192] {
-        let mut r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
-        let mut tm: TEXTMETRICW = unsafe { std::mem::zeroed() };
-        unsafe {
-            SelectObject(r.dc, r.fonts[F_TINY] as _);
-            GetTextMetricsW(r.dc, &mut tm);
-        }
-        assert!(tm.tmHeight <= r.px(TIP_LINE_H), "line height at {dpi}");
-        let (w, n) = tip_fits(&r, tip, LOGICAL_W);
-        assert_eq!(n, 2, "{dpi}");
-        let base = Frame {
-            settings_open: true,
-            hover: Some(Hit::Party),
-            tip: Some(Hit::Party),
-            ..main_frame()
-        };
-        r.draw_main(&GameState::default(), &base);
-        let (px_, py_, _, ph) = PARTY_HIT;
-        let h = 8 + TIP_LINE_H * 2;
-        let x = px_.clamp(8, LOGICAL_W - 8 - w);
-        let y = py_ + ph + 6;
-        assert!(y + h <= LOGICAL_H - 8);
-        let at = |x: i32, y: i32| pix(&r, r.px(x), r.px(y));
-        assert_eq!(at(x + w / 2, y), ACCENT, "top edge at {dpi}");
-        assert_eq!(at(x + w / 2, y + h - 1), ACCENT, "bottom edge at {dpi}");
-        assert_eq!(at(x, y + h / 2), ACCENT, "left edge at {dpi}");
-        assert_eq!(at(x + w - 1, y + h / 2), ACCENT, "right edge at {dpi}");
-        assert_eq!(at(x + 3, y + h / 2), CARD_HI, "inside at {dpi}");
-    }
 }
 
 #[test]
@@ -1100,198 +995,6 @@ fn compact_numbers() {
     }
 }
 
-#[test]
-fn party_numbers_fit_their_columns() {
-    for dpi in [96, 192] {
-        let r = Renderer::new(dpi, LOG_W, LOG_H);
-        for (_, w) in [PARTY_DMG, PARTY_DPS] {
-            for n in [MAX_DMG, u64::MAX, MAX_DMG / 10, 999_999_999, 99_999_999, 0] {
-                let s = r.party_num(n, w);
-                let sw = text_w(&r, F_BODY, &s);
-                assert!(
-                    sw <= r.px(w),
-                    "{n} as {s} is {sw} px, column {} px at {dpi}",
-                    r.px(w)
-                );
-            }
-        }
-        assert_eq!(r.party_num(MAX_DMG, PARTY_DMG.1), "1.10T", "{dpi}");
-        assert_eq!(r.party_num(MAX_DMG, PARTY_DPS.1), "1.10T", "{dpi}");
-        assert_eq!(r.party_num(u64::MAX, PARTY_DMG.1), "18.4Qi", "{dpi}");
-        assert_eq!(r.party_num(u64::MAX, PARTY_DPS.1), "18.4Qi", "{dpi}");
-        assert_eq!(r.party_num(902_115, PARTY_DMG.1), "902,115", "{dpi}");
-        assert_eq!(
-            r.party_num(999_999_999, PARTY_DMG.1),
-            "999,999,999",
-            "{dpi}"
-        );
-        assert_eq!(r.party_num(12_007, PARTY_DPS.1), "12,007", "{dpi}");
-        assert_eq!(r.party_num(MAX_DMG / 10, PARTY_DPS.1), "110B", "{dpi}");
-    }
-}
-
-#[test]
-fn party_tab_empty_states() {
-    let mut r = Renderer::new(96, LOG_W, LOG_H);
-    let (bx, by, bw, bh) = LOG_BODY;
-    let off = PartyPane::default();
-    assert!(off.shown().is_empty());
-    assert_eq!(off.status(), "sharing off");
-    r.draw_log(None, &log_view(Filter::Party, off));
-    let off_px = block(&r, bx, by, bx + bw, by + bh);
-    assert!(off_px.iter().any(|&c| c != BG));
-    let only_me = pane(vec![party_row("you", true, true, 50, Some(100), 5)]);
-    assert!(only_me.shown().is_empty());
-    r.draw_log(None, &log_view(Filter::Party, only_me));
-    let wait_px = block(&r, bx, by, bx + bw, by + bh);
-    assert_ne!(off_px, wait_px);
-    assert_eq!(pix(&r, bx + 1, by + 12), BG);
-    let mut rows = pane(sample_party());
-    rows.on = false;
-    assert!(rows.shown().is_empty());
-    r.draw_log(None, &log_view(Filter::Party, rows));
-    assert_eq!(block(&r, bx, by, bx + bw, by + bh), off_px);
-    for (link, text) in [
-        (crate::relay::Link::Off, "not connected"),
-        (crate::relay::Link::Retrying, "not connected"),
-        (crate::relay::Link::Connecting, "connecting"),
-        (crate::relay::Link::Connected, "connected"),
-    ] {
-        assert_eq!(
-            PartyPane {
-                on: true,
-                link,
-                rows: Vec::new()
-            }
-            .status(),
-            text
-        );
-    }
-    let (tx, ty, _, _) = LOG_TRACK;
-    assert_eq!(pix(&r, tx + 3, ty + 3), BG);
-}
-
-#[test]
-fn party_tab_draws_rows_with_marks() {
-    let mut r = Renderer::new(96, LOG_W, LOG_H);
-    let (bx, by, bw, _) = LOG_BODY;
-    r.draw_log(None, &log_view(Filter::Party, pane(sample_party())));
-    let row_y = |i: i32| by + PARTY_HEAD_H + i * timeline::ROW_H;
-    assert_eq!(pix(&r, bx + 1, row_y(0) + 12), GOOD);
-    assert_eq!(pix(&r, bx + 1, row_y(1) + 12), ACCENT);
-    assert_eq!(pix(&r, bx + bw - 4, row_y(1) + 12), CARD);
-    assert_eq!(pix(&r, bx + bw - 4, row_y(0) + 12), BG);
-    assert_eq!(pix(&r, bx + 1, row_y(3) + 12), CARD_HI);
-    assert_eq!(pix(&r, bx + 40, by + PARTY_HEAD_H - 1), CARD_HI);
-    let (tx, ty, _, _) = LOG_TRACK;
-    assert_eq!(pix(&r, tx + 3, ty + 3), BG);
-    let (_, _, ax, aw) = LOG_TABS[3];
-    assert_eq!(pix(&r, ax + aw / 2, LOG_TAB_Y + 2), ACCENT);
-}
-
-#[test]
-fn party_tab_stress_never_leaves_its_columns() {
-    for dpi in [96, 192] {
-        let mut r = Renderer::new(dpi, LOG_W, LOG_H);
-        let scale = r.scale;
-        let s = move |v: i32| (v as f32 * scale) as i32;
-        let (bx, by, bw, bh) = LOG_BODY;
-        let short = pane(stress_party(false, false));
-        let long_names = pane(stress_party(true, false));
-        let long = pane(stress_party(true, true));
-        assert_eq!(long.shown().len(), MAX_MEMBERS);
-        for row in long.shown() {
-            for (n, (_, w)) in [(row.dmg, PARTY_DMG), (row.dps, PARTY_DPS)] {
-                let text = r.party_num(n, w);
-                assert!(text_w(&r, F_BODY, &text) <= r.px(w), "{text} at {dpi}");
-                assert!(text.ends_with(['T', 'i']), "{text} at {dpi}");
-            }
-        }
-        let n = long.shown().len() + 1;
-        let max = timeline::max_scroll(n, bh);
-        assert_eq!(max, (n as i32 * timeline::ROW_H - bh) as f32);
-        let cols = |r: &Renderer| -> Vec<Vec<u32>> {
-            [PARTY_DMG, PARTY_SHARE, PARTY_DPS]
-                .iter()
-                .map(|&(x, w)| block(r, s(x), s(by), s(x + w), s(by + bh)))
-                .collect()
-        };
-        for scroll in [0.0, max / 2.0, max] {
-            let mut lv = log_view(Filter::Party, short.clone());
-            lv.scroll = scroll;
-            r.draw_log(None, &lv);
-            let cols_short = cols(&r);
-            let head_short = block(&r, 0, 0, r.width, s(by + PARTY_HEAD_H));
-            lv.party = long_names.clone();
-            r.draw_log(None, &lv);
-            assert_eq!(
-                cols_short,
-                cols(&r),
-                "long names moved the columns at {dpi} dpi, scroll {scroll}"
-            );
-            lv.party = long.clone();
-            r.draw_log(None, &lv);
-            assert_ne!(cols_short, cols(&r), "long numbers not drawn at {dpi} dpi");
-            assert_eq!(
-                head_short,
-                block(&r, 0, 0, r.width, s(by + PARTY_HEAD_H)),
-                "header moved at {dpi} dpi, scroll {scroll}"
-            );
-            let (nx, nw) = PARTY_NAME;
-            let ink = |c: u32| c != BG && c != CARD && c != CARD_HI && c != GOOD && c != ACCENT;
-            let gaps = [
-                (nx + nw, PARTY_DMG.0, "name"),
-                (PARTY_DMG.0 + PARTY_DMG.1, PARTY_SHARE.0, "damage"),
-                (PARTY_SHARE.0 + PARTY_SHARE.1, PARTY_DPS.0, "share"),
-                (PARTY_DPS.0 + PARTY_DPS.1, LOG_TRACK.0, "right margin"),
-            ];
-            for y in s(by + PARTY_HEAD_H)..s(by + bh) {
-                for (x0, x1, what) in gaps {
-                    for x in s(x0)..s(x1) {
-                        assert!(!ink(pix(&r, x, y)), "{what} ink at {x},{y} ({dpi} dpi)");
-                    }
-                }
-            }
-            for y in s(by + bh)..r.height {
-                for x in 0..s(LOG_TRACK.0) {
-                    assert_eq!(pix(&r, x, y), BG, "below body at {x},{y} ({dpi} dpi)");
-                }
-            }
-            for y in s(by)..s(by + bh) {
-                for x in 0..s(bx) {
-                    assert_eq!(pix(&r, x, y), BG, "left of body at {x},{y} ({dpi} dpi)");
-                }
-                for x in s(bx + bw)..s(LOG_TRACK.0) {
-                    assert_eq!(pix(&r, x, y), BG, "right of body at {x},{y} ({dpi} dpi)");
-                }
-            }
-            let thumb = timeline::thumb(n, bh, scroll).unwrap();
-            assert!(thumb.0 >= 0 && thumb.0 + thumb.1 <= bh);
-        }
-    }
-}
-
-#[test]
-fn party_rows_scroll_under_a_fixed_header() {
-    let mut r = Renderer::new(96, LOG_W, LOG_H);
-    let (_, by, _, bh) = LOG_BODY;
-    let rows = pane(stress_party(false, false));
-    let n = rows.shown().len() + 1;
-    let mut lv = log_view(Filter::Party, rows);
-    r.draw_log(None, &lv);
-    let head = block(&r, 0, by, LOG_W - 20, by + PARTY_HEAD_H);
-    let body_top = block(&r, 0, by + PARTY_HEAD_H, LOG_W - 20, by + PARTY_HEAD_H + 24);
-    lv.scroll = timeline::max_scroll(n, bh);
-    r.draw_log(None, &lv);
-    assert_eq!(block(&r, 0, by, LOG_W - 20, by + PARTY_HEAD_H), head);
-    assert_ne!(
-        block(&r, 0, by + PARTY_HEAD_H, LOG_W - 20, by + PARTY_HEAD_H + 24),
-        body_top
-    );
-    let last = by + PARTY_HEAD_H + (n as i32 - 2) * timeline::ROW_H - lv.scroll as i32;
-    assert_eq!(last + timeline::ROW_H, by + bh);
-}
-
 fn crc32(data: &[u8]) -> u32 {
     let mut c = 0xffff_ffffu32;
     for &b in data {
@@ -1307,7 +1010,7 @@ fn crc32(data: &[u8]) -> u32 {
     !c
 }
 
-fn png(w: u32, h: u32, rgb: &[u8]) -> Vec<u8> {
+pub(super) fn png(w: u32, h: u32, rgb: &[u8]) -> Vec<u8> {
     let mut raw = Vec::with_capacity((w * 3 + 1) as usize * h as usize);
     for row in rgb.chunks(w as usize * 3) {
         raw.push(0);
@@ -1392,131 +1095,6 @@ fn png_writer_matches_known_crc() {
 
 #[test]
 #[ignore]
-fn write_party_review_images() {
-    let mut rows = sample_party();
-    rows.push(party_row(
-        &"Very Long Display Name That Keeps Going ".repeat(10),
-        false,
-        true,
-        52_000,
-        Some(2),
-        900,
-    ));
-    let states = [
-        log_view(Filter::Party, pane(rows)),
-        log_view(
-            Filter::Party,
-            pane(vec![party_row("you", true, true, 50, Some(100), 5)]),
-        ),
-        log_view(Filter::Party, PartyPane::default()),
-    ];
-    let gap = 16u32;
-    let mut sheet = Sheet::new(
-        gap + (LOG_W as u32 + gap) * 3 + LOG_W as u32 * 2 + gap,
-        gap + LOG_H as u32 * 2 + gap,
-    );
-    let mut x = gap;
-    for lv in &states {
-        let mut r = Renderer::new(96, LOG_W, LOG_H);
-        r.draw_log(None, lv);
-        sheet.put(&r, x, gap, (0, 0, LOG_W, LOG_H));
-        x += LOG_W as u32 + gap;
-    }
-    let mut r = Renderer::new(192, LOG_W, LOG_H);
-    r.draw_log(None, &states[0]);
-    sheet.put(&r, x, gap, (0, 0, LOG_W, LOG_H));
-    sheet.save("party_tab.png");
-
-    let gs = GameState::default();
-    let clip = (0, 70, LOGICAL_W, 206);
-    let looks = [
-        Frame {
-            settings_open: true,
-            hover: None,
-            party_on: false,
-            ..main_frame()
-        },
-        Frame {
-            settings_open: true,
-            hover: None,
-            party_on: true,
-            ..main_frame()
-        },
-        Frame {
-            settings_open: true,
-            hover: Some(Hit::Party),
-            party_on: false,
-            ..main_frame()
-        },
-    ];
-    let mut sheet = Sheet::new(
-        gap + (LOGICAL_W as u32 + gap) * 3 + LOGICAL_W as u32 * 2 + gap,
-        gap + clip.3 as u32 * 2 + gap,
-    );
-    let mut x = gap;
-    for f in &looks {
-        let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
-        r.draw_main(&gs, f);
-        sheet.put(&r, x, gap, clip);
-        x += LOGICAL_W as u32 + gap;
-    }
-    let mut r = Renderer::new(192, LOGICAL_W, LOGICAL_H);
-    r.draw_main(&gs, &looks[1]);
-    sheet.put(&r, x, gap, clip);
-    sheet.save("party_settings.png");
-}
-
-#[test]
-#[ignore]
-fn write_party_big_image() {
-    let names = [
-        "Be\u{430}r (Hands)",
-        "you",
-        "\u{6c17}\u{307e}\u{3050}\u{308c} Sora",
-        "Very Long Display Name That Keeps Going",
-    ];
-    let rows: Vec<PartyRow> = (0..MAX_MEMBERS)
-        .map(|i| {
-            let name = match i {
-                0..=3 => names[i].to_string(),
-                _ => format!("Player {}", i - 3),
-            };
-            party_row(
-                &name,
-                i == 1,
-                i % 5 != 4,
-                MAX_DMG - i as u64,
-                Some(3),
-                if i == 0 { u64::MAX } else { MAX_DMG - i as u64 },
-            )
-        })
-        .collect();
-    let n = rows.len() + 1;
-    let top = log_view(Filter::Party, pane(rows));
-    let bottom = LogView {
-        scroll: timeline::max_scroll(n, LOG_BODY.3),
-        ..log_view(Filter::Party, top.party.clone())
-    };
-    let gap = 16u32;
-    let mut sheet = Sheet::new(
-        gap + (LOG_W as u32 + gap) * 2 + LOG_W as u32 * 2 + gap,
-        gap + LOG_H as u32 * 2 + gap,
-    );
-    let mut x = gap;
-    for lv in [&top, &bottom] {
-        let mut r = Renderer::new(96, LOG_W, LOG_H);
-        r.draw_log(None, lv);
-        sheet.put(&r, x, gap, (0, 0, LOG_W, LOG_H));
-        x += LOG_W as u32 + gap;
-    }
-    let mut r = Renderer::new(192, LOG_W, LOG_H);
-    r.draw_log(None, &top);
-    sheet.put(&r, x, gap, (0, 0, LOG_W, LOG_H));
-    sheet.save("party_tab_big.png");
-}
-
-#[test]
-#[ignore]
 fn write_tooltip_wrap_images() {
     let ctx = TipCtx {
         live: false,
@@ -1524,6 +1102,7 @@ fn write_tooltip_wrap_images() {
         sound_on: false,
         log_open: false,
         discord_on: false,
+        party_open: false,
     };
     let cases = [
         (96, Hit::Party),

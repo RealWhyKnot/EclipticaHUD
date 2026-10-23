@@ -24,7 +24,8 @@ pub enum Hit {
     UpdateNow,
     UpdateLater,
     UpdateSkip,
-    Target,
+    Mute,
+    Sound,
     RunPrev,
     RunNext,
     FightPrev,
@@ -51,17 +52,20 @@ pub enum Info {
     TopAttacks,
     HistAttackers,
     HistTopAttacks,
+    Target,
     Vr,
     LogDot,
+    Discord,
     Version,
 }
 
-pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
+pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 28] = [
     (Info::Status, (14, 26, 332, 20)),
     (Info::Progress, (14, 46, 332, 8)),
     (Info::RunRow, (44, 54, 272, 24)),
     (Info::Boss, (74, 84, 160, 26)),
     (Info::Result, (26, 126, 308, 40)),
+    (Info::Target, (26, 126, 308, 40)),
     (Info::Dealt(0), (26, 190, 102, 40)),
     (Info::Dealt(1), (128, 190, 102, 40)),
     (Info::Dealt(2), (230, 190, 102, 40)),
@@ -82,6 +86,7 @@ pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
     (Info::HistTopAttacks, (14, 448 + GRAPH_DY, 332, 82)),
     (Info::Vr, (14, LOGICAL_H - 30, 72, 24)),
     (Info::LogDot, (86, LOGICAL_H - 30, 50, 24)),
+    (Info::Discord, DISCORD_DOT),
     (
         Info::Version,
         (
@@ -98,6 +103,7 @@ impl Info {
         matches!(
             self,
             Info::LastHit
+                | Info::Target
                 | Info::Attackers
                 | Info::TopAttacks
                 | Info::TakenBar
@@ -171,6 +177,8 @@ impl Info {
             }
             (Info::Vr, _) => "SteamVR wrist overlay: green when attached, red when failing",
             (Info::LogDot, _) => "VRChat log: green while VRChat runs and its log is open",
+            (Info::Target, _) => "Who the boss is after, and for how long",
+            (Info::Discord, _) => "Discord status: green showing, amber waiting, red refused",
             (Info::Version, _) => "Running version; a new release shows here when available",
         }
     }
@@ -183,6 +191,7 @@ pub struct TipCtx {
     pub sound_on: bool,
     pub log_open: bool,
     pub discord_on: bool,
+    pub party_open: bool,
 }
 
 impl Hit {
@@ -194,18 +203,19 @@ impl Hit {
         match self {
             Hit::Pin if c.topmost => "Kept above other windows; click to let them cover it",
             Hit::Pin => "Other windows can cover the HUD; click to keep it on top",
-            Hit::Settings => "Size and opacity of the HUD",
+            Hit::Settings => "Size, opacity, stat window, aggro sound and Discord status",
             Hit::ScaleDown => "Make the HUD smaller",
             Hit::ScaleUp => "Make the HUD bigger",
             Hit::AlphaDown => "Make the HUD more see-through",
             Hit::AlphaUp => "Make the HUD less see-through",
             Hit::WindowDown => "Shorter window for the live DPS and damage taken",
             Hit::WindowUp => "Longer window for the live DPS and damage taken",
-            Hit::Party => "Share boss damage through a server with others here who also turn it on",
+            Hit::Party if c.party_open => "Close the shared damage window",
+            Hit::Party => "Open the shared damage window",
             Hit::Discord if c.discord_on => {
                 "Showing this run as your Discord status; click to stop"
             }
-            Hit::Discord => "Click to show your run as your Discord status, with a join link",
+            Hit::Discord => "Show your run as your Discord status, with a join link",
             Hit::Log if c.log_open => "Close the event log window",
             Hit::Log => "Open the event log window",
             Hit::Close => "Close the HUD (Esc)",
@@ -213,8 +223,10 @@ impl Hit {
             Hit::UpdateNow => "Download the new version and restart the HUD",
             Hit::UpdateLater => "Hide this for now; the update label in the corner brings it back",
             Hit::UpdateSkip => "Don't offer this version again",
-            Hit::Target if c.sound_on => "Who the boss is after; click to mute the aggro sound",
-            Hit::Target => "Who the boss is after; click to unmute the aggro sound",
+            Hit::Mute | Hit::Sound if c.sound_on => {
+                "Mute the sound that plays when the boss targets you"
+            }
+            Hit::Mute | Hit::Sound => "Unmute the sound that plays when the boss targets you",
             Hit::RunPrev => "Show the previous run",
             Hit::RunNext => "Show the next run; past the newest returns to live",
             Hit::FightPrev => "Show the previous boss fight of this run",
@@ -233,15 +245,16 @@ impl Hit {
             Hit::AlphaUp => ALPHA_UP_HIT,
             Hit::WindowDown => WINDOW_DOWN_HIT,
             Hit::WindowUp => WINDOW_UP_HIT,
-            Hit::Party => PARTY_HIT,
+            Hit::Party => PARTY_BTN,
             Hit::Discord => DISCORD_HIT,
+            Hit::Sound => SOUND_HIT,
             Hit::Log => LOG_BTN,
             Hit::Close => CLOSE_BTN,
             Hit::Update => UPDATE_RECT,
             Hit::UpdateNow => UPDATE_NOW_HIT,
             Hit::UpdateLater => UPDATE_LATER_HIT,
             Hit::UpdateSkip => UPDATE_SKIP_HIT,
-            Hit::Target => TARGET_HIT,
+            Hit::Mute => MUTE_HIT,
             Hit::RunPrev => RUN_PREV_HIT,
             Hit::RunNext => RUN_NEXT_HIT,
             Hit::FightPrev => FIGHT_PREV_HIT,
@@ -270,16 +283,14 @@ impl LogHit {
         !matches!(self, LogHit::Title | LogHit::Count)
     }
 
-    pub fn tip(self, filter: Filter) -> &'static str {
+    pub fn tip(self) -> &'static str {
         match self {
             LogHit::Title => "Every hit you took and every aggro switch, newest first",
-            LogHit::Count if filter == Filter::Party => "Connection to the party damage server",
             LogHit::Count => "Events in the current filter; a grey line marks a boss fight start",
             LogHit::Close => "Close the log (Esc)",
             LogHit::Tab(Filter::All) => "Show hits and aggro switches",
             LogHit::Tab(Filter::Damage) => "Show only damage you took",
             LogHit::Tab(Filter::Targets) => "Show only aggro switches",
-            LogHit::Tab(Filter::Party) => "Show boss damage from players who share it",
             LogHit::Thumb => "Drag to scroll, or use the wheel",
             LogHit::Track => "Click to jump a page",
         }
@@ -300,6 +311,45 @@ impl LogHit {
             LogHit::Track => LOG_TRACK,
             LogHit::Title => LOG_TITLE,
             LogHit::Count => LOG_COUNT,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PartyHit {
+    Close,
+    Toggle,
+    Status,
+    Rank,
+    Board,
+}
+
+const PARTY_STATUS: (i32, i32, i32, i32) = (180, 44, 166, 24);
+const PARTY_RANK_AREA: (i32, i32, i32, i32) = (14, 68, 332, 48);
+
+impl PartyHit {
+    pub fn clickable(self) -> bool {
+        matches!(self, PartyHit::Close | PartyHit::Toggle)
+    }
+
+    pub fn tip(self, on: bool) -> &'static str {
+        match self {
+            PartyHit::Close => "Close this window (Esc)",
+            PartyHit::Toggle if on => "Stop sharing your boss damage",
+            PartyHit::Toggle => "Share your boss damage with others here who turn this on too",
+            PartyHit::Status => "Connection to the shared damage server",
+            PartyHit::Rank => "Your place among the players here who share, by damage this fight",
+            PartyHit::Board => "Boss damage from everyone here who shares it, highest first",
+        }
+    }
+
+    pub(super) fn rect(self) -> (i32, i32, i32, i32) {
+        match self {
+            PartyHit::Close => PARTY_CLOSE_BTN,
+            PartyHit::Toggle => PARTY_TOGGLE,
+            PartyHit::Status => PARTY_STATUS,
+            PartyHit::Rank => PARTY_RANK_AREA,
+            PartyHit::Board => PARTY_CARD2,
         }
     }
 }
@@ -328,6 +378,9 @@ impl Renderer {
             if x >= self.px(SETTINGS_HIT.0) && x < self.px(PIN_HIT.0) && ok(Hit::Settings) {
                 return Some(Hit::Settings);
             }
+            if x >= self.px(PARTY_HIT.0) && x < self.px(SETTINGS_HIT.0) && ok(Hit::Party) {
+                return Some(Hit::Party);
+            }
         }
         if x >= self.px(UPDATE_HIT.0) && y >= self.px(UPDATE_HIT.1) && ok(Hit::Update) {
             return Some(Hit::Update);
@@ -339,9 +392,9 @@ impl Renderer {
             (ALPHA_UP_HIT, Hit::AlphaUp),
             (WINDOW_DOWN_HIT, Hit::WindowDown),
             (WINDOW_UP_HIT, Hit::WindowUp),
-            (PARTY_HIT, Hit::Party),
+            (SOUND_HIT, Hit::Sound),
             (DISCORD_HIT, Hit::Discord),
-            (TARGET_HIT, Hit::Target),
+            (MUTE_HIT, Hit::Mute),
             (RUN_PREV_HIT, Hit::RunPrev),
             (RUN_NEXT_HIT, Hit::RunNext),
             (FIGHT_PREV_HIT, Hit::FightPrev),
@@ -383,5 +436,21 @@ impl Renderer {
             }
         }
         None
+    }
+
+    pub fn party_hit_test(&self, x: i32, y: i32, vr: bool) -> Option<PartyHit> {
+        let (cx, cy, cw, ch) = PARTY_CLOSE_HIT;
+        if !vr && self.in_rect((cx, cy, cw, ch), x, y) {
+            return Some(PartyHit::Close);
+        }
+        [
+            PartyHit::Toggle,
+            PartyHit::Status,
+            PartyHit::Rank,
+            PartyHit::Board,
+        ]
+        .into_iter()
+        .filter(|h| !vr || !h.clickable())
+        .find(|h| self.in_rect(h.rect(), x, y))
     }
 }

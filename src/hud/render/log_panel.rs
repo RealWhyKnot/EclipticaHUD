@@ -1,15 +1,13 @@
-use super::fmt::{compact, group_digits};
 use super::frame::LogView;
 use super::hit::LogHit;
 use super::layout::*;
 use super::theme::*;
-use super::Renderer;
+use super::{Ctl, Renderer};
 use crate::game::event::fmt_clock;
 use crate::game::names::boss_name;
 use crate::game::run::base_name;
 use crate::game::source::{describe_source, generic_attacker};
-use crate::hud::timeline::{self, Filter, Row};
-use crate::relay::party::PartyRow;
+use crate::hud::timeline::{self, Row};
 use windows_sys::Win32::Graphics::Gdi::*;
 
 struct LogRow<'a> {
@@ -34,78 +32,37 @@ impl Renderer {
             DT_LEFT | DT_VCENTER,
             "EVENT LOG",
         );
-        let party = lv.filter == Filter::Party;
         let count = match rows.iter().filter(|r| !matches!(r, Row::Fight(_))).count() {
-            _ if party => lv.party.status().to_string(),
             0 => "nothing yet".to_string(),
             1 => "1 event".to_string(),
             n => format!("{n} events"),
         };
-        self.text_rect(
-            88,
-            LOG_TAB_Y,
-            76,
-            LOG_TAB_H,
-            F_TINY,
-            DIM,
-            DT_LEFT | DT_VCENTER,
-            &count,
-        );
+        let (cx, cy, cw, ch) = LOG_COUNT;
+        self.text_rect(cx, cy, cw, ch, F_TINY, DIM, DT_LEFT | DT_VCENTER, &count);
         for (filter, label, x, w) in LOG_TABS {
-            let active = lv.filter == filter;
-            let hover = lv.hover == Some(LogHit::Tab(filter));
-            let (bg, fg) = if active {
-                (ACCENT, BG)
-            } else if hover {
-                (CARD_HI, TEXT)
-            } else {
-                (CARD, DIM)
-            };
-            self.rround(x, LOG_TAB_Y, w, LOG_TAB_H, 6, bg);
-            self.text_rect(
-                x,
-                LOG_TAB_Y,
-                w,
-                LOG_TAB_H,
-                F_LABEL,
-                fg,
-                DT_CENTER | DT_VCENTER,
-                label,
+            let ctl = Ctl::of(
+                true,
+                lv.filter == filter,
+                lv.hover == Some(LogHit::Tab(filter)),
+                false,
             );
+            self.text_button((x, LOG_TAB_Y, w, LOG_TAB_H), ctl, label);
         }
-        self.glyph_button(
-            LOG_CLOSE_BTN,
-            lv.hover == Some(LogHit::Close),
-            false,
-            false,
-            GLYPH_CLOSE,
-        );
+        let close = Ctl::of(true, false, lv.hover == Some(LogHit::Close), false);
+        self.glyph_button(LOG_CLOSE_BTN, close, GLYPH_CLOSE);
 
         let (bx, by, bw, bh) = LOG_BODY;
-        let empty = if party {
-            match lv.party.shown().len() {
-                0 if lv.party.on => Some("no party damage yet"),
-                0 => Some("turn on party sharing in settings"),
-                _ => None,
-            }
-        } else {
-            rows.is_empty().then_some("nothing logged yet")
-        };
-        if let Some(msg) = empty {
+        if rows.is_empty() {
+            let msg = "nothing logged yet";
             self.text_rect(bx, by, bw, bh, F_BODY, DIM, DT_CENTER | DT_VCENTER, msg);
             if let Some(hit) = lv.tip {
-                self.tooltip(hit.rect(lv.thumb), hit.tip(lv.filter), LOG_W, LOG_H);
+                self.tooltip(hit.rect(lv.thumb), hit.tip(), LOG_W, LOG_H);
             }
             unsafe { GdiFlush() };
             return;
         }
-        let n = if party {
-            self.draw_party(lv);
-            lv.party.shown().len() + 1
-        } else {
-            self.draw_rows(&rows, lv);
-            rows.len()
-        };
+        self.draw_rows(&rows, lv);
+        let n = rows.len();
         if let Some((ty, th)) = timeline::thumb(n, bh, lv.scroll) {
             let (tx, tyy, tw, thh) = LOG_TRACK;
             self.rround(tx, tyy, tw, thh, 3, CARD);
@@ -113,12 +70,12 @@ impl Renderer {
             let color = if lit {
                 ACCENT
             } else {
-                mix(CARD_HI, DIM, lv.thumb_t)
+                mix(EDGE, DIM, lv.thumb_t)
             };
             self.rround(tx, tyy + ty, tw, th, 3, color);
         }
         if let Some(hit) = lv.tip {
-            self.tooltip(hit.rect(lv.thumb), hit.tip(lv.filter), LOG_W, LOG_H);
+            self.tooltip(hit.rect(lv.thumb), hit.tip(), LOG_W, LOG_H);
         }
         unsafe { GdiFlush() };
     }
@@ -144,86 +101,6 @@ impl Renderer {
                 y += timeline::ROW_H;
             }
             RestoreDC(self.dc, saved);
-        }
-    }
-
-    fn draw_party(&self, lv: &LogView) {
-        let (bx, by, bw, bh) = LOG_BODY;
-        let heads = [
-            (PARTY_NAME, "PLAYER", DT_LEFT),
-            (PARTY_DMG, "DAMAGE", DT_RIGHT),
-            (PARTY_SHARE, "SHARE", DT_RIGHT),
-            (PARTY_DPS, "DPS", DT_RIGHT),
-        ];
-        for ((x, w), label, align) in heads {
-            self.text_rect(
-                x,
-                by,
-                w,
-                PARTY_HEAD_H,
-                F_LABEL,
-                DIM,
-                align | DT_VCENTER,
-                label,
-            );
-        }
-        self.fill(bx, by + PARTY_HEAD_H - 1, bw, 1, CARD_HI);
-        let top = by + PARTY_HEAD_H;
-        let h = timeline::ROW_H;
-        unsafe {
-            let saved = SaveDC(self.dc);
-            IntersectClipRect(
-                self.dc,
-                self.px(bx),
-                self.px(top),
-                self.px(bx + bw),
-                self.px(by + bh),
-            );
-            let first = (lv.scroll / h as f32).floor().max(0.0) as usize;
-            let mut y = top + first as i32 * h - lv.scroll as i32;
-            for row in lv.party.shown().iter().skip(first) {
-                if y > by + bh {
-                    break;
-                }
-                self.party_row(bx, y, bw, row);
-                y += h;
-            }
-            RestoreDC(self.dc, saved);
-        }
-    }
-
-    fn party_row(&self, x: i32, y: i32, w: i32, r: &PartyRow) {
-        let h = timeline::ROW_H;
-        if r.you {
-            self.rround(x, y + 1, w, h - 2, 5, CARD);
-        }
-        let mark = match (r.you, r.live) {
-            (true, _) => ACCENT,
-            (false, true) => GOOD,
-            (false, false) => CARD_HI,
-        };
-        self.rround(x, y + 5, 3, h - 10, 1, mark);
-        let fg = if r.live { TEXT } else { DIM };
-        let name_fg = if r.you { ACCENT } else { fg };
-        let vc = DT_VCENTER;
-        let (nx, nw) = PARTY_NAME;
-        self.text_rect(nx, y, nw, h, F_BODY, name_fg, DT_LEFT | vc, &r.name);
-        let share = r.share.map_or("-".to_string(), |s| format!("{s}%"));
-        for ((cx, cw), text, color) in [
-            (PARTY_DMG, self.party_num(r.dmg, PARTY_DMG.1), fg),
-            (PARTY_SHARE, share, DIM),
-            (PARTY_DPS, self.party_num(r.dps, PARTY_DPS.1), fg),
-        ] {
-            self.text_rect(cx, y, cw, h, F_BODY, color, DT_RIGHT | vc, &text);
-        }
-    }
-
-    pub(super) fn party_num(&self, n: u64, w: i32) -> String {
-        let full = group_digits(n);
-        if self.text_w(F_BODY, &full) <= self.px(w) {
-            full
-        } else {
-            compact(n)
         }
     }
 

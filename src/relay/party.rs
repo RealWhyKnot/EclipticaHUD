@@ -195,14 +195,14 @@ impl Party {
 
     fn label(&mut self, hash: Member) -> String {
         if let Some((_, n)) = self.labels.iter().find(|(h, _)| *h == hash) {
-            return format!("Player {n}");
+            return format!("Unknown player {n}");
         }
         if self.labels.len() >= MAX_LABELS {
-            return "Player".to_string();
+            return "Unknown player".to_string();
         }
         let n = self.labels.len() as u32 + 1;
         self.labels.push((hash, n));
-        format!("Player {n}")
+        format!("Unknown player {n}")
     }
 
     pub fn view(&mut self, now: u64) -> Vec<PartyRow> {
@@ -310,19 +310,19 @@ mod tests {
         p.apply_snap(2000, &[(A, 4000), (B, 1000)], None);
         p.apply_snap(3000, &[(A, 6000)], None);
         let v = p.view(3000);
-        assert!(row(&v, "Player 1").live);
-        let b = row(&v, "Player 2").clone();
+        assert!(row(&v, "Unknown player 1").live);
+        let b = row(&v, "Unknown player 2").clone();
         assert!(!b.live);
         assert_eq!((b.dmg, b.dps), (1000, 500));
         let later = p.view(60_000);
-        assert_eq!(row(&later, "Player 2").dps, 500);
-        assert_eq!(row(&later, "Player 2").dmg, 1000);
+        assert_eq!(row(&later, "Unknown player 2").dps, 500);
+        assert_eq!(row(&later, "Unknown player 2").dmg, 1000);
         p.apply_snap(61_000, &[(B, 9000)], None);
         let back = p.view(61_000);
-        let b = row(&back, "Player 2");
+        let b = row(&back, "Unknown player 2");
         assert!(b.live);
         assert_eq!((b.dmg, b.dps), (9000, 0));
-        assert!(!row(&back, "Player 1").live);
+        assert!(!row(&back, "Unknown player 1").live);
         p.apply_snap(62_000, &[], None);
         assert!(p.view(62_000).iter().all(|r| !r.live));
         assert_eq!(p.others(), 2);
@@ -337,15 +337,15 @@ mod tests {
             p.set_own(s * 1000, ME, Some(s * 1000));
             q.apply_snap(s * 1000, &[(A, s * 1000)], None);
         }
-        assert_eq!(row(&p.view(20_000), "Player 1").dps, 1000);
+        assert_eq!(row(&p.view(20_000), "Unknown player 1").dps, 1000);
         assert_eq!(row(&p.view(20_000), "you").dps, 1000);
         let dropped = 20_000 + 10_500;
-        assert_eq!(row(&p.view(dropped), "Player 1").dps, 0);
+        assert_eq!(row(&p.view(dropped), "Unknown player 1").dps, 0);
         p.apply_snap(dropped, &[], Some(ME));
         p.set_own(dropped, ME, None);
         q.disconnected(dropped);
         for v in [p.view(dropped), p.view(dropped + 60_000)] {
-            for name in ["Player 1", "you"] {
+            for name in ["Unknown player 1", "you"] {
                 let r = row(&v, name);
                 assert!(!r.live, "{name}");
                 assert!((990..=1010).contains(&r.dps), "{name} {}", r.dps);
@@ -369,15 +369,15 @@ mod tests {
         p.apply_snap(2000, &[(B, 5)], None);
         let v = p.view(2000);
         assert_eq!(v[0].name, "Alice");
-        assert_eq!(v[1].name, "Player 1");
+        assert_eq!(v[1].name, "Unknown player 1");
         p.clear();
         p.apply_snap(3000, &[(A, 7)], None);
-        assert_eq!(p.view(3000)[0].name, "Player 2");
+        assert_eq!(p.view(3000)[0].name, "Unknown player 2");
         p.set_names(vec![(A, "Alice".to_string())]);
         p.set_names(Vec::new());
         p.reset_room();
         p.apply_snap(4000, &[(A, 1)], None);
-        assert_eq!(p.view(4000)[0].name, "Player 1");
+        assert_eq!(p.view(4000)[0].name, "Unknown player 1");
     }
 
     #[test]
@@ -409,7 +409,7 @@ mod tests {
         p.set_own(0, ME, Some(50));
         p.disconnected(1000);
         let v = p.view(1000);
-        assert!(!row(&v, "Player 1").live);
+        assert!(!row(&v, "Unknown player 1").live);
         assert!(row(&v, "you").live);
     }
 
@@ -417,17 +417,17 @@ mod tests {
     fn clear_and_room_reset() {
         let mut p = Party::default();
         p.apply_snap(0, &[(A, 10), (B, 20)], None);
-        assert_eq!(p.view(0)[0].name, "Player 1");
+        assert_eq!(p.view(0)[0].name, "Unknown player 1");
         p.clear();
         assert!(p.view(0).is_empty());
         p.apply_snap(0, &[(C, 5), (A, 7)], None);
         let v = p.view(0);
-        assert_eq!(row(&v, "Player 2").dmg, 7);
-        assert_eq!(row(&v, "Player 3").dmg, 5);
+        assert_eq!(row(&v, "Unknown player 2").dmg, 7);
+        assert_eq!(row(&v, "Unknown player 3").dmg, 5);
         p.reset_room();
         assert!(p.view(0).is_empty());
         p.apply_snap(0, &[(C, 5)], None);
-        assert_eq!(p.view(0)[0].name, "Player 1");
+        assert_eq!(p.view(0)[0].name, "Unknown player 1");
     }
 
     #[test]
@@ -438,18 +438,18 @@ mod tests {
         let v = p.view(0);
         assert_eq!(
             v.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
-            ["Player 1", "Be\u{430}r (Hands)", "Player 2"]
+            ["Unknown player 1", "Be\u{430}r (Hands)", "Unknown player 2"]
         );
         p.apply_snap(1000, &[(C, 100), (A, 3)], None);
         let v = p.view(1000);
-        assert_eq!(v[0].name, "Player 2");
-        assert_eq!(row(&v, "Player 1").dmg, 3);
+        assert_eq!(v[0].name, "Unknown player 2");
+        assert_eq!(row(&v, "Unknown player 1").dmg, 3);
         p.set_names(vec![(C, "Carol".to_string())]);
         let v = p.view(1000);
         assert_eq!(v[0].name, "Carol");
-        assert_eq!(row(&v, "Player 1").dmg, 3);
+        assert_eq!(row(&v, "Unknown player 1").dmg, 3);
         assert_eq!(row(&v, "Be\u{430}r (Hands)").dmg, 2);
-        assert!(!v.iter().any(|r| r.name == "Player 3"));
+        assert!(!v.iter().any(|r| r.name == "Unknown player 3"));
     }
 
     #[test]

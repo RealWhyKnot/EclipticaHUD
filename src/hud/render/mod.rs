@@ -6,13 +6,18 @@ mod hit;
 mod layout;
 mod log_panel;
 mod main_panel;
+mod party_panel;
+#[cfg(test)]
+mod party_tests;
 mod prompt;
 #[cfg(test)]
 mod tests;
 mod theme;
+#[cfg(test)]
+mod tour;
 
-pub use frame::{Env, Frame, LogView, PartyPane};
-pub use hit::{tip_ready, Hit, Info, LogHit};
+pub use frame::{Env, Frame, LogView, PartyFight, PartyPane, PartyView};
+pub use hit::{tip_ready, Hit, Info, LogHit, PartyHit};
 pub use layout::*;
 pub use theme::ease_out_cubic;
 
@@ -32,6 +37,29 @@ pub struct Renderer {
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Ctl {
+    Off,
+    Rest,
+    Hover,
+    Pressed,
+    On,
+    OnHover,
+}
+
+impl Ctl {
+    pub(super) fn of(enabled: bool, on: bool, hover: bool, pressed: bool) -> Ctl {
+        match (enabled, on, hover, pressed) {
+            (false, _, _, _) => Ctl::Off,
+            (true, _, _, true) => Ctl::Pressed,
+            (true, true, true, false) => Ctl::OnHover,
+            (true, true, false, false) => Ctl::On,
+            (true, false, true, false) => Ctl::Hover,
+            (true, false, false, false) => Ctl::Rest,
+        }
+    }
 }
 
 impl Renderer {
@@ -176,6 +204,9 @@ impl Renderer {
         flags: u32,
         s: &str,
     ) {
+        if s.is_empty() {
+            return;
+        }
         unsafe {
             SelectObject(self.dc, self.fonts[font] as _);
             SetTextColor(self.dc, color);
@@ -206,52 +237,97 @@ impl Renderer {
         size.cx
     }
 
-    fn glyph_button(
-        &self,
-        btn: (i32, i32, i32, i32),
-        hover: bool,
-        pressed: bool,
-        lit: bool,
-        glyph: &str,
-    ) {
-        let (bx, by, bw, bh) = btn;
-        let color = if pressed {
-            self.rround(bx, by, bw, bh, 6, ACCENT);
-            BG
-        } else if hover {
-            self.rround(bx, by, bw, bh, 6, CARD_HI);
-            TEXT
-        } else if lit {
-            ACCENT
-        } else {
-            DIM
-        };
-        self.text_rect(
-            bx,
-            by,
-            bw,
-            bh,
-            F_GLYPH,
-            color,
-            DT_CENTER | DT_VCENTER,
-            glyph,
-        );
+    fn outline(&self, x: i32, y: i32, w: i32, h: i32, r: i32, color: u32) {
+        unsafe {
+            let pen = CreatePen(PS_INSIDEFRAME, self.px(1).max(1), color);
+            let old_pen = SelectObject(self.dc, pen as _);
+            let old_brush = SelectObject(self.dc, GetStockObject(NULL_BRUSH) as _);
+            RoundRect(
+                self.dc,
+                self.px(x),
+                self.px(y),
+                self.px(x + w),
+                self.px(y + h),
+                self.px(r * 2),
+                self.px(r * 2),
+            );
+            SelectObject(self.dc, old_brush);
+            SelectObject(self.dc, old_pen);
+            DeleteObject(pen as _);
+        }
     }
 
-    fn arrow(&self, hit: (i32, i32, i32, i32), on: bool, hover: bool, pressed: bool, glyph: &str) {
-        let (x, y, w, h) = hit;
-        let color = if !on {
-            CARD
-        } else if pressed {
-            self.rround(x + 2, y + 2, w - 4, h - 4, 5, ACCENT);
-            BG
-        } else if hover {
-            self.rround(x + 2, y + 2, w - 4, h - 4, 5, CARD_HI);
-            TEXT
+    fn control(&self, rect: (i32, i32, i32, i32), ctl: Ctl) -> u32 {
+        let (x, y, w, h) = rect;
+        match ctl {
+            Ctl::Off => INK_OFF,
+            Ctl::Rest => {
+                self.outline(x, y, w, h, 6, EDGE);
+                TEXT
+            }
+            Ctl::Hover => {
+                self.rround(x, y, w, h, 6, CTRL_HOVER);
+                self.outline(x, y, w, h, 6, EDGE);
+                TEXT
+            }
+            Ctl::Pressed | Ctl::On => {
+                self.rround(x, y, w, h, 6, ACCENT);
+                BG
+            }
+            Ctl::OnHover => {
+                self.rround(x, y, w, h, 6, mix(ACCENT, TEXT, 0.2));
+                BG
+            }
+        }
+    }
+
+    fn glyph_button(&self, btn: (i32, i32, i32, i32), ctl: Ctl, glyph: &str) {
+        let ink = self.control(btn, ctl);
+        let (x, y, w, h) = btn;
+        self.text_rect(x, y, w, h, F_GLYPH, ink, DT_CENTER | DT_VCENTER, glyph);
+    }
+
+    fn text_button(&self, btn: (i32, i32, i32, i32), ctl: Ctl, label: &str) {
+        let ink = self.control(btn, ctl);
+        let (x, y, w, h) = btn;
+        self.text_rect(x, y, w, h, F_LABEL, ink, DT_CENTER | DT_VCENTER, label);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn link(&self, x: i32, y: i32, w: i32, h: i32, font: usize, color: u32, flags: u32, s: &str) {
+        self.text_rect(x, y, w, h, font, color, flags | DT_VCENTER, s);
+        let tw = self.unscale(self.text_w(font, s)).min(w);
+        let lx = if flags & DT_RIGHT != 0 {
+            x + w - tw
+        } else if flags & DT_CENTER != 0 {
+            x + (w - tw) / 2
         } else {
-            TEXT
+            x
         };
-        self.text_rect(x, y, w, h, F_GLYPH, color, DT_CENTER | DT_VCENTER, glyph);
+        let (cell, ascent) = self.font_metrics(font);
+        let top = self.px(y) + (self.px(h) - cell) / 2;
+        let base = top + ascent + self.px(1).max(1);
+        let thick = self.px(1).max(1);
+        unsafe {
+            let brush = CreateSolidBrush(color);
+            let r = RECT {
+                left: self.px(lx),
+                top: base,
+                right: self.px(lx + tw),
+                bottom: base + thick,
+            };
+            FillRect(self.dc, &r, brush);
+            DeleteObject(brush as _);
+        }
+    }
+
+    pub(super) fn font_metrics(&self, font: usize) -> (i32, i32) {
+        unsafe {
+            SelectObject(self.dc, self.fonts[font] as _);
+            let mut tm: TEXTMETRICW = std::mem::zeroed();
+            GetTextMetricsW(self.dc, &mut tm);
+            (tm.tmHeight, tm.tmAscent)
+        }
     }
 
     pub(super) fn tip_lines<'a>(&self, text: &'a str, win_w: i32) -> (i32, Vec<&'a str>) {

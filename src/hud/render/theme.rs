@@ -7,6 +7,9 @@ pub(super) const ACCENT: u32 = rgb(0x8a, 0x6c, 0xff);
 pub(super) const DANGER: u32 = rgb(0xff, 0x5c, 0x7c);
 pub(super) const AMBER: u32 = rgb(0xff, 0xc8, 0x57);
 pub(super) const GOOD: u32 = rgb(0x57, 0xd9, 0x9a);
+pub(super) const EDGE: u32 = rgb(0x74, 0x74, 0x8f);
+pub(super) const CTRL_HOVER: u32 = rgb(0x3a, 0x3a, 0x52);
+pub(super) const INK_OFF: u32 = rgb(0x55, 0x55, 0x6b);
 
 pub(super) const fn rgb(r: u32, g: u32, b: u32) -> u32 {
     r | (g << 8) | (b << 16)
@@ -39,9 +42,11 @@ pub(super) const F_GLYPH: usize = 5;
 
 pub(super) const GLYPH_CLOSE: &str = "\u{E8BB}";
 pub(super) const GLYPH_MUTE: &str = "\u{E74F}";
+pub(super) const GLYPH_VOLUME: &str = "\u{E767}";
+pub(super) const GLYPH_PARTY: &str = "\u{E716}";
 pub(super) const GLYPH_PREV: &str = "\u{E76B}";
 pub(super) const GLYPH_NEXT: &str = "\u{E76C}";
-pub(super) const GLYPH_LOG: &str = "\u{E81C}";
+pub(super) const GLYPH_LOG: &str = "\u{E8FD}";
 pub(super) const GLYPH_PIN: &str = "\u{E718}";
 pub(super) const GLYPH_UNPIN: &str = "\u{E77A}";
 pub(super) const GLYPH_SETTINGS: &str = "\u{E713}";

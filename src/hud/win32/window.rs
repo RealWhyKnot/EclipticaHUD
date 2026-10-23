@@ -17,6 +17,18 @@ pub(super) unsafe fn repaint_log(app: &mut App) {
     }
 }
 
+pub(super) unsafe fn repaint_party(app: &mut App) {
+    if !app.party_win.hwnd.is_null() {
+        app.render_party();
+        InvalidateRect(app.party_win.hwnd, std::ptr::null(), 0);
+    }
+}
+
+pub(super) unsafe fn drag_window(hwnd: HWND) {
+    ReleaseCapture();
+    SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0);
+}
+
 pub(super) fn point(lp: LPARAM) -> (i32, i32) {
     (
         (lp & 0xffff) as i16 as i32,
@@ -65,8 +77,20 @@ pub(super) unsafe fn apply_size(app: &mut App, main: HWND) {
             flags,
         );
     }
+    if !app.party_win.hwnd.is_null() {
+        SetWindowPos(
+            app.party_win.hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            app.party_win.renderer.width,
+            app.party_win.renderer.height,
+            flags,
+        );
+    }
     repaint(app, main);
     repaint_log(app);
+    repaint_party(app);
 }
 
 pub(super) unsafe fn sync_topmost(main: HWND) {
@@ -80,8 +104,10 @@ pub(super) unsafe fn sync_topmost(main: HWND) {
     };
     let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
     SetWindowPos(main, after, 0, 0, 0, 0, flags);
-    if !app.log.hwnd.is_null() {
-        SetWindowPos(app.log.hwnd, after, 0, 0, 0, 0, flags);
+    for hwnd in [app.log.hwnd, app.party_win.hwnd] {
+        if !hwnd.is_null() {
+            SetWindowPos(hwnd, after, 0, 0, 0, 0, flags);
+        }
     }
 }
 
@@ -162,5 +188,69 @@ pub(super) unsafe fn sync_log(main: HWND) {
     } else if !want && shown {
         ShowWindow(hwnd, SW_HIDE);
         save_log_pos(hwnd, false);
+    }
+}
+
+pub(super) unsafe fn create_party_window(main: HWND) {
+    let app_ptr = GetWindowLongPtrW(main, GWLP_USERDATA) as *mut App;
+    let Some(app) = app_ptr.as_mut() else {
+        return;
+    };
+    let (w, h) = (app.party_win.renderer.width, app.party_win.renderer.height);
+    let log = (!app.log.hwnd.is_null() && app.log.visible).then_some(app.log.hwnd);
+    let (x, y) = load_pos("partypos.txt")
+        .map(|(x, y, _)| (x, y))
+        .unwrap_or_else(|| default_party_pos(main, log, w, h));
+    let module = GetModuleHandleW(std::ptr::null());
+    let class_name = wide("EclipticaHUDParty");
+    let title = wide("Ecliptica HUD shared damage");
+    let hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+        class_name.as_ptr(),
+        title.as_ptr(),
+        WS_POPUP,
+        x,
+        y,
+        w,
+        h,
+        main,
+        std::ptr::null_mut(),
+        module,
+        app_ptr as *mut core::ffi::c_void,
+    );
+    apply_dwm(hwnd);
+    SetLayeredWindowAttributes(hwnd, 0, 0, LWA_ALPHA);
+    if let Some(app) = app_ptr.as_mut() {
+        app.party_win.hwnd = hwnd;
+    }
+}
+
+pub(super) unsafe fn sync_party(main: HWND) {
+    let app_ptr = GetWindowLongPtrW(main, GWLP_USERDATA) as *mut App;
+    let Some(app) = app_ptr.as_mut() else {
+        return;
+    };
+    let want = app.party_win.visible;
+    if want && app.party_win.hwnd.is_null() {
+        create_party_window(main);
+        sync_topmost(main);
+    }
+    let Some(app) = app_ptr.as_mut() else {
+        return;
+    };
+    let hwnd = app.party_win.hwnd;
+    if hwnd.is_null() {
+        return;
+    }
+    let shown = IsWindowVisible(hwnd) != 0;
+    if want && !shown {
+        app.render_log();
+        SetLayeredWindowAttributes(hwnd, 0, app.party_win.alpha, LWA_ALPHA);
+        app.party_win.alpha_shown = app.party_win.alpha;
+        ShowWindow(hwnd, SW_SHOW);
+        save_party_pos(hwnd, true);
+    } else if !want && shown {
+        ShowWindow(hwnd, SW_HIDE);
+        save_party_pos(hwnd, false);
     }
 }

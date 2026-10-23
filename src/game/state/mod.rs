@@ -101,7 +101,7 @@ impl GameState {
     }
 
     pub fn relay_dmg(&self) -> Option<u64> {
-        self.boss.is_some().then_some(self.fight_dmg)
+        (self.fight_start != 0).then_some(self.fight_dmg)
     }
 
     pub fn in_ecliptica(&self) -> bool {

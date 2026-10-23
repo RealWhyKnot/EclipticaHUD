@@ -1,5 +1,6 @@
 mod log_proc;
 mod main_proc;
+mod party_proc;
 mod placement;
 
 mod store;
@@ -7,7 +8,7 @@ mod window;
 
 use crate::hud::app::App;
 use crate::hud::app::WINDOW_STEPS;
-use crate::hud::render::{Hit, LogHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
+use crate::hud::render::{Hit, LogHit, PartyHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
 use crate::update;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::*;
@@ -22,6 +23,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use log_proc::*;
 use main_proc::*;
+use party_proc::*;
 use placement::*;
 use store::*;
 use window::*;
@@ -70,6 +72,13 @@ pub fn run() {
         lc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
         lc.lpszClassName = log_class.as_ptr();
         RegisterClassW(&lc);
+        let party_class = wide("EclipticaHUDParty");
+        let mut pc: WNDCLASSW = std::mem::zeroed();
+        pc.lpfnWndProc = Some(party_wndproc);
+        pc.hInstance = module;
+        pc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
+        pc.lpszClassName = party_class.as_ptr();
+        RegisterClassW(&pc);
 
         let (x, y) = load_pos("pos.txt")
             .map(|(x, y, _)| (x, y))
@@ -100,6 +109,10 @@ pub fn run() {
         if load_pos("logpos.txt").is_some_and(|(_, _, open)| open) {
             app.log_open();
             sync_log(hwnd);
+        }
+        if load_pos("partypos.txt").is_some_and(|(_, _, open)| open) {
+            app.party_open();
+            sync_party(hwnd);
         }
 
         let mut msg: MSG = std::mem::zeroed();

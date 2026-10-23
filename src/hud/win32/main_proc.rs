@@ -27,6 +27,16 @@ pub(super) unsafe extern "system" fn wndproc(
                         InvalidateRect(app.log.hwnd, std::ptr::null(), 0);
                     }
                 }
+                let pw = &mut app.party_win;
+                if pw.visible && !pw.hwnd.is_null() {
+                    if pw.alpha != pw.alpha_shown {
+                        SetLayeredWindowAttributes(pw.hwnd, 0, pw.alpha, LWA_ALPHA);
+                        pw.alpha_shown = pw.alpha;
+                    }
+                    if tick.redraw_party {
+                        InvalidateRect(pw.hwnd, std::ptr::null(), 0);
+                    }
+                }
                 if let Some(ms) = tick.timer_ms {
                     SetTimer(hwnd, TIMER_ID, ms, None);
                 }
@@ -35,6 +45,7 @@ pub(super) unsafe extern "system" fn wndproc(
                 }
             }
             sync_log(hwnd);
+            sync_party(hwnd);
             0
         }
         WM_PAINT => {
@@ -102,10 +113,13 @@ pub(super) unsafe extern "system" fn wndproc(
         WM_LBUTTONDOWN => {
             let (x, y) = point(lp);
             if let Some(app) = app_mut(hwnd) {
-                if let Some(hit) = app.enabled_hit(x, y).filter(|h| h.clickable()) {
-                    app.pressed = Some(hit);
-                    SetCapture(hwnd);
-                    repaint(app, hwnd);
+                match app.enabled_hit(x, y).filter(|h| h.clickable()) {
+                    Some(hit) => {
+                        app.pressed = Some(hit);
+                        SetCapture(hwnd);
+                        repaint(app, hwnd);
+                    }
+                    None => drag_window(hwnd),
                 }
             }
             0
@@ -131,7 +145,7 @@ pub(super) unsafe extern "system" fn wndproc(
                                     save_skipped(&tag);
                                 }
                             }
-                            Hit::Target => {
+                            Hit::Mute | Hit::Sound => {
                                 app.activate(hit);
                                 save_sound(app.sound_on);
                             }
@@ -146,11 +160,7 @@ pub(super) unsafe extern "system" fn wndproc(
                             }
                             Hit::Party => {
                                 app.activate(hit);
-                                save_party(app.party_on);
-                                app.poll_party();
-                                if app.log.visible {
-                                    repaint_log(app);
-                                }
+                                sync_party(hwnd);
                             }
                             Hit::ScaleDown | Hit::ScaleUp => {
                                 if app.activate(hit) {
@@ -230,6 +240,9 @@ pub(super) unsafe extern "system" fn wndproc(
             if let Some(app) = app_mut(hwnd) {
                 if !app.log.hwnd.is_null() {
                     save_log_pos(app.log.hwnd, app.log.visible);
+                }
+                if !app.party_win.hwnd.is_null() {
+                    save_party_pos(app.party_win.hwnd, app.party_win.visible);
                 }
             }
             DefWindowProcW(hwnd, msg, wp, lp)

@@ -12,8 +12,8 @@ pub use settings::WINDOW_STEPS;
 use crate::discord::{self, Link, Presence};
 use crate::game::state::GameState;
 use crate::hud::render::{
-    tip_ready, Env, Hit, Info, LogHit, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W, MAX_ALPHA,
-    MAX_SCALE, MIN_ALPHA, MIN_SCALE,
+    tip_ready, Env, Hit, Info, LogHit, PartyHit, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W,
+    MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE, PARTY_H, PARTY_W,
 };
 use crate::hud::timeline::Filter;
 use crate::update::Badge;
@@ -44,11 +44,27 @@ pub struct LogState {
     rows: usize,
 }
 
+pub struct PartyWin {
+    pub hwnd: HWND,
+    pub renderer: Renderer,
+    pub visible: bool,
+    pub hover: Option<PartyHit>,
+    pub hover_at: Option<Instant>,
+    pub pressed: Option<PartyHit>,
+    pub tracking: bool,
+    pub alpha: u8,
+    pub alpha_shown: u8,
+    opened_at: Option<Instant>,
+    vr_rgba: Vec<u8>,
+    last_tip: Option<PartyHit>,
+}
+
 pub struct App {
     pub gs: GameState,
     pub watch: LogWatch,
     pub renderer: Renderer,
     pub log: LogState,
+    pub party_win: PartyWin,
     vr: VrOverlay,
     rgba: Vec<u8>,
     last_ts: u64,
@@ -157,6 +173,20 @@ impl App {
                 slide_at: None,
                 rows: 0,
             },
+            party_win: PartyWin {
+                hwnd: std::ptr::null_mut(),
+                renderer: Renderer::new(dpi, PARTY_W, PARTY_H),
+                visible: false,
+                hover: None,
+                hover_at: None,
+                pressed: None,
+                tracking: false,
+                alpha: 0,
+                alpha_shown: 0,
+                opened_at: None,
+                vr_rgba: Vec::new(),
+                last_tip: None,
+            },
             vr: VrOverlay::new(),
             rgba: Vec::new(),
             last_ts: 0,
@@ -211,7 +241,9 @@ impl App {
         let eff = (self.dpi as f32 * self.scale).round() as u32;
         self.renderer = Renderer::new(eff, LOGICAL_W, LOGICAL_H);
         self.log.renderer = Renderer::new(eff, LOG_W, LOG_H);
+        self.party_win.renderer = Renderer::new(eff, PARTY_W, PARTY_H);
         self.rgba.clear();
+        self.party_win.vr_rgba.clear();
     }
 
     pub fn alpha_byte(&self) -> u8 {
@@ -252,15 +284,15 @@ impl App {
     pub fn hit_enabled(&self, hit: Hit) -> bool {
         if self.prompt_shown() {
             return match hit {
-                Hit::Close | Hit::Log | Hit::Pin => true,
+                Hit::Close | Hit::Log | Hit::Pin | Hit::Party => true,
                 Hit::UpdateNow | Hit::UpdateLater => self.update_ready(),
                 Hit::UpdateSkip => matches!(self.badge, Badge::Ready(_)),
                 _ => false,
             };
         }
         match hit {
-            Hit::Close | Hit::Log | Hit::Pin | Hit::Discord | Hit::Settings => true,
-            Hit::Party => self.settings_open,
+            Hit::Close | Hit::Log | Hit::Pin | Hit::Settings | Hit::Party => true,
+            Hit::Discord | Hit::Sound => self.settings_open,
             Hit::ScaleDown => self.settings_open && self.scale > MIN_SCALE + 0.001,
             Hit::ScaleUp => self.settings_open && self.scale < MAX_SCALE - 0.001,
             Hit::AlphaDown => self.settings_open && self.alpha > MIN_ALPHA,
@@ -269,9 +301,14 @@ impl App {
             Hit::WindowUp => {
                 self.settings_open && self.gs.win() < WINDOW_STEPS[WINDOW_STEPS.len() - 1]
             }
-            Hit::Target | Hit::FightPrev | Hit::FightNext if self.settings_open => false,
+            Hit::Mute | Hit::FightPrev | Hit::FightNext if self.settings_open => false,
             Hit::Info(
-                Info::Boss | Info::Result | Info::Dealt(_) | Info::DealtGraph | Info::LastKill,
+                Info::Boss
+                | Info::Result
+                | Info::Target
+                | Info::Dealt(_)
+                | Info::DealtGraph
+                | Info::LastKill,
             ) if self.settings_open => false,
             Hit::Info(Info::Version) => !self.update_ready(),
             Hit::Info(i) if i.live_only() => self.is_live(),
@@ -279,7 +316,7 @@ impl App {
             Hit::Info(_) => true,
             Hit::Update => self.update_ready(),
             Hit::UpdateNow | Hit::UpdateLater | Hit::UpdateSkip => false,
-            Hit::Target => self.is_live() && self.gs.boss.is_some() && self.gs.target.is_some(),
+            Hit::Mute => self.is_live() && self.gs.boss.is_some(),
             Hit::RunPrev => self.viewed_page() > 0,
             Hit::RunNext => self.sel_run.is_some(),
             Hit::FightPrev => self.cur_group().is_some_and(|i| i > 0),
@@ -293,7 +330,7 @@ impl App {
 
     pub fn activate(&mut self, hit: Hit) -> bool {
         match hit {
-            Hit::Target => {
+            Hit::Mute | Hit::Sound => {
                 self.sound_on = !self.sound_on;
                 true
             }
@@ -318,7 +355,7 @@ impl App {
                 true
             }
             Hit::Party => {
-                self.set_party(!self.party_on);
+                self.party_toggle();
                 true
             }
             Hit::ScaleDown => self.step_scale(-1.0),

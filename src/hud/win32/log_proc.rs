@@ -85,12 +85,15 @@ pub(super) unsafe extern "system" fn log_wndproc(
             let (x, y) = point(lp);
             if let Some(app) = app_mut(hwnd) {
                 let thumb = app.log_thumb();
-                if let Some(hit) = app.log.renderer.log_hit_test(x, y, thumb) {
-                    app.log_press(hit, y);
-                    if hit == LogHit::Thumb {
-                        SetCapture(hwnd);
+                match app.log.renderer.log_hit_test(x, y, thumb) {
+                    Some(LogHit::Title | LogHit::Count) | None => drag_window(hwnd),
+                    Some(hit) => {
+                        app.log_press(hit, y);
+                        if hit == LogHit::Thumb {
+                            SetCapture(hwnd);
+                        }
+                        repaint_log(app);
                     }
-                    repaint_log(app);
                 }
             }
             if let Some(owner) = GetWindow(hwnd, GW_OWNER).as_mut() {

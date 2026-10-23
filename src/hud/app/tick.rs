@@ -9,6 +9,7 @@ use std::time::Instant;
 pub struct Tick {
     pub redraw: bool,
     pub redraw_log: bool,
+    pub redraw_party: bool,
     pub timer_ms: Option<u32>,
     pub quit: bool,
 }
@@ -57,7 +58,7 @@ impl App {
             topmost: self.topmost,
             discord: self.link,
             discord_on: self.discord_on,
-            party_on: self.party_on,
+            party_open: self.party_win.visible,
             view_run: self.shown_run().map(|(i, _)| i),
             view_group: self.viewed_group().map(|(i, _)| i),
             group_pages: self.group_pages(),
@@ -84,6 +85,7 @@ impl App {
         self.cue_effects();
         let services_changed = self.poll_services(now);
         let party_changed = self.poll_party();
+        let (party_anim, redraw_party) = self.tick_party(party_changed);
         let anim = self.animate(env, now);
         let dead = self.dead_since.is_some();
         let tip = self.tip();
@@ -101,7 +103,7 @@ impl App {
         let changed = self.gs.changed;
         self.gs.changed = false;
         let (log_anim, redraw_log) = if self.log.visible {
-            self.tick_log(rotated, env_changed, changed || party_changed)
+            self.tick_log(rotated, env_changed, changed)
         } else {
             (false, false)
         };
@@ -119,12 +121,17 @@ impl App {
                 self.scale,
             );
         }
-        let want: u32 = if anim || log_anim { ANIM_MS } else { 1000 };
+        let want: u32 = if anim || log_anim || party_anim {
+            ANIM_MS
+        } else {
+            1000
+        };
         let timer_ms = (want != self.timer_ms).then_some(want);
         self.timer_ms = want;
         Tick {
             redraw,
             redraw_log,
+            redraw_party,
             timer_ms,
             quit: update::restart_pending(),
         }
@@ -258,11 +265,7 @@ impl App {
         let log_tip_pending = self.log.hover.is_some() && self.log_tip().is_none();
         let rows = self.log_rows();
         if rows != self.log.rows {
-            if rows > self.log.rows
-                && self.primed
-                && self.log.scroll_shown < 1.0
-                && self.log.filter != crate::hud::timeline::Filter::Party
-            {
+            if rows > self.log.rows && self.primed && self.log.scroll_shown < 1.0 {
                 self.log.slide_at = Some(Instant::now());
             }
             self.log.rows = rows;

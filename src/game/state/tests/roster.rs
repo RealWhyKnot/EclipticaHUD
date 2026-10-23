@@ -147,6 +147,6 @@ fn relay_damage_is_the_live_fight_total() {
         "08:01:10",
         "Boss DarkMouth dead, personal damage dealt: ",
     );
-    assert_eq!(gs.relay_dmg(), None);
+    assert_eq!(gs.relay_dmg(), Some(107));
     assert_eq!(gs.fight_dmg, 107);
 }

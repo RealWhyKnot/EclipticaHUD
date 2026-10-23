@@ -27,14 +27,17 @@ impl Renderer {
             }
             _ => {
                 self.choice(f, Hit::UpdateNow, UPDATE_NOW_HIT, GOOD, "Update");
-                self.choice(f, Hit::UpdateLater, UPDATE_LATER_HIT, DANGER, "Later");
+                let later = f.ctl(Hit::UpdateLater, true, false);
+                let ink = self.control(UPDATE_LATER_HIT, later);
+                let (lx, ly, lw, lh) = UPDATE_LATER_HIT;
+                self.text_rect(lx, ly, lw, lh, F_BODY, ink, c, "Later");
                 let (_, sy, _, sh) = UPDATE_SKIP_HIT;
                 if matches!(f.update, Badge::Failed(_)) {
                     self.text_rect(bx, sy, bw, sh, F_TINY, DANGER, c, "Update failed");
                 } else {
                     let (sx, _, sw, _) = UPDATE_SKIP_HIT;
                     let ink = if f.hov(Hit::UpdateSkip) { TEXT } else { DIM };
-                    self.text_rect(sx, sy, sw, sh, F_TINY, ink, c, "Skip this version");
+                    self.link(sx, sy, sw, sh, F_TINY, ink, DT_CENTER, "Skip this version");
                 }
             }
         }

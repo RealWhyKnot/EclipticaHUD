@@ -3,7 +3,7 @@ use super::logwin::*;
 use super::settings::*;
 use super::tick::*;
 use super::*;
-use crate::hud::render::{TARGET_HIT, UPDATE_LATER_HIT, UPDATE_NOW_HIT, UPDATE_SKIP_HIT};
+use crate::hud::render::{MUTE_HIT, UPDATE_LATER_HIT, UPDATE_NOW_HIT, UPDATE_SKIP_HIT};
 use crate::hud::timeline;
 
 const P: &str = "2026.09.07 09:12:28 Debug      -  ";
@@ -81,10 +81,10 @@ fn settings_steps_and_clamps() {
     let mut app = headless();
     let base = app.renderer.width;
     assert!(!app.hit_enabled(Hit::ScaleUp));
-    assert!(app.hit_enabled(Hit::Target) || app.gs.boss.is_none());
+    assert!(app.hit_enabled(Hit::Mute) || app.gs.boss.is_none());
     assert!(app.activate(Hit::Settings));
     assert!(app.settings_open);
-    assert!(!app.hit_enabled(Hit::Target));
+    assert!(!app.hit_enabled(Hit::Mute));
     assert!(!app.hit_enabled(Hit::Info(Info::Boss)));
     assert!(!app.hit_enabled(Hit::AlphaUp));
     assert!(app.hit_enabled(Hit::AlphaDown));
@@ -309,17 +309,20 @@ fn navigation() {
     assert_eq!(app.sel_group, None);
     assert!(app.run_next());
     assert!(app.is_live());
-    assert!(!app.hit_enabled(Hit::Target));
+    assert!(!app.hit_enabled(Hit::Mute));
     assert!(app.hit_enabled(Hit::Log));
     assert!(app.topmost);
     assert!(app.activate(Hit::Pin));
     assert!(!app.topmost);
     assert!(!app.discord_on);
+    assert!(!app.hit_enabled(Hit::Discord));
+    app.settings_open = true;
     assert!(app.hit_enabled(Hit::Discord));
     assert!(app.activate(Hit::Discord));
     assert!(app.discord_on && app.presence.is_some());
     assert!(app.activate(Hit::Discord));
     assert!(!app.discord_on);
+    app.settings_open = false;
     assert!(app.hit_enabled(Hit::Info(Info::LastHit)));
     assert!(!app.hit_enabled(Hit::Info(Info::Result)));
     assert!(app.run_prev());
@@ -577,7 +580,7 @@ fn update_prompt_is_modal_and_waits_for_boss_fights() {
     let mut app = headless();
     let at = |r: (i32, i32, i32, i32)| (r.0 + r.2 / 2, r.1 + r.3 / 2);
     let (nx, ny) = at(UPDATE_NOW_HIT);
-    let (tx, ty) = at(TARGET_HIT);
+    let (tx, ty) = at(MUTE_HIT);
     assert!(!app.prompt_shown());
     assert_ne!(app.enabled_hit(nx, ny), Some(Hit::UpdateNow));
     app.badge = Badge::Ready("v2026.10.29.0".into());
@@ -591,10 +594,11 @@ fn update_prompt_is_modal_and_waits_for_boss_fights() {
     assert_eq!(app.enabled_hit(lx, ly), Some(Hit::UpdateLater));
     assert_eq!(app.enabled_hit(LOGICAL_W - 1, 0), Some(Hit::Close));
     assert_eq!(app.enabled_hit(240, 10), None);
+    assert_eq!(app.enabled_hit(210, 10), Some(Hit::Party));
     assert_eq!(app.enabled_hit(300, LOGICAL_H - 20), None);
     for h in [
         Hit::Settings,
-        Hit::Target,
+        Hit::Mute,
         Hit::RunPrev,
         Hit::Info(Info::Boss),
     ] {
@@ -611,7 +615,7 @@ fn update_prompt_is_modal_and_waits_for_boss_fights() {
     assert_ne!(app.enabled_hit(nx, ny), Some(Hit::UpdateNow));
     app.gs
         .feed(&format!("{P}ownership of Kakarot transferred to Alice"));
-    assert_eq!(app.enabled_hit(tx, ty), Some(Hit::Target));
+    assert_eq!(app.enabled_hit(tx, ty), Some(Hit::Mute));
     app.gs
         .feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
     assert!(app.prompt_shown());
@@ -629,7 +633,6 @@ mod party_tests {
     use crate::relay::proto::{member_hash, room_hash};
     use crate::relay::{self, Link, Poll, Snap, Want};
     use std::time::{Duration, Instant};
-    use timeline::Filter;
 
     const W1: &str = "[Behaviour] Joining wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:98473~hidden(usr_me)~region(use)";
     const W2: &str = "[Behaviour] Joining wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:11111~hidden(usr_me)~region(use)";
@@ -697,19 +700,33 @@ mod party_tests {
     }
 
     #[test]
-    fn party_toggle_needs_open_settings() {
+    fn party_button_opens_a_window_and_the_window_holds_the_toggle() {
         let mut app = headless();
         assert!(!app.party_on);
-        assert!(!app.hit_enabled(Hit::Party));
-        app.activate(Hit::Settings);
         assert!(app.hit_enabled(Hit::Party));
         assert!(app.activate(Hit::Party));
-        assert!(app.party_on);
-        app.render();
-        assert!(app.activate(Hit::Party));
+        assert!(app.party_win.visible);
         assert!(!app.party_on);
+        assert_eq!(app.party_win.alpha, 0);
+        app.render_party();
+        assert!(app.party_activate(PartyHit::Toggle));
+        assert!(app.party_on);
+        assert!(!app.party_activate(PartyHit::Board));
+        assert!(app.activate(Hit::Party));
+        assert!(!app.party_win.visible);
+        assert!(app.party_on);
+        app.party_open();
+        app.party_set_hover(Some(PartyHit::Close));
+        assert!(app.party_activate(PartyHit::Close));
+        assert!(!app.party_win.visible);
+        assert_eq!(app.party_win.hover, None);
         app.activate(Hit::Settings);
-        assert!(!app.hit_enabled(Hit::Party));
+        assert!(app.hit_enabled(Hit::Party));
+        assert!(app.hit_enabled(Hit::Sound));
+        assert!(!app.hit_enabled(Hit::Mute));
+        let (x, y, w, h) = crate::hud::render::PARTY_CLOSE_HIT;
+        assert_eq!(app.party_hit(x + w / 2, y + h / 2), Some(PartyHit::Close));
+        assert_eq!(app.party_hit(4, 4), None);
     }
 
     #[test]
@@ -732,11 +749,14 @@ mod party_tests {
             rows(&app),
             [
                 row("Alice", false, true, 300),
-                row("you", true, true, 100),
-                row("Player 1", false, true, 100)
+                row("Me", true, true, 100),
+                row("Unknown player 1", false, true, 100)
             ]
         );
-        assert_eq!(app.party.pane().status(), "connected");
+        assert_eq!(app.party.pane().status().0, "connected");
+        assert!(app.party.pane().ready);
+        assert_eq!(app.party.pane().here, 2);
+        assert!(app.party.pane().fight.as_ref().is_some_and(|f| f.live));
         assert!(!app.party_step(t0, Some(&want), poll(Link::Connected, 1, Vec::new())));
         let wrong = Snap {
             room: room_hash("wrld_other:1"),
@@ -755,10 +775,6 @@ mod party_tests {
         app.party_step(t1, Some(&want), poll(Link::Connected, 1, vec![s]));
         assert_eq!(rows(&app)[0], row("Alice", false, true, 500));
         assert_eq!(app.party.pane().rows[0].dps, 200);
-        app.log.filter = Filter::Party;
-        assert_eq!(app.log_rows(), 4);
-        app.log.filter = Filter::All;
-        assert_ne!(app.log_rows(), 4);
     }
 
     #[test]
@@ -782,13 +798,13 @@ mod party_tests {
             rows(&app),
             [
                 row("Alice", false, true, 400),
-                row("Player 1", false, false, 100),
-                row("you", true, true, 0)
+                row("Unknown player 1", false, false, 100),
+                row("Me", true, true, 0)
             ]
         );
         app.party_step(t1, Some(&want), poll(Link::Retrying, 1, Vec::new()));
         assert_eq!(rows(&app)[0], row("Alice", false, false, 400));
-        assert_eq!(app.party.pane().status(), "not connected");
+        assert_eq!(app.party.pane().status().0, "can't reach the server");
         app.party_step(
             t1,
             Some(&want),
@@ -827,20 +843,20 @@ mod party_tests {
         assert_eq!(
             rows(&app),
             [
-                row("Player 1", false, false, 300),
-                row("you", true, false, 100)
+                row("Unknown player 1", false, false, 300),
+                row("Me", true, true, 100)
             ]
         );
-        app.log.filter = Filter::Party;
-        assert_eq!(app.log_rows(), 3);
+        let fight = app.party.pane().fight.clone().unwrap();
+        assert!(fight.down && !fight.live);
+        assert_eq!(fight.secs, 30);
         feed(
             &mut app,
             "09:14:00",
             "ECLIPTICA - now fighting boss: DarkMouth(Clone) on phase: 0",
         );
         app.party_step(t0, Some(&want), poll(Link::Connected, 1, Vec::new()));
-        assert_eq!(rows(&app), [row("you", true, true, 0)]);
-        assert_eq!(app.log_rows(), 0);
+        assert_eq!(rows(&app), [row("Me", true, true, 0)]);
         app.party_step(
             t0,
             Some(&want),
@@ -850,8 +866,8 @@ mod party_tests {
                 vec![snap(t0, &want, &[("usr_c", 5), ("usr_b", 9)])],
             ),
         );
-        assert_eq!(rows(&app)[0], row("Player 1", false, true, 9));
-        assert_eq!(rows(&app)[1], row("Player 2", false, true, 5));
+        assert_eq!(rows(&app)[0], row("Unknown player 1", false, true, 9));
+        assert_eq!(rows(&app)[1], row("Unknown player 2", false, true, 5));
         feed(&mut app, "09:15:00", "[Behaviour] OnLeftRoom");
         feed(&mut app, "09:15:01", ENTER);
         feed(&mut app, "09:15:01", W2);
@@ -864,7 +880,7 @@ mod party_tests {
             Some(&want2),
             poll(Link::Connected, 2, vec![snap(t0, &want2, &[("usr_c", 7)])]),
         );
-        assert_eq!(rows(&app), [row("Player 1", false, true, 7)]);
+        assert_eq!(rows(&app), [row("Unknown player 1", false, true, 7)]);
     }
 
     #[test]
@@ -881,16 +897,16 @@ mod party_tests {
             Some(&want),
             poll(Link::Connected, 1, vec![snap(t0, &want, &[("usr_a", 300)])]),
         );
-        assert!(!app.party.pane().shown().is_empty());
+        assert!(!app.party.pane().rows.is_empty());
         app.set_party(false);
         assert!(app.party_step(t0, None, None));
         assert!(rows(&app).is_empty());
         assert!(!app.party.pane().on);
-        assert_eq!(app.party.pane().status(), "sharing off");
+        assert_eq!(app.party.pane().status().0, "off");
         app.set_party(true);
         app.party_step(t0, Some(&want), None);
-        assert_eq!(rows(&app), [row("you", true, true, 0)]);
-        assert_eq!(app.party.pane().status(), "not connected");
+        assert_eq!(rows(&app), [row("Me", true, true, 0)]);
+        assert_eq!(app.party.pane().status().0, "connecting");
     }
 
     #[test]
@@ -914,7 +930,7 @@ mod party_tests {
     }
 
     #[test]
-    fn damage_is_only_sent_during_a_live_fight() {
+    fn damage_is_sent_from_the_first_fight_on() {
         let (mut app, want) = party_app();
         let fake = fake_relay(&mut app);
         app.vrc_running = true;
@@ -934,7 +950,7 @@ mod party_tests {
             "Boss Kakarot dead, personal damage dealt: ",
         );
         app.poll_party();
-        assert_eq!(fake.take(), [(Some(want.clone()), None)]);
+        assert_eq!(fake.take(), [(Some(want.clone()), Some(100))]);
         app.vrc_running = false;
         app.poll_party();
         assert_eq!(fake.take(), [(None, None)]);
