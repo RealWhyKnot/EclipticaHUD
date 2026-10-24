@@ -40,6 +40,7 @@ pub enum Mode {
 }
 
 pub const DEFAULT_WINDOW: u64 = 10;
+pub const TOKEN_ALERT_SECS: u64 = 12;
 
 #[derive(Default)]
 pub struct GameState {
@@ -83,6 +84,7 @@ pub struct GameState {
     alive_since: Option<u64>,
     clear_ts: Option<u64>,
     last_clear: Option<u64>,
+    token_clear: Option<u64>,
     pub token_alerts: u64,
     pub deaths_total: u64,
     pub location: Option<String>,
@@ -222,6 +224,7 @@ impl GameState {
 
     pub fn feed_msg(&mut self, ts: u64, msg: &str) -> bool {
         self.last_ts = self.last_ts.max(ts);
+        self.poll_token_alert(ts);
         let ev = parse_msg(msg);
         let mut kept = ev.is_some();
         if !matches!(ev, Some(Event::PlayerDead))

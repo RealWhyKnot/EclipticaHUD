@@ -285,6 +285,7 @@ fn stage_without_a_pool_reset_has_no_clear() {
     );
     let clear = feed_at(&mut gs, "11:56:30", "Retiring Enemy POOL ID3");
     assert_eq!(gs.stage_clear(), Some(clear));
+    gs.poll_token_alert(clear + TOKEN_ALERT_SECS);
     assert_eq!(gs.token_alerts, 1);
 }
 

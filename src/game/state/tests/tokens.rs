@@ -134,8 +134,12 @@ fn alert_when_enemies_clear_with_tokens_missing() {
     let clear = feed_at(&mut gs, "01:10:34", "Retiring Enemy POOL ID2");
     assert_eq!(gs.stage_clear(), Some(clear));
     assert_eq!(gs.stage_secs(clear + 600), 79);
+    assert_eq!(gs.token_alerts, 0);
+    gs.poll_token_alert(clear + TOKEN_ALERT_SECS - 1);
+    assert_eq!(gs.token_alerts, 0);
+    feed_at(&mut gs, "01:10:46", "unrelated line");
     assert_eq!(gs.token_alerts, 1);
-    for t in ["01:10:35", "01:10:40", "01:10:52"] {
+    for t in ["01:10:47", "01:10:50", "01:10:52"] {
         feed_at(&mut gs, t, SAVE);
     }
     assert_eq!(gs.tokens_missing(), None);
@@ -145,5 +149,101 @@ fn alert_when_enemies_clear_with_tokens_missing() {
         "Initializing Enemy POOL ID5 as ENEMY ID 0",
     );
     feed_at(&mut gs, "01:11:05", "Retiring Enemy POOL ID5");
+    assert_eq!(gs.token_alerts, 1);
+}
+
+fn hall_with_pool(gs: &mut GameState) {
+    feed_at(gs, "13:39:50", RESET);
+    spawn_level(gs, "13:40:02", HALL);
+    for id in 0..20 {
+        feed_at(gs, "13:40:02", &format!("Retiring Enemy POOL ID{id}"));
+    }
+}
+
+#[test]
+fn no_alert_when_the_next_enemy_spawns_soon_after_a_clear() {
+    let mut gs = GameState::default();
+    hall_with_pool(&mut gs);
+    feed_at(
+        &mut gs,
+        "13:40:12",
+        "Initializing Enemy POOL ID0 as ENEMY ID 3",
+    );
+    let clear = feed_at(&mut gs, "13:40:24", "Retiring Enemy POOL ID0");
+    assert_eq!(gs.stage_clear(), Some(clear));
+    feed_at(
+        &mut gs,
+        "13:40:25",
+        "Initializing Enemy POOL ID0 as ENEMY ID 1",
+    );
+    gs.poll_token_alert(clear + 60);
+    assert_eq!(gs.token_alerts, 0);
+    feed_at(
+        &mut gs,
+        "13:40:28",
+        "Initializing Enemy POOL ID1 as ENEMY ID 1",
+    );
+    feed_at(&mut gs, "13:40:35", "Retiring Enemy POOL ID1");
+    let clear = feed_at(&mut gs, "13:41:11", "Retiring Enemy POOL ID0");
+    feed_at(
+        &mut gs,
+        "13:41:19",
+        "Initializing Enemy POOL ID0 as ENEMY ID 2",
+    );
+    feed_at(&mut gs, "13:41:30", "unrelated line");
+    assert_eq!(gs.token_alerts, 0);
+    let last = feed_at(&mut gs, "13:41:40", "Retiring Enemy POOL ID0");
+    assert!(last > clear);
+    feed_at(&mut gs, "13:41:51", "unrelated line");
+    assert_eq!(gs.token_alerts, 0);
+    feed_at(&mut gs, "13:41:52", "unrelated line");
+    assert_eq!(gs.token_alerts, 1);
+    feed_at(&mut gs, "13:42:30", "unrelated line");
+    assert_eq!(gs.token_alerts, 1);
+}
+
+#[test]
+fn no_alert_when_tokens_are_picked_up_before_it_is_due() {
+    let mut gs = GameState::default();
+    hall_with_pool(&mut gs);
+    feed_at(&mut gs, "13:40:10", SAVE);
+    feed_at(
+        &mut gs,
+        "13:40:12",
+        "Initializing Enemy POOL ID0 as ENEMY ID 3",
+    );
+    let clear = feed_at(&mut gs, "13:40:30", "Retiring Enemy POOL ID0");
+    for t in ["13:40:33", "13:40:38"] {
+        feed_at(&mut gs, t, SAVE);
+    }
+    assert_eq!(gs.tokens_missing(), None);
+    gs.poll_token_alert(clear + 60);
+    assert_eq!(gs.token_alerts, 0);
+}
+
+#[test]
+fn a_summon_after_a_clear_keeps_the_alert() {
+    let mut gs = GameState::default();
+    hall_with_pool(&mut gs);
+    feed_at(
+        &mut gs,
+        "13:40:12",
+        "Initializing Enemy POOL ID0 as ENEMY ID 3",
+    );
+    let clear = feed_at(&mut gs, "13:40:24", "Retiring Enemy POOL ID0");
+    feed_at(
+        &mut gs,
+        "13:40:30",
+        "Initializing Enemy POOL ID4 as ENEMY ID 9",
+    );
+    gs.poll_token_alert(clear + 60);
+    assert_eq!(gs.token_alerts, 0);
+    feed_at(
+        &mut gs,
+        "13:40:30",
+        "[Behaviour] No targets to encode on Neko3(Clone)",
+    );
+    assert_eq!(gs.stage_clear(), Some(clear));
+    gs.poll_token_alert(clear + TOKEN_ALERT_SECS);
     assert_eq!(gs.token_alerts, 1);
 }

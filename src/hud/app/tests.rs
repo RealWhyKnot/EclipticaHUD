@@ -513,7 +513,18 @@ fn killed_boss_moves_to_previous_page() {
 #[test]
 fn token_warning_when_enemies_clear_with_tokens_missing() {
     let mut app = headless();
-    let feed = |app: &mut App, msg: &str| app.gs.feed(&format!("{P}{msg}"));
+    let clock = std::cell::Cell::new(9 * 3600 + 13 * 60);
+    let feed = |app: &mut App, msg: &str| {
+        let t = clock.get();
+        let (h, m, s) = (t / 3600, t / 60 % 60, t % 60);
+        app.gs.feed(&format!(
+            "2026.09.07 {h:02}:{m:02}:{s:02} Debug      -  {msg}"
+        ))
+    };
+    let wait = |app: &mut App| {
+        clock.set(clock.get() + crate::game::state::TOKEN_ALERT_SECS);
+        feed(app, "waiting");
+    };
     let spawn_stage = |app: &mut App, stage: &str| {
         for _ in 0..3 {
             feed(app, "spawn token, False, 0");
@@ -524,6 +535,7 @@ fn token_warning_when_enemies_clear_with_tokens_missing() {
     spawn_stage(&mut app, STAGE_B);
     feed(&mut app, "Initializing Enemy POOL ID0 as ENEMY ID 1");
     feed(&mut app, "Retiring Enemy POOL ID0");
+    wait(&mut app);
     app.tick();
     assert!(app.warn_at.is_none());
     spawn_stage(&mut app, STAGE_A);
@@ -532,6 +544,9 @@ fn token_warning_when_enemies_clear_with_tokens_missing() {
     app.tick();
     assert!(app.warn_at.is_none());
     feed(&mut app, "Retiring Enemy POOL ID0");
+    app.tick();
+    assert!(app.warn_at.is_none());
+    wait(&mut app);
     let tick = app.tick();
     assert!(app.warn_at.is_some());
     assert_eq!(tick.timer_ms, Some(ANIM_MS));
@@ -540,6 +555,12 @@ fn token_warning_when_enemies_clear_with_tokens_missing() {
     assert!(app.warn_at.is_none());
     feed(&mut app, "Initializing Enemy POOL ID3 as ENEMY ID 1");
     feed(&mut app, "Retiring Enemy POOL ID3");
+    feed(&mut app, "Initializing Enemy POOL ID3 as ENEMY ID 1");
+    wait(&mut app);
+    app.tick();
+    assert!(app.warn_at.is_none());
+    feed(&mut app, "Retiring Enemy POOL ID3");
+    wait(&mut app);
     app.tick();
     assert!(app.warn_at.is_some());
     app.warn_at = None;
@@ -548,6 +569,7 @@ fn token_warning_when_enemies_clear_with_tokens_missing() {
         feed(&mut app, "ECLIPTICA saving SESSION ID 2505");
     }
     feed(&mut app, "Retiring Enemy POOL ID3");
+    wait(&mut app);
     app.tick();
     assert!(app.warn_at.is_none());
 }

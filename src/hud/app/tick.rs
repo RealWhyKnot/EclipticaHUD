@@ -99,6 +99,7 @@ impl App {
         let rotated = self.pump_log();
         let (env, env_changed) = self.poll_env();
         let now = self.now();
+        self.gs.poll_token_alert(now);
         self.cue_effects();
         let services_changed = self.poll_services(now);
         let party_changed = self.poll_party();

@@ -1,4 +1,4 @@
-use super::{GameState, Mode};
+use super::{GameState, Mode, TOKEN_ALERT_SECS};
 use crate::game::event::Event;
 use crate::game::names::player_summon;
 use crate::game::run::{
@@ -453,9 +453,21 @@ impl GameState {
         if self.alive.remove(&slot) && self.alive.is_empty() {
             self.clear_ts = Some(ts);
             self.last_clear = Some(ts);
-            if self.tokens_missing().is_some() {
-                self.token_alerts += 1;
-            }
+            self.token_clear = Some(ts);
+        }
+    }
+
+    pub fn poll_token_alert(&mut self, now: u64) {
+        let Some(at) = self.token_clear else {
+            return;
+        };
+        if now < at + TOKEN_ALERT_SECS || self.last_spawn.is_some() {
+            return;
+        }
+        self.token_clear = None;
+        if self.stage_clear() == Some(at) && self.tokens_missing().is_some() {
+            self.token_alerts += 1;
+            self.changed = true;
         }
     }
 
