@@ -137,7 +137,7 @@ fn alert_when_enemies_clear_with_tokens_missing() {
     assert_eq!(gs.token_alerts, 0);
     gs.poll_token_alert(clear + TOKEN_ALERT_SECS - 1);
     assert_eq!(gs.token_alerts, 0);
-    feed_at(&mut gs, "01:10:44", "unrelated line");
+    feed_at(&mut gs, "01:10:42", "unrelated line");
     assert_eq!(gs.token_alerts, 1);
     for t in ["01:10:47", "01:10:50", "01:10:52"] {
         feed_at(&mut gs, t, SAVE);
@@ -187,16 +187,16 @@ fn no_alert_when_the_next_enemy_spawns_soon_after_a_clear() {
     let clear = feed_at(&mut gs, "13:41:11", "Retiring Enemy POOL ID0");
     feed_at(
         &mut gs,
-        "13:41:20",
+        "13:41:18",
         "Initializing Enemy POOL ID0 as ENEMY ID 2",
     );
     feed_at(&mut gs, "13:41:30", "unrelated line");
     assert_eq!(gs.token_alerts, 0);
     let last = feed_at(&mut gs, "13:41:40", "Retiring Enemy POOL ID0");
     assert!(last > clear);
-    feed_at(&mut gs, "13:41:49", "unrelated line");
+    feed_at(&mut gs, "13:41:47", "unrelated line");
     assert_eq!(gs.token_alerts, 0);
-    feed_at(&mut gs, "13:41:50", "unrelated line");
+    feed_at(&mut gs, "13:41:48", "unrelated line");
     assert_eq!(gs.token_alerts, 1);
     feed_at(&mut gs, "13:42:30", "unrelated line");
     assert_eq!(gs.token_alerts, 1);
@@ -213,7 +213,7 @@ fn no_alert_when_tokens_are_picked_up_before_it_is_due() {
         "Initializing Enemy POOL ID0 as ENEMY ID 3",
     );
     let clear = feed_at(&mut gs, "13:40:30", "Retiring Enemy POOL ID0");
-    for t in ["13:40:33", "13:40:38"] {
+    for t in ["13:40:33", "13:40:36"] {
         feed_at(&mut gs, t, SAVE);
     }
     assert_eq!(gs.tokens_missing(), None);
