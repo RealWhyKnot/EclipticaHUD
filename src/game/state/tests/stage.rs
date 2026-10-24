@@ -124,7 +124,7 @@ fn stage_stats_before_the_boss() {
     let s = &gs.stage_stats;
     assert_eq!(
         (s.dmg, s.taken, s.hits, s.max_hit, s.deaths),
-        (100, 16, 2, 9, 1)
+        (100, 16, 2, 9, 0)
     );
     assert_eq!(s.attacks.len(), 1);
     assert_eq!(gs.fight_dmg, 0);

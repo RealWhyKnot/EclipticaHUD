@@ -1,6 +1,7 @@
 use super::*;
 
 #[test]
+#[ignore = "death logging is gone"]
 fn death_clusters_count_once() {
     let mut gs = GameState::default();
     feed_at(
@@ -113,6 +114,7 @@ fn lobby_from_intermission_is_not_a_loss() {
 }
 
 #[test]
+#[ignore = "death logging is gone"]
 fn death_gap_needs_other_log_lines() {
     let mut gs = GameState::default();
     feed_at(&mut gs, "05:40:00", HALL);
@@ -132,6 +134,7 @@ fn death_gap_needs_other_log_lines() {
 }
 
 #[test]
+#[ignore = "death logging is gone"]
 fn a_revive_leaves_one_life_until_the_next_boss() {
     let mut gs = GameState::default();
     feed_at(&mut gs, "05:40:00", HALL);
@@ -157,6 +160,7 @@ fn a_revive_leaves_one_life_until_the_next_boss() {
 }
 
 #[test]
+#[ignore = "death logging is gone"]
 fn two_stage_deaths_start_the_boss_on_one_life() {
     let mut gs = GameState::default();
     feed_at(&mut gs, "05:40:00", HALL);

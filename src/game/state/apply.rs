@@ -7,7 +7,7 @@ use crate::game::run::{
 };
 use crate::game::source::describe_source;
 
-const DEATH_HOLD: u64 = 2;
+// const DEATH_HOLD: u64 = 2;
 const LOG_CAP: usize = 500;
 pub const ROSTER_CAP: usize = 128;
 
@@ -82,7 +82,10 @@ impl GameState {
             Event::EnemySpawn { slot, kind } => self.enemy_spawn(slot, kind),
             Event::EnemyRetire(slot) => self.enemy_retire(ts, slot),
             Event::EnemyName(name) => self.enemy_name(name),
-            Event::PlayerDead => self.player_dead(ts),
+            // Death logging is gone: the game stopped writing its death line reliably (a downed
+            // player can go without it entirely), and nothing else in the log marks a death.
+            // Event::PlayerDead => self.player_dead(ts),
+            Event::PlayerDead => {}
             Event::WorldLine(_) => {}
         }
     }
@@ -277,32 +280,33 @@ impl GameState {
         }
     }
 
-    fn player_dead(&mut self, ts: u64) {
-        let new = self
-            .last_death
-            .is_none_or(|_| self.alive_since.is_some_and(|a| a < ts));
-        self.last_death = Some(ts);
-        self.alive_since = None;
-        if new {
-            self.death_final = self.cursed;
-            self.cursed = true;
-            self.deaths_total += 1;
-            if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
-                r.deaths += 1;
-            }
-            if self.pre_boss() {
-                self.stage_stats.deaths += 1;
-            }
-            if let Some(f) = self.open_fight() {
-                f.deaths += 1;
-            }
-            self.deaths_log.push_back((ts, self.seq));
-            if self.deaths_log.len() > LOG_CAP {
-                self.deaths_log.pop_front();
-            }
-        }
-        self.dead_until = ts + DEATH_HOLD;
-    }
+    // Death logging is gone, see Event::PlayerDead in apply.
+    // fn player_dead(&mut self, ts: u64) {
+    //     let new = self
+    //         .last_death
+    //         .is_none_or(|_| self.alive_since.is_some_and(|a| a < ts));
+    //     self.last_death = Some(ts);
+    //     self.alive_since = None;
+    //     if new {
+    //         self.death_final = self.cursed;
+    //         self.cursed = true;
+    //         self.deaths_total += 1;
+    //         if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
+    //             r.deaths += 1;
+    //         }
+    //         if self.pre_boss() {
+    //             self.stage_stats.deaths += 1;
+    //         }
+    //         if let Some(f) = self.open_fight() {
+    //             f.deaths += 1;
+    //         }
+    //         self.deaths_log.push_back((ts, self.seq));
+    //         if self.deaths_log.len() > LOG_CAP {
+    //             self.deaths_log.pop_front();
+    //         }
+    //     }
+    //     self.dead_until = ts + DEATH_HOLD;
+    // }
 
     fn record_kill(&mut self, k: KillSummary) {
         let Some(f) = self

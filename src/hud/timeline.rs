@@ -208,14 +208,14 @@ mod tests {
         let gs = built();
         assert_eq!(
             shape(&timeline(live(&gs), Filter::All)),
-            "d tBob h7 tAlice fYuki h1"
+            "tBob h7 tAlice fYuki h1"
         );
     }
 
     #[test]
     fn timeline_filters() {
         let gs = built();
-        assert_eq!(shape(&timeline(live(&gs), Filter::Damage)), "d h7 fYuki h1");
+        assert_eq!(shape(&timeline(live(&gs), Filter::Damage)), "h7 fYuki h1");
         assert_eq!(
             shape(&timeline(live(&gs), Filter::Targets)),
             "tBob tAlice fYuki"
@@ -229,7 +229,7 @@ mod tests {
         assert!(timeline(live(&gs), Filter::All).is_empty());
         assert_eq!(
             shape(&timeline(Some(of_run(&gs.runs[0])), Filter::All)),
-            "d tBob h7 tAlice fYuki h1"
+            "tBob h7 tAlice fYuki h1"
         );
         feed(
             &mut gs,

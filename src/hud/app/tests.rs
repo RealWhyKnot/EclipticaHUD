@@ -1435,7 +1435,7 @@ fn archived_logs_replay_after_vrchat_deletes_them() {
     let mut from_db = GameState::default();
     archive::backfill(&mut from_db, Some(&dir), Some(&mut db));
     assert_eq!(snapshot(&from_db), snapshot(&from_file));
-    assert_eq!(from_file.runs[0].deaths, 2);
+    assert_eq!(from_file.runs[0].deaths, 0);
     assert!(from_file.runs[0].end_ts.is_some());
     archive::backfill(&mut GameState::default(), Some(&dir), Some(&mut db));
     assert_eq!(db.logs().len(), 1);
@@ -1565,7 +1565,7 @@ fn live_log_is_archived_as_it_is_read() {
         .lines()
         .filter(|l| fresh.feed_kept(l).is_some_and(|(_, k)| k.is_some()))
         .count() as u64;
-    assert_eq!(kept, 11);
+    assert_eq!(kept, 10);
     assert_eq!(n, kept);
     std::fs::remove_dir_all(&dir).unwrap();
 }

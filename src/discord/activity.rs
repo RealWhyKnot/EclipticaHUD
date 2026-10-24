@@ -485,7 +485,7 @@ mod tests {
         assert!(a.contains("\"details\":\"Fighting Jim C. Bringer\""), "{a}");
         assert!(
             a.contains(
-                "\"state\":\"Dead, can be revived | 10.5k DPS | 21.1k damage | 0 taken | 1 death\""
+                "\"state\":\"10.5k DPS | 21.1k damage | 0 taken\""
             ),
             "{a}"
         );
@@ -499,6 +499,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "death logging is gone"]
     fn boss_presence_shows_taken_and_whether_a_revive_is_left() {
         let mut gs = GameState::default();
         feed(

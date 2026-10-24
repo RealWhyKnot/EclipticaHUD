@@ -145,7 +145,7 @@ fn end_run_clears_live_state() {
     let run = &gs.runs[0];
     assert_eq!(run.hits.len(), 1);
     assert_eq!(run.targets.len(), 1);
-    assert_eq!(run.death_log.len(), 1);
+    assert_eq!(run.death_log.len(), 0);
     assert_eq!(run.stage_no, Some(1));
     feed_at(&mut gs, "04:09:00", "ownership of Nan transferred to Bob");
     assert!(gs.target.is_none());

@@ -97,8 +97,7 @@ const WANT: &str = "\
 1\tnon_strike_total\t120
 1\tplayer_left\tP1
 0\tplayers\t2
-1\tdeath
-0\tplayer_dead
+1\tplayer_dead
 1\tintermission
 1\tstage_end\tGMBigcity\t1\t0\t1\t0\t0\t0\t0\t0
 0\tfight_end\tHakli\t1\tkilled\t1\t10\t25\t21\t4\t12\t0\t5239\t120
@@ -106,7 +105,7 @@ const WANT: &str = "\
 0\tfight_attack\tHakli\tenemy\tP1's Fireball\t3\t1
 0\tfight_attack\tHakli\tenemy\tP2\t4\t1
 0\tfight_attack\tHakli\tunknown\tno source\t2\t1
-0\trun_end\tlobby\t17\t1\t1\t1\t1\t1\tThaumaturge\tGMBigcity\t25\t21\t4\t12
+0\trun_end\tlobby\t17\t1\t1\t1\t1\t0\tThaumaturge\tGMBigcity\t25\t21\t4\t12
 0\tlobby
 1\tsession_save\t4242
 1\troom_left
@@ -319,7 +318,7 @@ fn a_closed_log_ends_its_open_run() {
     assert!(db.usage_commit(&first.cursors));
     let text = body(&first.text);
     assert!(text.contains("\tboss_fight\tHakli\t0.25\n"), "{text}");
-    assert_eq!(text.matches("\tdeath\n").count(), 1);
+    assert_eq!(text.matches("\tdeath\n").count(), 0);
     assert!(!text.contains("run_end"));
     add(&mut db, LATER, &[ENTER]);
     let next = build(&db, "1", MAX_TEXT).unwrap();
