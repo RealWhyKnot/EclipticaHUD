@@ -2,7 +2,7 @@ use super::proto::tests::{LOC, USR};
 use super::proto::{claim_hash, member_hash, room_hash, Msg, Totals, MAX_DMG};
 
 fn dealt(n: u64) -> Totals {
-    Totals { dealt: n, taken: 0 }
+    Totals::from((n, 0))
 }
 use super::*;
 use std::io::{Read, Write};
@@ -39,27 +39,15 @@ fn backoff_doubles_to_sixty_with_bounded_jitter() {
 #[test]
 fn throttle_sends_a_change_in_taken_alone() {
     let mut t = Throttle::default();
-    let a = Totals {
-        dealt: 50,
-        taken: 4,
-    };
-    let b = Totals {
-        dealt: 50,
-        taken: 9,
-    };
+    let a = Totals::from((50, 4));
+    let b = Totals::from((50, 9));
     assert_eq!(t.due(0, Some(a)), Some(Msg::Dmg(a)));
     assert_eq!(t.wait_ms(500, Some(b)), 500);
     assert_eq!(t.due(1000, Some(b)), Some(Msg::Dmg(b)));
-    let big = Totals {
-        dealt: 1,
-        taken: u64::MAX,
-    };
+    let big = Totals::from((1, u64::MAX));
     assert_eq!(
         t.due(2000, Some(big)),
-        Some(Msg::Dmg(Totals {
-            dealt: 1,
-            taken: MAX_DMG
-        }))
+        Some(Msg::Dmg(Totals::from((1, MAX_DMG))))
     );
 }
 
@@ -492,28 +480,13 @@ fn client_joins_sends_damage_and_reads_snaps() {
         0x2,
         &Msg::Snap(vec![
             (member_hash(LOC, USR), dealt(300)),
-            (
-                other,
-                Totals {
-                    dealt: 4242,
-                    taken: 77,
-                },
-            ),
+            (other, Totals::from((4242, 77))),
         ])
         .encode(),
     );
     let snaps = wait_for(|| Some(hub.poll().snaps).filter(|s| !s.is_empty()));
     assert_eq!(snaps[0].room, room_hash(LOC));
-    assert_eq!(
-        snaps[0].entries[1],
-        (
-            other,
-            Totals {
-                dealt: 4242,
-                taken: 77
-            }
-        )
-    );
+    assert_eq!(snaps[0].entries[1], (other, Totals::from((4242, 77))));
     p.send(0x2, &[0x03]);
     let snaps = wait_for(|| Some(hub.poll().snaps).filter(|s| !s.is_empty()));
     assert!(snaps[0].entries.is_empty());

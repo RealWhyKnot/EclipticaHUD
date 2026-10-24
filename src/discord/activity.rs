@@ -187,6 +187,7 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
                 since = Some(gs.fight_start);
                 state.push(format!("{} DPS", short(gs.fight_dps(now))));
                 state.push(format!("{} damage", short(gs.fight_dmg)));
+                state.push(format!("{} taken", short(gs.fight_taken)));
                 format!("Fighting {name}")
             }
             None => {
@@ -219,8 +220,14 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
             state.push(count(d.into(), "death", "deaths"));
         }
     }
-    if gs.is_dead(now) {
-        state.insert(0, "Dead".to_string());
+    let life = match gs.life(now) {
+        Life::Down => Some("Dead, can be revived"),
+        Life::Out => Some("Dead for good"),
+        Life::OneLeft if gs.boss.is_some() => Some("On last life"),
+        _ => None,
+    };
+    if let Some(life) = life {
+        state.insert(0, life.to_string());
     }
 
     let location = gs.location.as_deref().filter(|l| valid_location(l));
@@ -477,7 +484,9 @@ mod tests {
         let a = activity(&gs, now, 1_800_000_000).unwrap();
         assert!(a.contains("\"details\":\"Fighting Jim C. Bringer\""), "{a}");
         assert!(
-            a.contains("\"state\":\"Dead | 10.5k DPS | 21.1k damage | 1 death\""),
+            a.contains(
+                "\"state\":\"Dead, can be revived | 10.5k DPS | 21.1k damage | 0 taken | 1 death\""
+            ),
             "{a}"
         );
         assert!(a.contains("\"large_image\":\"boss_jimbringer\""));
@@ -487,6 +496,30 @@ mod tests {
         assert!(a.contains(
             "\"buttons\":[{\"label\":\"Get EclipticaHUD\",\"url\":\"https://github.com/RealWhyKnot/EclipticaHUD/releases/latest\"}]"
         ));
+    }
+
+    #[test]
+    fn boss_presence_shows_taken_and_whether_a_revive_is_left() {
+        let mut gs = GameState::default();
+        feed(
+            &mut gs,
+            "04:10:00",
+            "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer",
+        );
+        feed(
+            &mut gs,
+            "04:10:51",
+            "ECLIPTICA - now fighting boss: JimBringerPhase2(Clone) on phase: 0",
+        );
+        feed(&mut gs, "04:10:52", "Dealing 21059 STRIKE damage");
+        feed(&mut gs, "04:10:53", "Local controller dead, switching off.");
+        let now = feed(&mut gs, "04:11:00", "Dealing 100 STRIKE damage");
+        let a = activity(&gs, now, 1_800_000_000).unwrap();
+        assert!(a.contains("\"state\":\"On last life | "), "{a}");
+        let now = feed(&mut gs, "04:11:05", "Local controller dead, switching off.");
+        let a = activity(&gs, now, 1_800_000_000).unwrap();
+        assert!(a.contains("\"state\":\"Dead for good | "), "{a}");
+        assert!(a.contains(" taken | 2 deaths\""), "{a}");
     }
 
     #[test]

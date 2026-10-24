@@ -130,3 +130,53 @@ fn death_gap_needs_other_log_lines() {
     feed_at(&mut gs, "05:46:15", DEAD);
     assert_eq!(gs.runs[0].deaths, 2);
 }
+
+#[test]
+fn a_revive_leaves_one_life_until_the_next_boss() {
+    let mut gs = GameState::default();
+    feed_at(&mut gs, "05:40:00", HALL);
+    assert_eq!(gs.life(gs.last_ts), Life::Alive);
+    let t = feed_at(&mut gs, "05:41:00", DEAD);
+    assert_eq!(gs.life(t), Life::Down);
+    let t = feed_at(&mut gs, "05:41:10", "Dealing 30 STRIKE damage");
+    assert_eq!(gs.life(t), Life::OneLeft);
+    feed_at(
+        &mut gs,
+        "05:45:00",
+        "ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0",
+    );
+    assert_eq!(gs.life(gs.last_ts), Life::Alive);
+    let t = feed_at(&mut gs, "05:46:00", DEAD);
+    assert_eq!(gs.life(t), Life::Down);
+    feed_at(&mut gs, "05:46:20", "Dealing 30 STRIKE damage");
+    let t = feed_at(&mut gs, "05:47:00", DEAD);
+    assert_eq!(gs.life(t), Life::Out);
+    assert_eq!(gs.life(t + 2), Life::OneLeft);
+    let t = feed_at(&mut gs, "05:48:00", LOBBY);
+    assert_eq!(gs.life(t), Life::Alive);
+}
+
+#[test]
+fn two_stage_deaths_start_the_boss_on_one_life() {
+    let mut gs = GameState::default();
+    feed_at(&mut gs, "05:40:00", HALL);
+    feed_at(&mut gs, "05:41:00", DEAD);
+    feed_at(&mut gs, "05:41:10", "Dealing 30 STRIKE damage");
+    let t = feed_at(&mut gs, "05:42:00", DEAD);
+    assert_eq!(gs.life(t), Life::Out);
+    feed_at(&mut gs, "05:42:30", "Dealing 30 STRIKE damage");
+    feed_at(
+        &mut gs,
+        "05:45:00",
+        "ECLIPTICA - now fighting boss: Yuki(Clone) on phase: 0",
+    );
+    assert_eq!(gs.life(gs.last_ts), Life::OneLeft);
+    feed_at(
+        &mut gs,
+        "05:45:30",
+        "ECLIPTICA - now fighting boss: YukiPhase2(Clone) on phase: 0",
+    );
+    assert_eq!(gs.life(gs.last_ts), Life::OneLeft);
+    let t = feed_at(&mut gs, "05:46:00", DEAD);
+    assert_eq!(gs.life(t), Life::Out);
+}

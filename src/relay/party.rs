@@ -11,6 +11,7 @@ pub struct PartyRow {
     pub live: bool,
     pub dmg: u64,
     pub taken: u64,
+    pub life: u8,
     pub share: Option<u32>,
     pub dps: u64,
 }
@@ -22,6 +23,7 @@ struct Row {
     live: bool,
     dmg: u64,
     taken: u64,
+    life: u8,
     frozen_dps: u64,
     frozen_at: u64,
     samples: VecDeque<(u64, u64)>,
@@ -36,6 +38,7 @@ impl Row {
             live: true,
             dmg,
             taken: t.taken,
+            life: t.life,
             frozen_dps: 0,
             frozen_at: 0,
             samples: VecDeque::from([(now, dmg)]),
@@ -45,6 +48,7 @@ impl Row {
     fn update(&mut self, now: u64, t: Totals) {
         let dmg = t.dealt;
         self.taken = t.taken;
+        self.life = t.life;
         if !self.live || dmg < self.dmg {
             self.samples.clear();
             self.samples.push_back((now, dmg));
@@ -218,6 +222,7 @@ impl Party {
                 live: r.live,
                 dmg: r.dmg,
                 taken: r.taken,
+                life: r.life,
                 share: (total > 0)
                     .then(|| ((r.dmg as u128 * 100 + total as u128 / 2) / total as u128) as u32),
                 dps: r.dps(now),
@@ -242,7 +247,7 @@ mod tests {
     use super::*;
 
     fn dealt(n: u64) -> Totals {
-        Totals { dealt: n, taken: 0 }
+        Totals::from((n, 0))
     }
 
     impl Party {
@@ -538,5 +543,35 @@ mod tests {
         }
         assert!(p.others() <= MAX_MEMBERS);
         assert!(p.rows.iter().all(|r| r.samples.len() <= MAX_SAMPLES));
+    }
+
+    #[test]
+    fn rows_carry_life_and_keep_it_when_frozen() {
+        let mut p = named();
+        p.apply_snap(
+            0,
+            &[(
+                A,
+                Totals {
+                    life: 2,
+                    ..dealt(10)
+                },
+            )],
+            None,
+        );
+        p.set_own(
+            0,
+            ME,
+            Some(Totals {
+                life: 3,
+                ..dealt(5)
+            }),
+        );
+        let v = p.view(0);
+        assert_eq!((row(&v, "Ann").life, row(&v, "you").life), (2, 3));
+        p.snap(1000, &[], None);
+        assert_eq!(row(&p.view(1000), "Ann").life, 2);
+        p.snap(2000, &[(A, 12)], None);
+        assert_eq!(row(&p.view(2000), "Ann").life, 0);
     }
 }

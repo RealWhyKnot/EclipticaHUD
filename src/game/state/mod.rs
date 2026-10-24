@@ -1,10 +1,34 @@
 use crate::game::event::{parse_msg, split_line, Event};
 use crate::game::run::{
-    base_name, BossFight, KillSummary, Run, StageStats, TakenEntry, Tally, TargetEntry,
+    base_name, BossFight, KillSummary, Run, Split, StageStats, TakenEntry, Tally, TargetEntry,
 };
 use std::collections::{HashSet, VecDeque};
 
 mod apply;
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Life {
+    #[default]
+    Alive = 0,
+    OneLeft = 1,
+    Down = 2,
+    Out = 3,
+}
+
+impl Life {
+    pub fn wire(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_wire(b: u8) -> Life {
+        match b {
+            1 => Life::OneLeft,
+            2 => Life::Down,
+            3 => Life::Out,
+            _ => Life::Alive,
+        }
+    }
+}
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub enum Mode {
@@ -68,6 +92,8 @@ pub struct GameState {
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
     dead_until: u64,
+    cursed: bool,
+    death_final: bool,
     last_ts: u64,
     seq: u64,
     pub changed: bool,
@@ -95,6 +121,16 @@ impl GameState {
 
     pub fn live_run(&self) -> Option<&Run> {
         self.runs.last().filter(|r| r.end_ts.is_none())
+    }
+
+    pub fn run_splits(&self, i: usize, now: u64) -> Vec<Split> {
+        let Some(run) = self.runs.get(i) else {
+            return Vec::new();
+        };
+        let open = (run.end_ts.is_none() && i + 1 == self.runs.len())
+            .then_some(&self.stage_stats)
+            .filter(|s| s.start_ts != 0);
+        run.splits(now, open)
     }
 
     pub fn targets_me(&self) -> bool {
@@ -158,6 +194,20 @@ impl GameState {
 
     pub fn is_dead(&self, now: u64) -> bool {
         now < self.dead_until
+    }
+
+    pub fn life(&self, now: u64) -> Life {
+        if self.is_dead(now) {
+            if self.death_final {
+                Life::Out
+            } else {
+                Life::Down
+            }
+        } else if self.cursed && self.mode == Mode::Stage {
+            Life::OneLeft
+        } else {
+            Life::Alive
+        }
     }
 
     pub fn feed(&mut self, raw: &str) -> Option<u64> {

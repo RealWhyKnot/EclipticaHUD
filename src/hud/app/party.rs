@@ -89,6 +89,18 @@ impl PartyState {
         })
     }
 
+    fn close_fight(&mut self, gs: &GameState) {
+        let Some(f) = self.live.fight.as_mut() else {
+            return;
+        };
+        let last = gs.runs.last().and_then(|r| r.fights.last());
+        if let Some((last, end)) = last.and_then(|l| l.end_ts.map(|e| (l, e))) {
+            f.secs = end.saturating_sub(self.fight);
+            f.down = last.kill.is_some() && !last.lost;
+        }
+        f.live = false;
+    }
+
     fn save(&mut self, db: Option<&mut History>) {
         let Some(db) = db else {
             return;
@@ -133,6 +145,7 @@ impl PartyState {
                     live: true,
                     dmg: r.dealt,
                     taken: r.taken,
+                    life: 0,
                     share: None,
                     dps: 0,
                 })
@@ -143,6 +156,13 @@ impl PartyState {
             ..live
         }
     }
+}
+
+fn relay_totals(gs: &GameState, now: u64) -> Option<Totals> {
+    gs.relay_dmg().map(|d| Totals {
+        life: gs.life(now).wire(),
+        ..Totals::from(d)
+    })
 }
 
 impl App {
@@ -164,7 +184,7 @@ impl App {
             self.gs.location.as_deref(),
             self.gs.me_usr.as_deref(),
         );
-        let dmg = want.as_ref().and(self.gs.relay_dmg()).map(Totals::from);
+        let dmg = want.as_ref().and(relay_totals(&self.gs, self.now()));
         let relay = self.party.relay;
         relay.sync(want.clone(), dmg);
         let poll = relay.poll();
@@ -184,7 +204,11 @@ impl App {
         let room = gs.location.as_deref().filter(|l| l.starts_with("wrld_"));
         let moved = room != p.room.as_deref();
         let new_fight = gs.fight_start != p.fight && gs.fight_start != 0;
-        if moved || new_fight {
+        let ended = gs.fight_start == 0 && p.fight != 0;
+        if ended {
+            p.close_fight(gs);
+        }
+        if moved || new_fight || ended {
             p.save(self.archive.db.as_mut());
         }
         if moved {
@@ -239,7 +263,7 @@ impl App {
             }
         }
         if let Some(own) = p.own.filter(|_| self.party_on) {
-            p.table.set_own(now, own, gs.relay_dmg().map(Totals::from));
+            p.table.set_own(now, own, relay_totals(gs, clock));
         }
         let mut rows = if self.party_on {
             p.table.view(now)

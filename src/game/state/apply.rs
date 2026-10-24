@@ -105,6 +105,7 @@ impl GameState {
         if self.boss.as_deref() == Some(&name) || echo {
             return;
         }
+        let stage_deaths = self.stage_stats.deaths;
         self.close_stage(self.last_clear.unwrap_or(ts));
         self.boss = Some(name.clone());
         if !self.stage_boss_seen {
@@ -114,6 +115,7 @@ impl GameState {
             }
         }
         if !transition {
+            self.cursed = stage_deaths >= 2;
             self.fight_start = ts;
             self.fight_dmg = 0;
             self.fight_taken = 0;
@@ -170,6 +172,7 @@ impl GameState {
             }
         } else if self.pre_boss() {
             self.stage_stats.dmg += n;
+            self.stage_stats.add_dmg(ts, n);
         }
     }
 
@@ -181,6 +184,7 @@ impl GameState {
         if self.pre_boss() {
             let s = &mut self.stage_stats;
             s.taken += amount;
+            s.add_taken(ts, amount);
             s.hits += 1;
             s.max_hit = s.max_hit.max(amount);
             let (who, attack) = describe_source(&source);
@@ -280,6 +284,8 @@ impl GameState {
         self.last_death = Some(ts);
         self.alive_since = None;
         if new {
+            self.death_final = self.cursed;
+            self.cursed = true;
             self.deaths_total += 1;
             if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
                 r.deaths += 1;
@@ -358,6 +364,8 @@ impl GameState {
         self.target = None;
         self.pending_kill = None;
         self.dead_until = 0;
+        self.cursed = false;
+        self.death_final = false;
         self.last_death = None;
         self.alive_since = None;
         self.fight_start = 0;

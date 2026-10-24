@@ -43,6 +43,9 @@ pub(super) fn frame() -> Frame {
         discord_on: false,
         usage_on: false,
         usage_failing: false,
+        board_on: false,
+        board_status: 0,
+        board_delete: 0,
         ask_usage: false,
         party_open: false,
         view_run: Some(0),
@@ -50,6 +53,9 @@ pub(super) fn frame() -> Frame {
         group_pages: 1,
         run_sel: false,
         group_sel: false,
+        stages_btn: false,
+        stages: false,
+        split_top: 0,
     }
 }
 
@@ -312,7 +318,7 @@ fn draw_smoke_bars() {
     assert_eq!(pix(&r, 100, 55), GOOD);
     assert_eq!(pix(&r, 300, 55), CARD);
     assert_eq!(pix(&r, 100, 256), mix(CARD, BG, 0.55));
-    assert_eq!(pix(&r, 20, 96), CARD);
+    assert_eq!(pix(&r, 20, 96), mix(CARD, DANGER, 0.08));
     assert_eq!(pix(&r, 336, 11), CTRL_HOVER);
     assert_eq!(pix(&r, 20, 346), CARD);
     let tk = TAKEN_CARD_Y + GRAPH_DY + BODY_DY;
@@ -320,7 +326,7 @@ fn draw_smoke_bars() {
     assert_eq!(pix(&r, 196, tk + 199), hot);
     assert_eq!(pix(&r, 254, tk + 221), BG);
     assert_eq!(pix(&r, 254, tk + 243), CARD);
-    assert_eq!(pix(&r, 20, 166), CARD);
+    assert_eq!(pix(&r, 20, 166), mix(CARD, DANGER, 0.08));
     let warned = Frame {
         warn_t: 0.5,
         ..frame()
@@ -329,7 +335,7 @@ fn draw_smoke_bars() {
     assert_eq!(pix(&r, 20, 166), mix(BG, AMBER, 0.18));
     assert!(text_w(&r, F_BIG, "COLLECT YOUR TOKENS") <= LOGICAL_W - 28);
     r.draw_main(&gs, &frame());
-    assert_eq!(pix(&r, 20, 166), CARD);
+    assert_eq!(pix(&r, 20, 166), mix(CARD, DANGER, 0.08));
 
     for env in [Env::NotInWorld, Env::NoVrchat] {
         let away = Frame { env, ..frame() };
@@ -460,6 +466,14 @@ fn draw_smoke_bars() {
     assert_eq!(r.hit_test(200, 250), Some(Hit::Info(Info::DealtGraph)));
     assert_eq!(r.hit_test(30, 200), Some(Hit::Info(Info::Dealt(0))));
     assert_eq!(r.hit_test(300, 470), Some(Hit::Info(Info::TakenMore(2))));
+    assert_eq!(r.hit_test(320, 200), Some(Hit::Stages));
+    assert_eq!(r.hit_test(300, 205), Some(Hit::Info(Info::Dealt(2))));
+    assert_eq!(r.hit_test(260, 205), Some(Hit::Info(Info::Dealt(2))));
+    let only_splits = |x, y| r.hit_test_where(x, y, |h| matches!(h, Hit::Splits));
+    assert_eq!(only_splits(20, 196), Some(Hit::Splits));
+    assert_eq!(only_splits(340, 600), Some(Hit::Splits));
+    assert_eq!(only_splits(20, 191), None);
+    assert_eq!(only_splits(20, 603), None);
     let ctx = TipCtx {
         live: true,
         topmost: false,
@@ -468,7 +482,11 @@ fn draw_smoke_bars() {
         discord_on: false,
         usage_on: false,
         usage_failing: false,
+        board_on: false,
+        board_status: 0,
+        board_delete: 0,
         party_open: false,
+        stages: false,
     };
     assert!(Hit::Pin.tip(ctx).contains("keep it on top"));
     assert!(Hit::Discord.tip(ctx).starts_with("Show your run"));
@@ -480,6 +498,23 @@ fn draw_smoke_bars() {
         .ends_with("click to stop"));
     assert!(Hit::Discord.tip(ctx).chars().count() <= 70);
     assert!(Hit::Settings.tip(ctx).chars().count() <= 70);
+    for c in [
+        ctx,
+        TipCtx {
+            stages: true,
+            ..ctx
+        },
+    ] {
+        for h in [Hit::Stages, Hit::Splits] {
+            assert!(h.tip(c).chars().count() <= 70, "{h:?}");
+        }
+    }
+    assert!(Hit::Stages
+        .tip(TipCtx {
+            stages: true,
+            ..ctx
+        })
+        .starts_with("Back"));
     assert!(Hit::Usage.tip(ctx).starts_with("Send boss"));
     let on = TipCtx {
         usage_on: true,
@@ -489,6 +524,29 @@ fn draw_smoke_bars() {
     assert!(Hit::Usage.tip(on).ends_with("click to stop"));
     for c in [ctx, on] {
         assert!(Hit::Usage.tip(c).chars().count() <= 70);
+    }
+    let board = |board_on, board_status| TipCtx {
+        board_on,
+        board_status,
+        ..ctx
+    };
+    assert!(Hit::Board.tip(ctx).contains("ecliptica.whyknot.dev"));
+    assert!(Hit::Board.tip(ctx).contains("VRChat name"));
+    assert!(Hit::Board.tip(board(true, 0)).ends_with("click to stop"));
+    assert!(Hit::Board
+        .tip(board(true, crate::board::FAILING))
+        .starts_with("Can't reach"));
+    assert!(Hit::Board
+        .tip(board(true, crate::board::TAKEN))
+        .starts_with("Another PC"));
+    assert_eq!(
+        Hit::Board.tip(board(false, crate::board::TAKEN)),
+        Hit::Board.tip(ctx)
+    );
+    for (on, st) in [(false, 0), (true, 0), (true, 1), (true, 2)] {
+        let tip = Hit::Board.tip(board(on, st));
+        assert!(tip.chars().count() <= 70, "{tip}");
+        assert!(!tip.contains(['\u{2013}', '\u{2014}']), "{tip}");
     }
     assert!(Hit::ScaleUp.tip(ctx).contains("bigger"));
     assert!(Hit::Mute.tip(ctx).starts_with("Unmute"));
@@ -653,7 +711,7 @@ fn damage_graph_draws_fight_columns() {
     assert_eq!(pix(&r, gx + 2, gy + gh - 1), well);
     assert_eq!(pix(&r, gx - 3, gy + 10), CARD);
     assert_eq!(pix(&r, gx + gw + 2, gy + 10), CARD);
-    assert_eq!(pix(&r, 20, 106), CARD);
+    assert_eq!(pix(&r, 20, 106), mix(CARD, DANGER, 0.08));
 }
 
 #[test]
@@ -688,7 +746,7 @@ fn boss_card_marks_you_as_target() {
     let (other, now) = fight_log(10, false);
     assert!(!other.targets_me());
     r.draw_main(&other, &Frame { now, ..frame() });
-    assert_eq!(pix(&r, 20, 100), CARD);
+    assert_eq!(pix(&r, 20, 100), mix(CARD, DANGER, 0.08));
     let away = Frame {
         now,
         env: Env::NotInWorld,
@@ -762,7 +820,7 @@ fn update_prompt_covers_panel_below_status() {
     );
     assert_eq!(pix(&r, nx + 6, ny + nh / 2), mix(BG, GOOD, 0.25));
     r.draw_main(&gs, &Frame { now, ..frame() });
-    assert_eq!(pix(&r, 20, 100), CARD);
+    assert_eq!(pix(&r, 20, 100), mix(CARD, DANGER, 0.08));
 }
 
 #[test]
@@ -825,6 +883,7 @@ pub(super) fn party_row(
         live,
         dmg,
         taken,
+        life: 0,
         share,
         dps,
     }
@@ -1130,7 +1189,11 @@ fn write_tooltip_wrap_images() {
         discord_on: false,
         usage_on: false,
         usage_failing: false,
+        board_on: false,
+        board_status: 0,
+        board_delete: 0,
         party_open: false,
+        stages: false,
     };
     let cases = [
         (96, Hit::Party),
@@ -1212,4 +1275,136 @@ fn counts_use_the_singular_for_one() {
     assert_eq!(fmt_count(0, "boss", "bosses"), "0 bosses");
     assert_eq!(fmt_count(1, "boss", "bosses"), "1 boss");
     assert_eq!(fmt_count(2, "token", "tokens"), "2 tokens");
+}
+
+#[test]
+fn kind_tag_leaves_room_for_the_title() {
+    for dpi in [96, 120, 144, 192] {
+        let r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        for tag in ["STAGE 12", "BOSS 12"] {
+            let tx = (M + 10 + r.unscale(r.text_w(F_LABEL, tag)) + 12 + 8).max(M + 60);
+            let room = r.px(M + 226 - tx);
+            for name in ["Jacked O' Lantern", "Bringer's Desert", "Melgor Johnson"] {
+                assert!(r.text_w(F_BOSS, name) <= room, "{dpi} {tag} {name}");
+            }
+        }
+    }
+}
+
+#[test]
+fn page_strip_stays_inside_the_card() {
+    use super::main_panel::{strip_layout, STRIP_MIN, STRIP_W};
+    for dpi in [96, 120, 144, 192] {
+        let r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        assert!(r.unscale(r.text_w(F_TINY, "B99")) + 4 <= STRIP_MIN, "{dpi}");
+    }
+    for n in 1..120 {
+        for cur in 0..n {
+            let (shown, sw) = strip_layout(n, cur);
+            let k = shown.len() as i32;
+            assert!(shown.contains(&cur) && shown.end <= n, "{n} {cur}");
+            assert!(
+                sw >= STRIP_MIN && k * sw + (k - 1) * 4 <= STRIP_W,
+                "{n} {cur}"
+            );
+        }
+    }
+}
+
+#[test]
+fn stage_table_never_leaves_its_card() {
+    use super::fmt::compact;
+    use super::main_panel::{fmt_split, COL, SPLIT_COLS};
+    use crate::game::run::{BossFight, Run};
+    let stage = |i: u64| BossFight {
+        name: if i.is_multiple_of(3) {
+            "Stage_BringersDesert".into()
+        } else {
+            format!("Stage_SomeUnlistedPlaceWithAVeryLongName{i}")
+        },
+        start_ts: 1000 + i * 600,
+        end_ts: Some(1000 + i * 600 + 599),
+        dmg: 987_654_321_987 - i,
+        taken: 98_765_432_198 + i,
+        deaths: (i % 4) as u32 * 33,
+        ..Default::default()
+    };
+    let mut gs = GameState::default();
+    gs.runs.push(Run {
+        start_ts: 1000,
+        end_ts: Some(1000 + 30 * 600),
+        stages: (0..30).map(stage).collect(),
+        ..Default::default()
+    });
+    let (cx, cy, cw, ch) = SPLITS_CARD;
+    let (top, bottom) = (cy + BODY_DY, cy + BODY_DY + ch);
+    let used = 26 + 18 + SPLIT_ROWS as i32 * SPLIT_ROW_H + 20 + 6 + SPLIT_ROW_H;
+    assert!(cy + used <= cy + ch - 6);
+    assert_eq!(STAGES_BTN.0 + STAGES_BTN.2, cx + cw - 12);
+    assert_eq!(SPLIT_COLS[4].0 + SPLIT_COLS[4].1, cx + cw - 12);
+    for dpi in [96, 120, 144, 192] {
+        let mut r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        let fits = |font, s: &str, w: i32| r.text_w(font, s) <= r.px(w);
+        for (_, w, _, h) in SPLIT_COLS {
+            assert!(fits(F_TINY, h, w), "{h} at {dpi}");
+        }
+        assert!(
+            fits(F_BODY, &fmt_split(999 * 60 + 59), SPLIT_COLS[1].1),
+            "{dpi}"
+        );
+        assert!(
+            fits(F_BODY, &compact(u64::MAX / 2), SPLIT_COLS[2].1),
+            "{dpi}"
+        );
+        assert!(
+            fits(F_BODY, &compact(u64::MAX / 2), SPLIT_COLS[3].1),
+            "{dpi}"
+        );
+        assert!(fits(F_BODY, "999", SPLIT_COLS[4].1), "{dpi}");
+        let hint = "999 to 999 of 999 stages, scroll for the rest";
+        assert!(fits(F_TINY, hint, W - 24), "{dpi}");
+        for label in ["FIGHT DMG", "STAGE DMG", "BOSSES", "TIME"] {
+            assert!(
+                fits(F_LABEL, label, STAGES_BTN.0 - (M + 12 + 2 * COL) - 4),
+                "{label} at {dpi}"
+            );
+        }
+        assert!(
+            fits(F_LABEL, "THIS RUN BY STAGE", STAGES_BTN.0 - M - 20),
+            "{dpi}"
+        );
+        for split_top in [0, 7, 999] {
+            let f = Frame {
+                run_sel: true,
+                group_sel: true,
+                view_group: Some(20),
+                group_pages: 30,
+                stages_btn: true,
+                stages: true,
+                split_top,
+                now: 1000 + 30 * 600,
+                hover: None,
+                ..frame()
+            };
+            r.draw_main(&gs, &f);
+            for y in r.px(top)..r.px(bottom) {
+                for x in (0..r.px(cx)).chain(r.px(cx + cw)..r.width) {
+                    assert_eq!(pix(&r, x, y), BG, "margin {x},{y} at {dpi} top {split_top}");
+                }
+            }
+            for y in r.px(bottom)..r.px(LOGICAL_H - 30) {
+                for x in 0..r.width {
+                    assert_eq!(pix(&r, x, y), BG, "below {x},{y} at {dpi} top {split_top}");
+                }
+            }
+            let lit = mix(CARD, ACCENT, 0.18);
+            let row_y = |i: i32| r.px(cy + BODY_DY + 44 + i * SPLIT_ROW_H + SPLIT_ROW_H / 2);
+            let lit_at = (0..SPLIT_ROWS as i32).find(|&i| pix(&r, r.px(M + 8), row_y(i)) == lit);
+            let shown = split_top.min(30 - SPLIT_ROWS);
+            let want = (shown..shown + SPLIT_ROWS)
+                .contains(&20)
+                .then(|| (20 - shown) as i32);
+            assert_eq!(lit_at, want, "lit row at {dpi} top {split_top}");
+        }
+    }
 }

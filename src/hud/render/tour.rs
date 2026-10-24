@@ -122,11 +122,86 @@ pub(super) fn save(r: &Renderer, name: &str) {
     std::fs::write(out_dir().join(format!("{name}.png")), png(w, h, &rgb)).unwrap();
 }
 
+fn history_gs(stages: u64) -> GameState {
+    let mut gs = GameState::default();
+    let mut feed = |t: u64, m: &str| {
+        gs.feed(&line(t, m));
+    };
+    feed(0, "User Authenticated: Me (Alt) (usr_1)");
+    feed(0, "[Behaviour] Joining wrld_1:1~hidden(usr_1)~region(use)");
+    for i in 0..stages {
+        let (start, phase) = (i * 130, if i % 2 == 0 { "0.2" } else { "0.6" });
+        let (boss, hit) = if i % 2 == 0 {
+            ("Kakarot", "(Kakarot) attack_Kick")
+        } else {
+            ("Hakli", "(Hakli) Edge Sweep")
+        };
+        feed(
+            start,
+            &format!(
+                "ECLIPTICA - now in stage: Stage_OuterHeven on phase: {phase} as class: Blade"
+            ),
+        );
+        for t in start + 1..start + 70 {
+            feed(t, &format!("Dealing {} STRIKE damage", 300 + t * 41 % 500));
+            if t % 5 == 0 {
+                feed(
+                    t,
+                    "damage has been taken: 80, from source: (Gildhorn) Rock Slam",
+                );
+            }
+        }
+        feed(
+            start + 72,
+            &format!("ECLIPTICA - now fighting boss: {boss}(Clone) on phase: {phase}"),
+        );
+        for t in start + 73..start + 120 {
+            feed(t, &format!("Dealing {} STRIKE damage", 900 + t * 37 % 400));
+            if t % 4 == 0 {
+                feed(
+                    t,
+                    &format!("damage has been taken: 140, from source: {hit}"),
+                );
+            }
+        }
+        feed(
+            start + 120,
+            &format!("Boss {boss} dead, personal damage dealt: "),
+        );
+    }
+    gs
+}
+
 fn state_gs(kind: u8) -> GameState {
     match kind {
         0 => tour_gs(false, 60).0,
         1 => tour_gs(true, 60).0,
         3 => inter_gs().0,
+        7 => history_gs(2),
+        8 => history_gs(15),
+        9 => {
+            let mut gs = history_gs(2);
+            gs.feed(&line(
+                260,
+                "ECLIPTICA - now in stage: Stage_CopiedCity on phase: 0.8 as class: Blade",
+            ));
+            for t in 261..300 {
+                gs.feed(&line(t, "Dealing 420 STRIKE damage"));
+            }
+            gs
+        }
+        4..=6 => {
+            let mut gs = tour_gs(false, 60).0;
+            let dead = "Local controller dead, switching off.";
+            if kind != 4 {
+                gs.feed(&line(100, dead));
+                gs.feed(&line(103, "Dealing 40 STRIKE damage"));
+            }
+            if kind != 6 {
+                gs.feed(&line(106, dead));
+            }
+            gs
+        }
         _ => GameState::default(),
     }
 }
@@ -147,6 +222,43 @@ fn main_states() -> Vec<(&'static str, u8, Frame)> {
     };
     vec![
         ("main_fight", 0, live()),
+        ("main_dead_revivable", 4, live()),
+        ("main_dead_for_good", 5, live()),
+        ("main_last_life", 6, live()),
+        (
+            "main_stage",
+            9,
+            Frame {
+                now: crate::game::event::split_line(&line(300, "x")).unwrap().ts,
+                view_group: None,
+                group_pages: 4,
+                ..live()
+            },
+        ),
+        (
+            "main_live_stages_btn",
+            9,
+            Frame {
+                now: crate::game::event::split_line(&line(300, "x")).unwrap().ts,
+                view_group: None,
+                group_pages: 4,
+                stages_btn: true,
+                ..live()
+            },
+        ),
+        (
+            "main_live_stages",
+            9,
+            Frame {
+                now: crate::game::event::split_line(&line(300, "x")).unwrap().ts,
+                view_group: None,
+                group_pages: 4,
+                stages_btn: true,
+                stages: true,
+                hover: Some(Hit::Stages),
+                ..live()
+            },
+        ),
         (
             "main_intermission",
             3,
@@ -234,6 +346,83 @@ fn main_states() -> Vec<(&'static str, u8, Frame)> {
             },
         ),
         (
+            "main_settings_board_off",
+            0,
+            Frame {
+                settings_open: true,
+                hover: Some(Hit::Board),
+                tip: Some(Hit::Board),
+                ..live()
+            },
+        ),
+        (
+            "main_settings_board_on",
+            0,
+            Frame {
+                settings_open: true,
+                board_on: true,
+                hover: Some(Hit::Board),
+                tip: Some(Hit::Board),
+                ..live()
+            },
+        ),
+        (
+            "main_settings_board_failing",
+            0,
+            Frame {
+                settings_open: true,
+                board_on: true,
+                board_status: crate::board::FAILING,
+                hover: Some(Hit::Board),
+                tip: Some(Hit::Board),
+                ..live()
+            },
+        ),
+        (
+            "main_settings_board_taken",
+            0,
+            Frame {
+                settings_open: true,
+                board_on: true,
+                board_status: crate::board::TAKEN,
+                hover: Some(Hit::Board),
+                tip: Some(Hit::Board),
+                ..live()
+            },
+        ),
+        (
+            "main_settings_delete",
+            0,
+            Frame {
+                settings_open: true,
+                board_on: true,
+                hover: Some(Hit::BoardDelete),
+                tip: Some(Hit::BoardDelete),
+                ..live()
+            },
+        ),
+        (
+            "main_settings_delete_armed",
+            0,
+            Frame {
+                settings_open: true,
+                board_on: true,
+                board_delete: DELETE_ARMED,
+                hover: Some(Hit::BoardDelete),
+                tip: Some(Hit::BoardDelete),
+                ..live()
+            },
+        ),
+        (
+            "main_settings_delete_busy",
+            0,
+            Frame {
+                settings_open: true,
+                board_delete: DELETE_BUSY,
+                ..live()
+            },
+        ),
+        (
             "main_settings_scale_max",
             0,
             Frame {
@@ -260,6 +449,91 @@ fn main_states() -> Vec<(&'static str, u8, Frame)> {
                 group_sel: true,
                 view_group: Some(0),
                 pages: 2,
+                view_page: 0,
+                ..live()
+            },
+        ),
+        (
+            "main_history_first",
+            7,
+            Frame {
+                run_sel: true,
+                group_sel: true,
+                view_group: Some(0),
+                group_pages: 4,
+                pages: 1,
+                view_page: 0,
+                ..live()
+            },
+        ),
+        (
+            "main_history_long",
+            8,
+            Frame {
+                run_sel: true,
+                group_sel: true,
+                view_group: Some(17),
+                group_pages: 30,
+                pages: 1,
+                view_page: 0,
+                ..live()
+            },
+        ),
+        (
+            "main_history_stages_btn",
+            8,
+            Frame {
+                run_sel: true,
+                group_sel: true,
+                view_group: Some(17),
+                group_pages: 30,
+                pages: 1,
+                view_page: 0,
+                stages_btn: true,
+                ..live()
+            },
+        ),
+        (
+            "main_stages",
+            8,
+            Frame {
+                run_sel: true,
+                group_sel: true,
+                view_group: Some(17),
+                group_pages: 30,
+                pages: 1,
+                view_page: 0,
+                stages_btn: true,
+                stages: true,
+                split_top: 1,
+                ..live()
+            },
+        ),
+        (
+            "main_stages_short",
+            7,
+            Frame {
+                run_sel: true,
+                group_sel: true,
+                view_group: Some(1),
+                group_pages: 4,
+                pages: 1,
+                view_page: 0,
+                stages_btn: true,
+                stages: true,
+                hover: Some(Hit::Stages),
+                ..live()
+            },
+        ),
+        (
+            "main_history_second",
+            7,
+            Frame {
+                run_sel: true,
+                group_sel: true,
+                view_group: Some(1),
+                group_pages: 4,
+                pages: 1,
                 view_page: 0,
                 ..live()
             },
@@ -423,8 +697,17 @@ fn party_states() -> Vec<(&'static str, PartyPane)> {
         live: false,
         down: true,
     });
+    let mut dead = pane(sample_party());
+    dead.rows[2].life = 2;
+    dead.rows[3].life = 3;
+    let mut dead_you = pane(sample_party());
+    dead_you.rows[1].life = 2;
+    dead_you.rows[0].life = 3;
+    dead_you.rows[0].name = "Leonhard von Ashcombe-Whitley".to_string();
     vec![
         ("off", off),
+        ("deaths", dead),
+        ("deaths_you", dead_you),
         ("not_in_world", not_ready),
         ("connecting", connecting),
         ("waiting", waiting),

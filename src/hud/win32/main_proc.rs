@@ -162,6 +162,10 @@ pub(super) unsafe extern "system" fn wndproc(
                                 app.activate(hit);
                                 save_usage(app.usage_on);
                             }
+                            Hit::Board | Hit::BoardDelete => {
+                                app.activate(hit);
+                                save_board(app.board_on);
+                            }
                             Hit::Party => {
                                 app.activate(hit);
                                 sync_party(hwnd);
@@ -193,6 +197,18 @@ pub(super) unsafe extern "system" fn wndproc(
                 }
             }
             sync_log(hwnd);
+            0
+        }
+        WM_MOUSEWHEEL => {
+            let (x, y) = point(lp);
+            let mut pt = POINT { x, y };
+            ScreenToClient(hwnd, &mut pt);
+            let delta = ((wp >> 16) & 0xffff) as u16 as i16 as i32;
+            if let Some(app) = app_mut(hwnd) {
+                if app.enabled_hit(pt.x, pt.y) == Some(Hit::Splits) && app.split_wheel(delta) {
+                    repaint(app, hwnd);
+                }
+            }
             0
         }
         WM_CAPTURECHANGED => {

@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+mod board;
 mod discord;
 mod game;
 mod history;

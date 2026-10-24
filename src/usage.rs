@@ -237,6 +237,10 @@ fn unix(ts: u64) -> u64 {
     ts.saturating_sub(UNIX_DAYS * 86_400)
 }
 
+pub fn utc_unix(ts: u64) -> u64 {
+    (unix(ts) as i64 - utc_offset_at(ts) * 60).max(0) as u64
+}
+
 fn sha256(data: &[u8]) -> Option<[u8; 32]> {
     use windows_sys::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
     let mut out = [0u8; 32];
@@ -254,7 +258,7 @@ fn sha256(data: &[u8]) -> Option<[u8; 32]> {
     (status == 0).then_some(out)
 }
 
-fn hash(parts: &[&str], n: usize) -> String {
+pub fn hash(parts: &[&str], n: usize) -> String {
     let mut data = Vec::new();
     for p in parts {
         data.extend_from_slice(&(p.len() as u64).to_le_bytes());

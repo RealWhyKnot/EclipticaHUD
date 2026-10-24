@@ -400,6 +400,17 @@ pub fn post_usage(body: &[u8]) -> Option<u32> {
     client::post(&usage_url(relay_url())?, body)
 }
 
+pub fn post_board(body: &[u8]) -> Option<u32> {
+    let url = usage_url(relay_url())?;
+    client::post(
+        &Url {
+            path: "/board".to_string(),
+            ..url
+        },
+        body,
+    )
+}
+
 pub fn rand() -> u64 {
     use std::hash::BuildHasher;
     std::collections::hash_map::RandomState::new().hash_one(Instant::now())

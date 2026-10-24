@@ -60,6 +60,16 @@ pub fn run() {
         app.set_usage(load_usage(), false);
         app.usage_ask = !usage_answered();
         crate::usage::spawn(data_file("history.db"));
+        match load_board().as_str() {
+            "1" => app.set_board(true),
+            "2" => app.delete_board(),
+            "3" => {
+                app.set_board(true);
+                app.delete_board();
+            }
+            _ => {}
+        }
+        crate::board::spawn(board_key(), board_forgotten);
         if load_discord() {
             app.set_discord(true);
         }

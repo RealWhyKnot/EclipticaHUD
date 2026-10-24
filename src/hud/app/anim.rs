@@ -8,6 +8,7 @@ pub(super) const SLIDE_MS: f32 = 160.0;
 pub(super) const THUMB_HOLD_MS: u128 = 900;
 pub(super) const DEAD_PULSE_MS: f32 = 1100.0;
 pub(super) const WARN_MS: f32 = 5000.0;
+pub(super) const DELETE_ARM: std::time::Duration = std::time::Duration::from_secs(4);
 pub(super) const ANIM_MS: u32 = 16;
 
 pub(super) fn approach(cur: &mut f32, target: f32, eps: f32) -> bool {

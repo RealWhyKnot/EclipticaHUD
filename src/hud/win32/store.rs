@@ -66,6 +66,38 @@ pub(super) fn save_usage(on: bool) {
     save_flag("usage.txt", on);
 }
 
+pub(super) fn load_board() -> String {
+    load_text("board.txt")
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+pub(super) fn save_board(on: bool) {
+    let deleting = crate::board::DELETING.load(std::sync::atomic::Ordering::Relaxed);
+    let state = match (on, deleting) {
+        (false, false) => "0",
+        (true, false) => "1",
+        (false, true) => "2",
+        (true, true) => "3",
+    };
+    write_data("board.txt", state.to_string());
+}
+
+pub(super) fn board_forgotten() {
+    save_board(crate::board::ON.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+pub(super) fn board_key() -> String {
+    let saved = load_text("board-key.txt").unwrap_or_default();
+    if crate::board::valid_key(saved.trim()) {
+        return saved.trim().to_ascii_lowercase();
+    }
+    let key = crate::board::new_key();
+    write_data("board-key.txt", key.clone());
+    key
+}
+
 pub(super) fn party_on_from(text: &str) -> bool {
     text.trim() == "1"
 }

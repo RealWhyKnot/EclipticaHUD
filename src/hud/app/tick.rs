@@ -25,6 +25,9 @@ impl App {
     }
 
     pub fn render(&mut self) {
+        if self.stages_on {
+            self.split_track();
+        }
         let env = self.env();
         let frame = Frame {
             now: self.now(),
@@ -59,6 +62,15 @@ impl App {
             discord_on: self.discord_on,
             usage_on: self.usage_on,
             usage_failing: self.usage_failing,
+            board_on: self.board_on,
+            board_status: self.board_status,
+            board_delete: if self.board_deleting {
+                crate::hud::render::DELETE_BUSY
+            } else if self.board_armed.is_some() {
+                crate::hud::render::DELETE_ARMED
+            } else {
+                0
+            },
             ask_usage: self.usage_prompt_shown(),
             party_open: self.party_win.visible,
             view_run: self.shown_run().map(|(i, _)| i),
@@ -66,6 +78,9 @@ impl App {
             group_pages: self.group_pages(),
             run_sel: self.sel_run.is_some(),
             group_sel: self.sel_group.is_some(),
+            stages_btn: self.stages_ok(),
+            stages: self.stages_shown(),
+            split_top: self.split_top,
         };
         self.renderer.draw_main(&self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
@@ -153,6 +168,15 @@ impl App {
         });
         let w = &self.watch;
         self.archive.flush(w.path.as_deref(), w.pass, &kept, newest);
+        let gs = &self.gs;
+        crate::board::feed(&kept, || crate::board::Header {
+            name: gs.me.clone().unwrap_or_default(),
+            party: gs.roster.len().max(1) as u32,
+            room: gs
+                .location
+                .as_deref()
+                .map_or_else(String::new, |l| crate::usage::hash(&["eboard room", l], 2)),
+        });
         if rotated {
             self.gs.log_rotated();
         }
@@ -215,8 +239,19 @@ impl App {
             self.usage_on && crate::usage::FAILING.load(std::sync::atomic::Ordering::Relaxed);
         let failing_changed = failing != self.usage_failing;
         self.usage_failing = failing;
+        let board = crate::board::STATUS.load(std::sync::atomic::Ordering::Relaxed);
+        let board_changed = board != self.board_status;
+        self.board_status = board;
+        let deleting = self.board_deleting
+            && crate::board::DELETING.load(std::sync::atomic::Ordering::Relaxed);
+        let expired = self.board_armed.is_some_and(|t| t.elapsed() >= DELETE_ARM);
+        if expired {
+            self.board_armed = None;
+        }
+        let delete_changed = expired || deleting != self.board_deleting;
+        self.board_deleting = deleting;
         let badge_changed = self.poll_badge();
-        link_changed || failing_changed || badge_changed
+        link_changed || failing_changed || board_changed || delete_changed || badge_changed
     }
 
     pub fn poll_badge(&mut self) -> bool {

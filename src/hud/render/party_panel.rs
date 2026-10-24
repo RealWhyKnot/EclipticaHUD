@@ -5,6 +5,7 @@ use super::layout::*;
 use super::theme::*;
 use super::{wide, Renderer};
 use crate::game::event::{fmt_clock, fmt_date};
+use crate::game::state::Life;
 use crate::relay::party::PartyRow;
 use crate::relay::Link;
 use windows_sys::Win32::Foundation::RECT;
@@ -15,6 +16,14 @@ const OFF_LINES: [&str; 3] = [
     "Players in this instance who turn sharing on see those numbers beside your VRChat name, and you see theirs.",
     "The server keeps totals in memory only and drops yours when your run ends or you disconnect.",
 ];
+
+pub(super) fn dead_look(life: Life) -> Option<(u32, &'static str)> {
+    match life {
+        Life::Down => Some((AMBER, "DEAD \u{b7} CAN REVIVE")),
+        Life::Out => Some((DANGER, "DEAD \u{b7} NO REVIVE")),
+        Life::Alive | Life::OneLeft => None,
+    }
+}
 
 pub(super) fn ordinal(n: usize) -> String {
     let suffix = match (n % 10, n % 100) {
@@ -307,7 +316,11 @@ impl Renderer {
         let h = PARTY_ROW_H;
         for (slot, (i, r)) in board.into_iter().enumerate() {
             let y = PARTY_ROW_Y + slot as i32 * h;
-            if r.you {
+            let base = if r.you { CARD_HI } else { CARD };
+            let dead = dead_look(Life::from_wire(r.life));
+            if let Some((tone, _)) = dead {
+                self.rround(cx + 6, y, cw - 12, h, 5, mix(base, tone, 0.22));
+            } else if r.you {
                 self.rround(cx + 6, y, cw - 12, h, 5, CARD_HI);
             }
             let ink = if stale && !r.you { DIM } else { TEXT };
@@ -316,7 +329,32 @@ impl Renderer {
             let (rx, rw) = PARTY_RANK;
             self.text_rect(rx, y, rw, h, F_TINY, DIM, DT_RIGHT | vc, &rank);
             let (nx, nw) = PARTY_NAME;
-            self.text_rect(nx, y, nw, h, F_BODY, name_ink, DT_LEFT | vc, &r.name);
+            match dead {
+                Some((tone, _)) => {
+                    let pw = self.unscale(self.text_w(F_LABEL, "DEAD")) + 12;
+                    if tone == DANGER {
+                        self.rround(nx, y + 4, pw, h - 8, 4, mix(base, DANGER, 0.7));
+                        self.text_rect(nx, y, pw, h, F_LABEL, TEXT, DT_CENTER | vc, "DEAD");
+                    } else {
+                        self.outline(nx, y + 4, pw, h - 8, 4, AMBER);
+                        self.text_rect(nx, y, pw, h, F_LABEL, AMBER, DT_CENTER | vc, "DEAD");
+                    }
+                    let tx = nx + pw + 6;
+                    self.text_rect(
+                        tx,
+                        y,
+                        nw - pw - 6,
+                        h,
+                        F_BODY,
+                        name_ink,
+                        DT_LEFT | vc,
+                        &r.name,
+                    );
+                }
+                None => {
+                    self.text_rect(nx, y, nw, h, F_BODY, name_ink, DT_LEFT | vc, &r.name);
+                }
+            }
             let frac = r.dmg as f32 / leader as f32;
             let bar = match (r.you, stale) {
                 (true, _) => ACCENT,

@@ -46,6 +46,9 @@ pub struct Frame {
     pub discord_on: bool,
     pub usage_on: bool,
     pub usage_failing: bool,
+    pub board_on: bool,
+    pub board_status: u8,
+    pub board_delete: u8,
     pub ask_usage: bool,
     pub party_open: bool,
     pub view_run: Option<usize>,
@@ -53,6 +56,9 @@ pub struct Frame {
     pub group_pages: usize,
     pub run_sel: bool,
     pub group_sel: bool,
+    pub stages_btn: bool,
+    pub stages: bool,
+    pub split_top: usize,
 }
 
 impl Frame {

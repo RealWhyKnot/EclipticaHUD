@@ -52,3 +52,4 @@ pub(super) const GLYPH_UNPIN: &str = "\u{E77A}";
 pub(super) const GLYPH_SETTINGS: &str = "\u{E713}";
 pub(super) const GLYPH_MINUS: &str = "\u{E738}";
 pub(super) const GLYPH_PLUS: &str = "\u{E710}";
+pub(super) const GLYPH_TABLE: &str = "\u{E80A}";

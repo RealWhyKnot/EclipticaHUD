@@ -82,6 +82,10 @@ pub struct App {
     pub discord_on: bool,
     pub usage_on: bool,
     pub usage_failing: bool,
+    pub board_on: bool,
+    board_armed: Option<Instant>,
+    pub board_deleting: bool,
+    pub board_status: u8,
     pub usage_ask: bool,
     pub party_on: bool,
     party: party::PartyState,
@@ -98,6 +102,10 @@ pub struct App {
     pub scale_cap: f32,
     pub alpha: u8,
     pub settings_open: bool,
+    pub stages_on: bool,
+    pub split_top: usize,
+    split_wheel_acc: i32,
+    split_seen: Option<(usize, usize)>,
     flash_at: Option<Instant>,
     warn_at: Option<Instant>,
     token_alerts_seen: u64,
@@ -192,6 +200,10 @@ impl App {
             discord_on: false,
             usage_on: false,
             usage_failing: false,
+            board_on: false,
+            board_armed: None,
+            board_deleting: false,
+            board_status: crate::board::OK,
             usage_ask: false,
             party_on: false,
             party: party::PartyState::new(),
@@ -208,6 +220,10 @@ impl App {
             scale_cap: MAX_SCALE,
             alpha: MAX_ALPHA,
             settings_open: false,
+            stages_on: false,
+            split_top: 0,
+            split_wheel_acc: 0,
+            split_seen: None,
             flash_at: None,
             warn_at: None,
             token_alerts_seen: 0,
@@ -299,7 +315,8 @@ impl App {
         }
         match hit {
             Hit::Close | Hit::Log | Hit::Pin | Hit::Settings | Hit::Party => true,
-            Hit::Discord | Hit::Sound | Hit::Usage => self.settings_open,
+            Hit::Discord | Hit::Sound | Hit::Usage | Hit::Board => self.settings_open,
+            Hit::BoardDelete => self.settings_open && !self.board_deleting,
             Hit::ScaleDown => self.settings_open && self.shown_scale() > MIN_SCALE + 0.001,
             Hit::ScaleUp => self.settings_open && self.shown_scale() < self.scale_max() - 0.001,
             Hit::AlphaDown => self.settings_open && self.alpha > MIN_ALPHA,
@@ -308,16 +325,34 @@ impl App {
             Hit::WindowUp => {
                 self.settings_open && self.gs.win() < WINDOW_STEPS[WINDOW_STEPS.len() - 1]
             }
-            Hit::Mute | Hit::FightPrev | Hit::FightNext if self.settings_open => false,
+            Hit::Mute | Hit::FightPrev | Hit::FightNext | Hit::Stages | Hit::Splits
+                if self.settings_open =>
+            {
+                false
+            }
+            Hit::Info(
+                Info::Dealt(_)
+                | Info::DealtGraph
+                | Info::LastKill
+                | Info::Taken(_)
+                | Info::TakenGraph
+                | Info::LastHit
+                | Info::Deaths
+                | Info::TakenMore(_)
+                | Info::TopAttacks,
+            ) if self.stages_shown() => false,
             Hit::Info(
                 Info::Boss
                 | Info::Result
+                | Info::Pages
                 | Info::Target
                 | Info::Dealt(_)
                 | Info::DealtGraph
                 | Info::LastKill,
             ) if self.settings_open => false,
+            Hit::Info(i) if self.settings_open && i.under_settings() => false,
             Hit::Info(Info::Version) => !self.update_ready(),
+            Hit::Info(Info::Pages) => !self.is_live() && self.viewed_group().is_some(),
             Hit::Info(i) if i.live_only() => self.is_live(),
             Hit::Info(i) if i.history_only() => !self.is_live(),
             Hit::Info(_) => true,
@@ -329,6 +364,8 @@ impl App {
             Hit::RunNext => self.sel_run.is_some(),
             Hit::FightPrev => self.cur_group().is_some_and(|i| i > 0),
             Hit::FightNext => self.sel_group.is_some(),
+            Hit::Stages => self.stages_ok(),
+            Hit::Splits => self.stages_shown(),
         }
     }
 
@@ -362,8 +399,30 @@ impl App {
                 self.set_usage(!self.usage_on, true);
                 true
             }
+            Hit::Board => {
+                self.set_board(!self.board_on);
+                true
+            }
+            Hit::BoardDelete => {
+                let now = Instant::now();
+                if self
+                    .board_armed
+                    .is_some_and(|t| now.duration_since(t) < anim::DELETE_ARM)
+                {
+                    self.board_armed = None;
+                    self.delete_board();
+                } else {
+                    self.board_armed = Some(now);
+                }
+                true
+            }
             Hit::Settings => {
                 self.settings_open = !self.settings_open;
+                true
+            }
+            Hit::Stages => {
+                self.stages_on = !self.stages_on;
+                self.split_follow();
                 true
             }
             Hit::Party => {
@@ -389,7 +448,7 @@ impl App {
                 self.set_usage(hit == Hit::UsageYes, true);
                 true
             }
-            Hit::Close | Hit::UpdateNow | Hit::UpdateSkip | Hit::Info(_) => false,
+            Hit::Close | Hit::UpdateNow | Hit::UpdateSkip | Hit::Splits | Hit::Info(_) => false,
         }
     }
 
@@ -403,6 +462,16 @@ impl App {
         }
         self.usage_on = on;
         crate::usage::ON.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn set_board(&mut self, on: bool) {
+        self.board_on = on;
+        crate::board::ON.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn delete_board(&mut self) {
+        self.board_deleting = true;
+        crate::board::forget();
     }
 
     pub fn set_discord(&mut self, on: bool) {

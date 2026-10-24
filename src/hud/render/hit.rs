@@ -19,6 +19,8 @@ pub enum Hit {
     Party,
     Discord,
     Usage,
+    Board,
+    BoardDelete,
     Log,
     Close,
     Update,
@@ -33,6 +35,8 @@ pub enum Hit {
     RunNext,
     FightPrev,
     FightNext,
+    Stages,
+    Splits,
     Info(Info),
 }
 
@@ -43,6 +47,7 @@ pub enum Info {
     RunRow,
     Boss,
     Result,
+    Pages,
     Dealt(u8),
     DealtGraph,
     LastKill,
@@ -62,12 +67,13 @@ pub enum Info {
 const B: i32 = BODY_DY;
 const T: i32 = TAKEN_CARD_Y + GRAPH_DY + BODY_DY;
 
-pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 25] = [
+pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
     (Info::Status, (14, 26 + B, 332, 20)),
     (Info::Progress, (14, 46 + B, 332, 8)),
     (Info::RunRow, (44, 54 + B, 272, 24)),
-    (Info::Boss, (74, 84 + B, 160, 26)),
-    (Info::Result, (26, 126 + B, 308, 40)),
+    (Info::Boss, (24, 84 + B, 210, 26)),
+    (Info::Result, (26, 126 + B, 308, 28)),
+    (Info::Pages, (26, 154 + B, 308, 20)),
     (Info::Target, (26, 126 + B, 308, 40)),
     (Info::Dealt(0), (26, 190 + B, 102, 40)),
     (Info::Dealt(1), (128, 190 + B, 102, 40)),
@@ -99,12 +105,18 @@ pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 25] = [
 ];
 
 impl Info {
+    pub fn under_settings(self) -> bool {
+        let (_, y, _, h) = self.rect();
+        let (_, cy, _, ch) = SETTINGS_CARD;
+        y + h > cy + BODY_DY && y < cy + ch + BODY_DY
+    }
+
     pub fn live_only(self) -> bool {
         matches!(self, Info::LastHit | Info::Target | Info::TakenMore(2))
     }
 
     pub fn history_only(self) -> bool {
-        matches!(self, Info::Result | Info::Deaths)
+        matches!(self, Info::Result | Info::Pages | Info::Deaths)
     }
 
     pub(super) fn rect(self) -> (i32, i32, i32, i32) {
@@ -122,8 +134,13 @@ impl Info {
             (Info::RunRow, false) => {
                 "Run number, start time, stage and deaths; LOST means a boss survived"
             }
-            (Info::Boss, true) => "The boss you are fighting, or the stage you are clearing",
-            (Info::Boss, false) => "The boss of this fight, all of its phases together",
+            (Info::Boss, true) => {
+                "Stage you are clearing or boss you are fighting, numbered by stage"
+            }
+            (Info::Boss, false) => {
+                "Purple STAGE 2 is the clearing on stage 2, red BOSS 2 is its boss"
+            }
+            (Info::Pages, _) => "Every page of this run in order, S for a stage, B for its boss",
             (Info::Result, _) => {
                 "Killed, lost (run ended with it alive) or unfinished, plus fight time"
             }
@@ -184,6 +201,9 @@ impl Info {
     }
 }
 
+pub const DELETE_ARMED: u8 = 1;
+pub const DELETE_BUSY: u8 = 2;
+
 #[derive(Clone, Copy)]
 pub struct TipCtx {
     pub live: bool,
@@ -193,12 +213,16 @@ pub struct TipCtx {
     pub discord_on: bool,
     pub usage_on: bool,
     pub usage_failing: bool,
+    pub board_on: bool,
+    pub board_status: u8,
+    pub board_delete: u8,
     pub party_open: bool,
+    pub stages: bool,
 }
 
 impl Hit {
     pub fn clickable(self) -> bool {
-        !matches!(self, Hit::Info(_))
+        !matches!(self, Hit::Info(_) | Hit::Splits)
     }
 
     pub fn tip(self, c: TipCtx) -> &'static str {
@@ -225,6 +249,21 @@ impl Hit {
                 "Sending boss and damage data with player names removed; click to stop"
             }
             Hit::Usage => "Send boss and damage data to improve the HUD; player names are removed",
+            Hit::Board if c.board_on && c.board_status == crate::board::TAKEN => {
+                "Another PC already put this VRChat name on the leaderboard"
+            }
+            Hit::Board if c.board_on && c.board_status == crate::board::FAILING => {
+                "Can't reach the leaderboard right now; the HUD will try again"
+            }
+            Hit::Board if c.board_on => "Sending your boss kills to the leaderboard; click to stop",
+            Hit::Board => "Put your boss kills on ecliptica.whyknot.dev under your VRChat name",
+            Hit::BoardDelete if c.board_delete == DELETE_ARMED => {
+                "Click again to delete your kills from the leaderboard"
+            }
+            Hit::BoardDelete if c.board_delete == DELETE_BUSY => {
+                "Deleting your kills from the leaderboard"
+            }
+            Hit::BoardDelete => "Remove all your kills from ecliptica.whyknot.dev",
             Hit::Log if c.log_open => "Close the event log window",
             Hit::Log => "Open the event log window",
             Hit::Close => "Close the HUD (Esc)",
@@ -240,8 +279,11 @@ impl Hit {
             Hit::Mute | Hit::Sound => "Unmute the sound that plays when the boss targets you",
             Hit::RunPrev => "Show the previous run",
             Hit::RunNext => "Show the next run, or the live run after the newest",
-            Hit::FightPrev => "Show the previous boss fight of this run",
-            Hit::FightNext => "Show the next boss fight of this run",
+            Hit::FightPrev => "Show the previous stage or boss fight of this run",
+            Hit::FightNext => "Show the next stage or boss fight of this run",
+            Hit::Stages if c.stages => "Back to the damage cards for this page",
+            Hit::Stages => "Show time, damage and deaths for each stage of this run",
+            Hit::Splits => "Each stage counted with its boss fight. The lit row is this page",
             Hit::Info(i) => i.tip(c.live),
         }
     }
@@ -259,6 +301,8 @@ impl Hit {
             Hit::Party => PARTY_BTN,
             Hit::Discord => body(DISCORD_HIT),
             Hit::Usage => body(USAGE_HIT),
+            Hit::Board => body(BOARD_HIT),
+            Hit::BoardDelete => body(BOARD_DELETE_HIT),
             Hit::Sound => body(SOUND_HIT),
             Hit::Log => LOG_BTN,
             Hit::Close => CLOSE_BTN,
@@ -273,6 +317,8 @@ impl Hit {
             Hit::RunNext => body(RUN_NEXT_HIT),
             Hit::FightPrev => body(FIGHT_PREV_HIT),
             Hit::FightNext => body(FIGHT_NEXT_HIT),
+            Hit::Stages => body(STAGES_BTN),
+            Hit::Splits => body(SPLITS_CARD),
             Hit::Info(i) => i.rect(),
         }
     }
@@ -364,7 +410,9 @@ impl PartyHit {
             PartyHit::Newer => "Show a later shared fight",
             PartyHit::Status => "Connection to the shared damage server",
             PartyHit::Rank => "Your place among the players here who share, by damage this fight",
-            PartyHit::Board => "Boss damage from everyone here who shares it, highest first",
+            PartyHit::Board => {
+                "Boss damage, highest first. Amber DEAD can be revived, red DEAD can't"
+            }
         }
     }
 
@@ -422,17 +470,21 @@ impl Renderer {
             Hit::Sound,
             Hit::Discord,
             Hit::Usage,
+            Hit::Board,
+            Hit::BoardDelete,
             Hit::Mute,
             Hit::RunPrev,
             Hit::RunNext,
             Hit::FightPrev,
             Hit::FightNext,
+            Hit::Stages,
         ]
         .map(|h| (h.rect(), h));
         regions
             .into_iter()
             .chain(INFO_REGIONS.iter().map(|(i, r)| (*r, Hit::Info(*i))))
             .chain([
+                (Hit::Splits.rect(), Hit::Splits),
                 (UPDATE_NOW_HIT, Hit::UpdateNow),
                 (UPDATE_LATER_HIT, Hit::UpdateLater),
                 (UPDATE_SKIP_HIT, Hit::UpdateSkip),

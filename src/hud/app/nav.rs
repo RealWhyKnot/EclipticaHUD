@@ -1,6 +1,8 @@
 use super::App;
-use crate::game::run::Run;
-use crate::hud::render::Env;
+use crate::game::run::{Page, Run, Split};
+use crate::hud::render::{Env, SPLIT_ROWS};
+
+const SPLIT_STEP: i32 = 3;
 
 impl App {
     pub fn pages(&self) -> usize {
@@ -29,7 +31,7 @@ impl App {
     }
 
     pub fn group_pages(&self) -> usize {
-        let n = self.viewed_run().map_or(0, |(_, r)| r.groups().len());
+        let n = self.viewed_run().map_or(0, |(_, r)| r.pages().len());
         n + usize::from(self.sel_run.is_none() && self.gs.boss.is_none())
     }
 
@@ -44,15 +46,15 @@ impl App {
         }
     }
 
-    pub fn viewed_group(&self) -> Option<(usize, std::ops::Range<usize>)> {
+    pub fn viewed_group(&self) -> Option<(usize, Page)> {
         let (_, run) = self.viewed_run()?;
-        let groups = run.groups();
-        let last = groups.len().checked_sub(1)?;
+        let pages = run.pages();
+        let last = pages.len().checked_sub(1)?;
         let i = match self.sel_group {
             Some(i) => i.min(last),
             None => self.live_group_index().filter(|i| *i <= last)?,
         };
-        Some((i, groups[i].clone()))
+        Some((i, pages[i].clone()))
     }
 
     pub fn is_live(&self) -> bool {
@@ -67,6 +69,8 @@ impl App {
         self.sel_run = Some(p - 1);
         self.sel_group = None;
         self.log_reset();
+        self.split_top = 0;
+        self.split_follow();
         true
     }
 
@@ -76,6 +80,8 @@ impl App {
                 self.sel_run = (i + 1 < self.live_page()).then_some(i + 1);
                 self.sel_group = None;
                 self.log_reset();
+                self.split_top = 0;
+                self.split_follow();
                 true
             }
             None => false,
@@ -86,6 +92,7 @@ impl App {
         match self.cur_group() {
             Some(i) if i > 0 => {
                 self.sel_group = Some(i - 1);
+                self.split_follow();
                 true
             }
             _ => false,
@@ -97,9 +104,68 @@ impl App {
             Some(i) => {
                 let live = self.live_group_index().unwrap_or(0);
                 self.sel_group = (i + 1 < live).then_some(i + 1);
+                self.split_follow();
                 true
             }
             None => false,
         }
+    }
+
+    pub fn splits(&self) -> Vec<Split> {
+        match self.shown_run() {
+            Some((i, _)) => self.gs.run_splits(i, self.now()),
+            None => Vec::new(),
+        }
+    }
+
+    fn split_cur(&self) -> Option<usize> {
+        if self.is_live() {
+            return self.splits().len().checked_sub(1);
+        }
+        let (_, run) = self.shown_run()?;
+        let (_, page) = self.viewed_group()?;
+        Some(run.stage_of(&page) as usize - 1)
+    }
+
+    pub fn stages_ok(&self) -> bool {
+        (self.is_live() || self.viewed_group().is_some()) && !self.splits().is_empty()
+    }
+
+    pub fn stages_shown(&self) -> bool {
+        self.stages_on && self.stages_ok()
+    }
+
+    fn split_max(&self) -> usize {
+        self.splits().len().saturating_sub(SPLIT_ROWS)
+    }
+
+    pub(super) fn split_track(&mut self) {
+        let seen = self.shown_run().map(|(i, _)| i).zip(self.split_cur());
+        if seen != self.split_seen {
+            self.split_seen = seen;
+            self.split_follow();
+        }
+    }
+
+    pub(super) fn split_follow(&mut self) {
+        if let Some(c) = self.split_cur() {
+            if c < self.split_top {
+                self.split_top = c;
+            } else if c >= self.split_top + SPLIT_ROWS {
+                self.split_top = c + 1 - SPLIT_ROWS;
+            }
+        }
+        self.split_top = self.split_top.min(self.split_max());
+    }
+
+    pub fn split_wheel(&mut self, delta: i32) -> bool {
+        self.split_wheel_acc += delta;
+        let steps = self.split_wheel_acc / super::logwin::WHEEL_DELTA;
+        self.split_wheel_acc -= steps * super::logwin::WHEEL_DELTA;
+        let top = self.split_top as i32 - steps * SPLIT_STEP;
+        let top = top.clamp(0, self.split_max() as i32) as usize;
+        let moved = top != self.split_top;
+        self.split_top = top;
+        moved
     }
 }

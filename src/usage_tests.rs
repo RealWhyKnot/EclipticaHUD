@@ -466,10 +466,7 @@ fn lines_added_to_a_log_finished_before_opt_in_stay_out() {
     add(&mut db, LOG, &["Dealing 7 STRIKE damage"]);
     add(&mut db, LATER, &["Dealing 9 STRIKE damage"]);
     let batch = build(&db, "1", MAX_TEXT).unwrap();
-    assert_eq!(
-        body(&batch.text),
-        "0\tlog\th\t1\n0\tdealt\t9\t1\n"
-    );
+    assert_eq!(body(&batch.text), "0\tlog\th\t1\n0\tdealt\t9\t1\n");
     assert!(db.usage_commit(&batch.cursors));
     assert!(build(&db, "1", MAX_TEXT).is_none());
 }

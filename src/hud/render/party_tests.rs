@@ -627,7 +627,7 @@ fn settings_rows_fit_their_labels() {
         assert_eq!(at(dx + 4, dy + dh / 2), CARD_HI, "discord off at {dpi}");
         let (cx, cy, cw, ch) = SETTINGS_CARD;
         assert_eq!(at(cx + cw / 2, cy + BODY_DY + ch - 2), CARD_HI);
-        assert_eq!(USAGE_HIT.1 + USAGE_HIT.3 + 16, cy + ch);
+        assert_eq!(BOARD_DELETE_HIT.1 + BOARD_DELETE_HIT.3 + 16, cy + ch);
         assert_eq!(SCALE_DOWN_HIT.1 - cy, 16);
     }
 }
@@ -768,4 +768,14 @@ fn usage_question_fits_at_every_dpi() {
     assert!(bottom <= PROMPT_AREA.0 + PROMPT_AREA.1, "{bottom}");
     assert!(ASK_T >= PROMPT_AREA.0, "{ASK_T}");
     assert!(USAGE_YES_HIT.0 + USAGE_YES_HIT.2 < USAGE_NO_HIT.0);
+}
+
+#[test]
+fn dead_tag_leaves_room_for_the_name() {
+    for dpi in DPIS {
+        let r = Renderer::new(dpi, PARTY_W, PARTY_H);
+        let tag = r.text_w(F_LABEL, "DEAD") + r.px(12);
+        let room = r.px(PARTY_NAME.1) - tag - r.px(6);
+        assert!(room >= r.px(55), "{dpi}");
+    }
 }

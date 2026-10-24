@@ -59,7 +59,7 @@ pub fn merge_tallies<'a>(groups: impl Iterator<Item = &'a [Tally]>) -> Vec<Tally
     out
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BossFight {
     pub name: String,
     pub start_ts: u64,
@@ -103,23 +103,15 @@ fn add_at(series: &mut Vec<u32>, i: u64, n: u64) {
     series[i] = series[i].saturating_add(n.min(u32::MAX as u64) as u32);
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct StageStats {
-    pub name: String,
-    pub start_ts: u64,
-    pub end_ts: Option<u64>,
+pub type StageStats = BossFight;
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Split {
+    pub stage: String,
+    pub secs: u64,
     pub dmg: u64,
     pub taken: u64,
-    pub hits: u32,
-    pub max_hit: u64,
-    pub attacks: Vec<Tally>,
     pub deaths: u32,
-}
-
-impl StageStats {
-    pub fn secs(&self, now: u64) -> u64 {
-        self.end_ts.unwrap_or(now).saturating_sub(self.start_ts)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -193,22 +185,78 @@ impl Run {
     }
 
     pub fn group(&self, i: usize) -> Option<FightGroup<'_>> {
-        let fights = &self.fights[self.groups().get(i)?.clone()];
-        let last = fights.last()?;
-        Some(FightGroup {
-            fights,
-            name: base_name(&last.name),
-            start: fights[0].start_ts,
-            dmg: fights.iter().map(|p| p.dmg).sum(),
-            taken: fights.iter().map(|p| p.taken).sum(),
-            hits: fights.iter().map(|p| p.hits).sum(),
-            kill: fights
-                .iter()
-                .filter_map(|p| p.kill)
-                .reduce(|a, b| (a.0 + b.0, a.1 + b.1)),
-            last,
-            n_phases: fights.len(),
-        })
+        FightGroup::of(&self.fights[self.groups().get(i)?.clone()], None)
+    }
+
+    pub fn pages(&self) -> Vec<Page> {
+        let mut out: Vec<(u64, Page)> = (0..self.stages.len())
+            .filter(|&i| {
+                let s = &self.stages[i];
+                s.dmg > 0 || s.taken > 0 || s.deaths > 0
+            })
+            .map(|i| (self.stages[i].start_ts, Page::Stage(i)))
+            .chain(
+                self.groups()
+                    .into_iter()
+                    .map(|g| (self.fights[g.start].start_ts, Page::Boss(g))),
+            )
+            .collect();
+        out.sort_by_key(|(t, _)| *t);
+        out.into_iter().map(|(_, p)| p).collect()
+    }
+
+    pub fn page(&self, i: usize) -> Option<FightGroup<'_>> {
+        match self.pages().into_iter().nth(i)? {
+            Page::Boss(g) => FightGroup::of(&self.fights[g], None),
+            Page::Stage(j) => {
+                let s = &self.stages[j];
+                let until = self.stages.get(j + 1).map_or(u64::MAX, |n| n.start_ts);
+                let cleared = self
+                    .fights
+                    .iter()
+                    .any(|f| f.start_ts >= s.start_ts && f.start_ts < until);
+                FightGroup::of(std::slice::from_ref(s), Some(cleared))
+            }
+        }
+    }
+
+    pub fn stage_of(&self, p: &Page) -> u32 {
+        match p {
+            Page::Stage(j) => *j as u32 + 1,
+            Page::Boss(g) => {
+                let t = self.fights[g.start].start_ts;
+                self.stages
+                    .iter()
+                    .filter(|s| s.start_ts <= t)
+                    .count()
+                    .max(1) as u32
+            }
+        }
+    }
+
+    pub fn splits(&self, now: u64, open: Option<&StageStats>) -> Vec<Split> {
+        let now = self.end_ts.unwrap_or(now);
+        let stages: Vec<&StageStats> = self.stages.iter().chain(open).collect();
+        let mut out: Vec<Split> = stages
+            .iter()
+            .map(|s| Split {
+                stage: s.name.clone(),
+                secs: s.secs(now),
+                dmg: s.dmg,
+                taken: s.taken,
+                deaths: s.deaths,
+            })
+            .collect();
+        for f in &self.fights {
+            let i = stages.iter().filter(|s| s.start_ts <= f.start_ts).count();
+            if let Some(sp) = out.get_mut(i.max(1) - 1) {
+                sp.secs += f.secs(now);
+                sp.dmg += f.dmg;
+                sp.taken += f.taken;
+                sp.deaths += f.deaths;
+            }
+        }
+        out
     }
 
     pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
@@ -229,6 +277,12 @@ pub struct Graph {
     pub marks: Vec<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Page {
+    Stage(usize),
+    Boss(std::ops::Range<usize>),
+}
+
 pub struct FightGroup<'a> {
     pub fights: &'a [BossFight],
     pub name: &'a str,
@@ -239,9 +293,37 @@ pub struct FightGroup<'a> {
     pub kill: Option<(u64, u64)>,
     pub last: &'a BossFight,
     pub n_phases: usize,
+    pub cleared: Option<bool>,
 }
 
-impl FightGroup<'_> {
+impl<'a> FightGroup<'a> {
+    fn of(fights: &'a [BossFight], cleared: Option<bool>) -> Option<FightGroup<'a>> {
+        let last = fights.last()?;
+        Some(FightGroup {
+            fights,
+            name: if cleared.is_some() {
+                &last.name
+            } else {
+                base_name(&last.name)
+            },
+            start: fights[0].start_ts,
+            dmg: fights.iter().map(|p| p.dmg).sum(),
+            taken: fights.iter().map(|p| p.taken).sum(),
+            hits: fights.iter().map(|p| p.hits).sum(),
+            kill: fights
+                .iter()
+                .filter_map(|p| p.kill)
+                .reduce(|a, b| (a.0 + b.0, a.1 + b.1)),
+            last,
+            n_phases: fights.len(),
+            cleared,
+        })
+    }
+
+    pub fn is_stage(&self) -> bool {
+        self.cleared.is_some()
+    }
+
     pub fn duration(&self, now: u64) -> u64 {
         self.last.end_ts.unwrap_or(now).saturating_sub(self.start)
     }
@@ -279,6 +361,11 @@ impl FightGroup<'_> {
     }
 
     pub fn result(&self) -> &'static str {
+        match self.cleared {
+            Some(true) => return "cleared",
+            Some(false) => return "not cleared",
+            None => {}
+        }
         match (self.last.kill, self.last.end_ts) {
             _ if self.last.lost => "lost",
             (Some(_), _) => "killed",
@@ -363,6 +450,57 @@ mod tests {
         };
         assert_eq!(run.groups(), vec![0..2, 2..3, 3..4, 4..5]);
         assert!(Run::default().groups().is_empty());
+    }
+
+    #[test]
+    fn splits_add_each_boss_to_the_stage_it_ended() {
+        let at = |name: &str, start: u64, end: Option<u64>, dmg: u64, deaths: u32| BossFight {
+            name: name.into(),
+            start_ts: start,
+            end_ts: end,
+            dmg,
+            taken: dmg / 10,
+            deaths,
+            ..Default::default()
+        };
+        let run = Run {
+            end_ts: Some(400),
+            stages: vec![
+                at("Grasslands", 100, Some(150), 1000, 1),
+                at("Desert", 200, Some(260), 2000, 0),
+            ],
+            fights: vec![
+                at("Early", 50, Some(60), 5, 0),
+                at("Yuki", 170, Some(190), 3000, 1),
+                at("YukiPhase2", 190, Some(195), 500, 0),
+                at("Nan", 300, None, 4000, 2),
+            ],
+            ..Default::default()
+        };
+        let open = at("Caves", 380, None, 70, 0);
+        let rows = run.splits(999, Some(&open));
+        let row = |s: &str, secs, dmg, deaths| Split {
+            stage: s.into(),
+            secs,
+            dmg,
+            taken: dmg / 10,
+            deaths,
+        };
+        assert_eq!(
+            rows,
+            vec![
+                Split {
+                    taken: 100 + 300 + 50,
+                    ..row("Grasslands", 50 + 10 + 20 + 5, 1000 + 5 + 3000 + 500, 2)
+                },
+                Split {
+                    taken: 200 + 400,
+                    ..row("Desert", 60 + 100, 2000 + 4000, 2)
+                },
+                row("Caves", 20, 70, 0),
+            ]
+        );
+        assert!(Run::default().splits(0, None).is_empty());
     }
 
     fn timed(name: &str, start_ts: u64, end_ts: Option<u64>) -> BossFight {

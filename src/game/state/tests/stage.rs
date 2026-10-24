@@ -287,3 +287,47 @@ fn stage_without_a_pool_reset_has_no_clear() {
     assert_eq!(gs.stage_clear(), Some(clear));
     assert_eq!(gs.token_alerts, 1);
 }
+
+#[test]
+fn stage_clears_get_their_own_pages_with_graphs() {
+    use crate::game::run::Page;
+    let mut gs = GameState::default();
+    feed_at(&mut gs, "09:10:00", HALL);
+    feed_at(&mut gs, "09:10:01", "Dealing 300 STRIKE damage");
+    feed_at(&mut gs, "09:10:03", "Dealing 200 STRIKE damage");
+    feed_at(
+        &mut gs,
+        "09:10:04",
+        "damage has been taken: 80, from source: (Gildhorn) Rock Slam",
+    );
+    feed_at(
+        &mut gs,
+        "09:10:10",
+        "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+    );
+    feed_at(&mut gs, "09:10:11", "Dealing 900 STRIKE damage");
+    kill_at(&mut gs, "09:10:20", "Nan", 900);
+    feed_at(&mut gs, "09:10:30", "ECLIPTICA - now in intermission");
+    feed_at(
+        &mut gs,
+        "09:11:00",
+        "ECLIPTICA - now in stage: Stage_Hallow on phase: 0.1 as class: Spellhammer",
+    );
+    feed_at(&mut gs, "09:12:00", LOBBY);
+    let run = &gs.runs[0];
+    assert_eq!(run.stages.len(), 2);
+    assert_eq!(run.pages(), vec![Page::Stage(0), Page::Boss(0..1)]);
+    let stage = run.page(0).unwrap();
+    assert!(stage.is_stage());
+    assert_eq!(stage.result(), "cleared");
+    assert_eq!((stage.dmg, stage.taken, stage.hits), (500, 80, 1));
+    assert_eq!(
+        stage.graph(0, 77).cols,
+        vec![0, 300, 0, 200, 0, 0, 0, 0, 0, 0, 0]
+    );
+    assert_eq!(stage.taken_graph(0, 77).cols[4], 80);
+    let boss = run.page(1).unwrap();
+    assert!(!boss.is_stage());
+    assert_eq!(boss.result(), "killed");
+    assert!(run.page(2).is_none());
+}

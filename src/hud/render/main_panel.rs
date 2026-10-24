@@ -1,22 +1,24 @@
 use super::fmt::*;
 use super::frame::{Env, Frame};
 use super::graph::GRAPH_COLS;
-use super::hit::{Hit, TipCtx};
+use super::hit::{Hit, TipCtx, DELETE_ARMED, DELETE_BUSY};
 use super::layout::*;
 use super::theme::*;
 use super::Renderer;
 use crate::discord::Link;
 use crate::game::event::fmt_clock;
 use crate::game::names::{boss_name, phase_name, stage_name};
-use crate::game::run::{base_name, merge_tallies, phase_num, FightGroup, Run, RunEnd, Tally};
+use crate::game::run::{
+    base_name, merge_tallies, phase_num, FightGroup, Page, Run, RunEnd, Split, Tally,
+};
 use crate::game::source::describe_source;
-use crate::game::state::{GameState, Mode};
+use crate::game::state::{GameState, Life, Mode};
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
 use windows_sys::Win32::Graphics::Gdi::*;
 
 const DASH: &str = "-";
-const COL: i32 = (W - 24) / 3;
+pub(super) const COL: i32 = (W - 24) / 3;
 
 enum Live<'a> {
     Pre,
@@ -77,6 +79,8 @@ struct LiveTaken {
     attacks: Vec<Tally>,
     empty: &'static str,
 }
+
+const STATUS_GAP: i32 = 12;
 
 impl LiveTaken {
     fn of(f: &Frame, gs: &GameState) -> Self {
@@ -143,8 +147,36 @@ impl LiveTaken {
     }
 }
 
+pub(super) const SPLIT_COLS: [(i32, i32, u32, &str); 5] = [
+    (M + 12, 118, DT_LEFT, "STAGE"),
+    (M + 132, 44, DT_RIGHT, "TIME"),
+    (M + 178, 60, DT_RIGHT, "DEALT"),
+    (M + 240, 48, DT_RIGHT, "TAKEN"),
+    (M + 288, 32, DT_RIGHT, "DIED"),
+];
+
+pub(super) fn fmt_split(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
 fn fmt_deaths(n: u32) -> String {
     format!("{n} death{}", if n == 1 { "" } else { "s" })
+}
+
+pub(super) const STRIP_X: i32 = M + 12;
+pub(super) const STRIP_Y: i32 = 156;
+pub(super) const STRIP_H: i32 = 16;
+pub(super) const STRIP_W: i32 = W - 24;
+const STRIP_GAP: i32 = 4;
+pub(super) const STRIP_MIN: i32 = 26;
+
+pub(super) fn strip_layout(n: usize, cur: usize) -> (std::ops::Range<usize>, i32) {
+    let fit = ((STRIP_W + STRIP_GAP) / (STRIP_MIN + STRIP_GAP)) as usize;
+    let shown = n.min(fit).max(1);
+    let start = cur.saturating_sub(shown / 2).min(n.saturating_sub(shown));
+    let k = shown as i32;
+    let sw = ((STRIP_W - STRIP_GAP * (k - 1)) / k).min(40);
+    (start..(start + shown).min(n), sw)
 }
 
 impl Renderer {
@@ -152,21 +184,31 @@ impl Renderer {
         let hist = f
             .view_run
             .zip(f.view_group)
-            .and_then(|(r, g)| gs.runs[r].group(g));
+            .and_then(|(r, g)| gs.runs[r].page(g));
         self.fill(0, 0, LOGICAL_W, LOGICAL_H, BG);
         self.draw_titlebar(f);
         self.shifted(BODY_DY, || {
             self.draw_status(f, gs);
             self.draw_run_pager(f, gs);
             self.draw_boss_card(f, gs, hist.as_ref());
-            self.draw_dealt_card(f, gs, hist.as_ref());
-            if f.settings_open {
-                self.draw_settings(f);
+            if f.stages {
+                self.draw_splits(f, gs);
+            } else {
+                self.draw_dealt_card(f, gs, hist.as_ref());
+            }
+            if f.stages_btn && !f.settings_open {
+                let ctl = f.ctl(Hit::Stages, true, f.stages);
+                self.glyph_button(STAGES_BTN, ctl, GLYPH_TABLE);
             }
         });
-        self.shifted(GRAPH_DY + BODY_DY, || {
-            self.draw_taken_card(f, gs, hist.as_ref())
-        });
+        if !f.stages {
+            self.shifted(GRAPH_DY + BODY_DY, || {
+                self.draw_taken_card(f, gs, hist.as_ref())
+            });
+        }
+        if f.settings_open {
+            self.shifted(BODY_DY, || self.draw_settings(f));
+        }
         self.draw_footer(f);
         if f.prompt {
             self.draw_update_prompt(f);
@@ -185,7 +227,11 @@ impl Renderer {
                 discord_on: f.discord_on,
                 usage_on: f.usage_on,
                 usage_failing: f.usage_failing,
+                board_on: f.board_on,
+                board_status: f.board_status,
+                board_delete: f.board_delete,
                 party_open: f.party_open,
+                stages: f.stages,
             };
             self.tooltip(hit.rect(), hit.tip(ctx), LOGICAL_W, LOGICAL_H);
         }
@@ -254,27 +300,49 @@ impl Renderer {
                 GOOD,
             ),
         };
-        self.text(M, 28, W, F_BODY, status_color, DT_LEFT, &status);
+        let life = gs.life(now);
+        let mut right = 0;
         if !in_world {
-        } else if gs.is_dead(now) {
-            let color = mix(mix(BG, DANGER, 0.45), DANGER, f.dead_pulse);
-            self.text(M, 28, W, F_BODY, color, DT_RIGHT, "DEAD");
-        } else if let Some((got, total)) = gs.tokens_shown() {
-            let rune = gs.level_tokens.iter().any(|t| t.0);
-            let txt = format!(
-                "{got}/{total} token{}{}",
-                if total == 1 { "" } else { "s" },
-                if rune { " +rune" } else { "" }
-            );
-            let color = if got == total {
-                GOOD
-            } else if rune {
-                AMBER
-            } else {
-                DIM
-            };
-            self.text_rect(M, 28, W, 18, F_TINY, color, DT_RIGHT | DT_VCENTER, &txt);
+        } else if let Some((tone, label)) = super::party_panel::dead_look(life) {
+            let color = mix(mix(BG, tone, 0.45), tone, f.dead_pulse);
+            self.text(M, 28, W, F_BODY, color, DT_RIGHT, label);
+            right = self.unscale(self.text_w(F_BODY, label));
+        } else {
+            if let Some((got, total)) = gs.tokens_shown() {
+                let rune = gs.level_tokens.iter().any(|t| t.0);
+                let txt = format!(
+                    "{got}/{total} token{}{}",
+                    if total == 1 { "" } else { "s" },
+                    if rune { " +rune" } else { "" }
+                );
+                let color = if got == total {
+                    GOOD
+                } else if rune {
+                    AMBER
+                } else {
+                    DIM
+                };
+                self.text_rect(M, 28, W, 18, F_TINY, color, DT_RIGHT | DT_VCENTER, &txt);
+                right = self.unscale(self.text_w(F_TINY, &txt)) + STATUS_GAP;
+            }
+            if life == Life::OneLeft {
+                let label = "LAST LIFE";
+                self.text_rect(
+                    M,
+                    28,
+                    W - right,
+                    18,
+                    F_TINY,
+                    AMBER,
+                    DT_RIGHT | DT_VCENTER,
+                    label,
+                );
+                right += self.unscale(self.text_w(F_TINY, label)) + STATUS_GAP;
+            }
+            right = right.saturating_sub(STATUS_GAP);
         }
+        let room = if right > 0 { W - right - STATUS_GAP } else { W };
+        self.text_rect(M, 28, room, 40, F_BODY, status_color, DT_LEFT, &status);
         if in_world && gs.mode == Mode::Stage {
             self.bar(M, 47, W, 4, f.progress_shown, GOOD);
         }
@@ -345,19 +413,59 @@ impl Renderer {
     fn draw_boss_card(&self, f: &Frame, gs: &GameState, hist: Option<&FightGroup>) {
         let now = f.now;
         let mine = f.live() && !f.empty() && gs.boss.is_some() && gs.targets_me();
-        let card = if mine { mix(CARD, DANGER, 0.16) } else { CARD };
-        self.rround(M, 82, W, 96, 8, card);
-        let has_fights = f.view_run.is_some_and(|i| !gs.runs[i].fights.is_empty());
-        let card_label = if f.live() && !f.empty() && gs.pre_boss() {
-            "STAGE"
+        let has_fights = f.view_run.is_some_and(|i| !gs.runs[i].pages().is_empty());
+        let stage_page = !f.live() && hist.is_some_and(|h| h.is_stage());
+        let viewed = f.view_run.zip(f.view_group).and_then(|(r, g)| {
+            let run = &gs.runs[r];
+            Some(run.stage_of(&run.pages().into_iter().nth(g)?))
+        });
+        let live_no = gs.stage_no.filter(|_| f.live());
+        let (card_label, kind, num) = if f.live() && !f.empty() && gs.pre_boss() {
+            ("STAGE", ACCENT, live_no)
         } else if f.live() && !f.empty() && gs.mode == Mode::Intermission {
-            "RUN"
-        } else if !f.live() && !has_fights {
-            "STAGE"
+            ("RUN", DIM, None)
+        } else if stage_page || (!f.live() && !has_fights) {
+            ("STAGE", ACCENT, viewed)
+        } else if f.live() && (f.empty() || gs.boss.is_none()) {
+            ("BOSS", DIM, None)
         } else {
-            "BOSS"
+            ("BOSS", DANGER, live_no.or(viewed))
         };
-        self.text(M + 12, 88, W - 24, F_LABEL, DIM, DT_LEFT, card_label);
+        let card = if mine {
+            mix(CARD, DANGER, 0.16)
+        } else if kind != DIM {
+            mix(CARD, kind, 0.08)
+        } else {
+            CARD
+        };
+        self.rround(M, 82, W, 96, 8, card);
+        let tx = if kind == DIM {
+            self.text(M + 12, 88, W - 24, F_LABEL, DIM, DT_LEFT, card_label);
+            M + 60
+        } else {
+            let label = match num {
+                Some(n) => format!("{card_label} {n}"),
+                None => card_label.to_string(),
+            };
+            let pw = self.unscale(self.text_w(F_LABEL, &label)) + 12;
+            self.rround(M + 10, 87, pw, 18, 4, mix(CARD, kind, 0.7));
+            self.text_rect(
+                M + 10,
+                87,
+                pw,
+                18,
+                F_LABEL,
+                TEXT,
+                DT_CENTER | DT_VCENTER,
+                &label,
+            );
+            (M + 10 + pw + 8).max(M + 60)
+        };
+        if has_fights && !f.live() {
+            if let (Some(r), Some(g)) = (f.view_run, f.view_group) {
+                self.kind_strip(&gs.runs[r], g);
+            }
+        }
         if has_fights {
             let free = !f.prompt && !f.settings_open;
             let back = f.view_group.map_or(f.group_pages > 1, |i| i > 0);
@@ -379,12 +487,12 @@ impl Renderer {
             self.text_rect(266, 86, 42, 20, F_TINY, DIM, DT_CENTER | DT_VCENTER, &idx);
         }
         if !f.live() {
-            return self.draw_boss_history(f, f.view_run.map(|i| &gs.runs[i]), hist);
+            return self.draw_boss_history(f, f.view_run.map(|i| &gs.runs[i]), hist, tx);
         }
         match (gs.boss.as_ref().filter(|_| !f.empty()), &gs.target) {
             (Some(boss), target) => {
                 let shown = boss_name(base_name(boss));
-                self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, shown);
+                self.text(tx, 88, M + 226 - tx, F_BOSS, TEXT, DT_LEFT, shown);
                 if mine {
                     self.text(
                         M + 12,
@@ -432,9 +540,9 @@ impl Renderer {
             }
             (None, _) if gs.pre_boss() && !f.empty() => {
                 self.text(
-                    M + 60,
+                    tx,
                     88,
-                    166,
+                    M + 226 - tx,
                     F_BOSS,
                     TEXT,
                     DT_LEFT,
@@ -490,12 +598,48 @@ impl Renderer {
         }
     }
 
-    fn draw_boss_history(&self, f: &Frame, run: Option<&Run>, hist: Option<&FightGroup>) {
+    fn kind_strip(&self, run: &Run, cur: usize) {
+        let pages = run.pages();
+        let (shown, sw) = strip_layout(pages.len(), cur);
+        for (k, i) in shown.enumerate() {
+            let p = &pages[i];
+            let stage = matches!(p, Page::Stage(_));
+            let tone = if stage { ACCENT } else { DANGER };
+            let on = i == cur;
+            let x = STRIP_X + k as i32 * (sw + STRIP_GAP);
+            let fill = mix(CARD, tone, if on { 0.75 } else { 0.22 });
+            self.rround(x, STRIP_Y, sw, STRIP_H, 4, fill);
+            let t = format!("{}{}", if stage { "S" } else { "B" }, run.stage_of(p));
+            if self.unscale(self.text_w(F_TINY, &t)) + 4 <= sw {
+                let ink = if on { TEXT } else { DIM };
+                self.text_rect(
+                    x,
+                    STRIP_Y,
+                    sw,
+                    STRIP_H,
+                    F_TINY,
+                    ink,
+                    DT_CENTER | DT_VCENTER,
+                    &t,
+                );
+            }
+        }
+    }
+
+    fn draw_boss_history(&self, f: &Frame, run: Option<&Run>, hist: Option<&FightGroup>, tx: i32) {
         let Some(h) = hist else {
             let Some(r) = run else {
                 return self.text(M + 12, 112, W - 24, F_BOSS, DIM, DT_LEFT, "no boss fights");
             };
-            self.text(M + 60, 88, 166, F_BOSS, TEXT, DT_LEFT, stage_name(&r.stage));
+            self.text(
+                tx,
+                88,
+                M + 226 - tx,
+                F_BOSS,
+                TEXT,
+                DT_LEFT,
+                stage_name(&r.stage),
+            );
             self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "RESULT");
             let res = match r.end {
                 Some(RunEnd::Left) => "left before a boss",
@@ -516,13 +660,17 @@ impl Renderer {
             );
         };
         self.text(
-            M + 60,
+            tx,
             88,
-            166,
+            M + 226 - tx,
             F_BOSS,
             TEXT,
             DT_LEFT,
-            boss_name(base_name(h.name)),
+            if h.is_stage() {
+                stage_name(h.name)
+            } else {
+                boss_name(base_name(h.name))
+            },
         );
         self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "RESULT");
         if h.n_phases > 1 {
@@ -532,7 +680,7 @@ impl Renderer {
         let res = h.result();
         let color = match res {
             "lost" => DANGER,
-            "killed" => GOOD,
+            "killed" | "cleared" => GOOD,
             "unfinished" => DIM,
             _ => AMBER,
         };
@@ -675,7 +823,11 @@ impl Renderer {
                         F_BODY,
                         DIM,
                         DT_LEFT,
-                        "no kill recorded",
+                        if h.is_stage() {
+                            "clearing before the boss"
+                        } else {
+                            "no kill recorded"
+                        },
                     );
                 }
             }
@@ -696,6 +848,100 @@ impl Renderer {
         } else {
             self.text(M + 12, 208, W - 24, F_BODY, DIM, DT_LEFT, "no data");
         }
+    }
+
+    fn draw_splits(&self, f: &Frame, gs: &GameState) {
+        let (cx, cy, cw, ch) = SPLITS_CARD;
+        self.rround(cx, cy, cw, ch, 8, CARD);
+        let Some(ri) = f.view_run else {
+            return;
+        };
+        let run = &gs.runs[ri];
+        let rows = gs.run_splits(ri, f.now);
+        let cur = if f.live() {
+            rows.len().checked_sub(1)
+        } else {
+            f.view_group
+                .and_then(|g| run.pages().into_iter().nth(g))
+                .map(|p| run.stage_of(&p) as usize - 1)
+        };
+        let vc = DT_VCENTER;
+        self.text_rect(
+            M + 12,
+            STAGES_BTN.1,
+            STAGES_BTN.0 - M - 20,
+            STAGES_BTN.3,
+            F_LABEL,
+            DIM,
+            DT_LEFT | vc,
+            "THIS RUN BY STAGE",
+        );
+        let hy = cy + 26;
+        for (x, w, a, h) in SPLIT_COLS {
+            let ink = if h == "TAKEN" {
+                mix(DANGER, DIM, 0.4)
+            } else {
+                DIM
+            };
+            self.text_rect(x, hy, w, 16, F_TINY, ink, a | vc, h);
+        }
+        let n = rows.len();
+        let top = f.split_top.min(n.saturating_sub(SPLIT_ROWS));
+        let shown = top..n.min(top + SPLIT_ROWS);
+        let total = rows.iter().fold(Split::default(), |mut t, r| {
+            t.secs += r.secs;
+            t.dmg += r.dmg;
+            t.taken += r.taken;
+            t.deaths += r.deaths;
+            t
+        });
+        let fits = |col: usize, pick: fn(&Split) -> u64| {
+            rows[shown.clone()]
+                .iter()
+                .chain([&total])
+                .all(|r| self.text_w(F_BODY, &group_digits(pick(r))) <= self.px(SPLIT_COLS[col].1))
+        };
+        let full_d = fits(2, |r| r.dmg);
+        let full_t = fits(3, |r| r.taken);
+        let num = |full: bool, v: u64| if full { group_digits(v) } else { compact(v) };
+        let h = SPLIT_ROW_H;
+        let cell = |y: i32, col: usize, font: usize, ink: u32, s: &str| {
+            let (x, w, a, _) = SPLIT_COLS[col];
+            self.text_rect(x, y, w, h, font, ink, a | vc, s);
+        };
+        let line = |y: i32, r: &Split| {
+            cell(y, 1, F_BODY, TEXT, &fmt_split(r.secs));
+            cell(y, 2, F_BODY, AMBER, &num(full_d, r.dmg));
+            cell(y, 3, F_BODY, DANGER, &num(full_t, r.taken));
+            let dc = if r.deaths > 0 { DANGER } else { DIM };
+            cell(y, 4, F_BODY, dc, &r.deaths.to_string());
+        };
+        let mut y = hy + 18;
+        for i in shown.clone() {
+            let r = &rows[i];
+            if cur == Some(i) {
+                self.rround(M + 6, y, W - 12, h, 5, mix(CARD, ACCENT, 0.18));
+            } else if i % 2 == 1 {
+                self.rround(M + 6, y, W - 12, h, 5, mix(CARD, CARD_HI, 0.5));
+            }
+            let name = format!("{}  {}", i + 1, stage_name(&r.stage));
+            cell(y, 0, F_BODY, TEXT, &name);
+            line(y, r);
+            y += h;
+        }
+        if n > SPLIT_ROWS {
+            let more = format!(
+                "{} to {} of {n} stages, scroll for the rest",
+                shown.start + 1,
+                shown.end
+            );
+            self.text_rect(M + 12, y, W - 24, 20, F_TINY, DIM, DT_CENTER | vc, &more);
+            y += 20;
+        }
+        self.rround(M + 12, y + 3, W - 24, 1, 0, EDGE);
+        y += 6;
+        cell(y, 0, F_LABEL, DIM, "RUN");
+        line(y, &total);
     }
 
     fn draw_settings(&self, f: &Frame) {
@@ -739,6 +985,7 @@ impl Renderer {
             ("AGGRO SOUND", Hit::Sound, SOUND_HIT, f.sound_on),
             ("DISCORD STATUS", Hit::Discord, DISCORD_HIT, f.discord_on),
             ("SHARE FIGHT DATA", Hit::Usage, USAGE_HIT, f.usage_on),
+            ("LEADERBOARD", Hit::Board, BOARD_HIT, f.board_on),
         ] {
             self.setting_label(rect.1, label);
             let word = if on { "On" } else { "Off" };
@@ -747,6 +994,42 @@ impl Renderer {
         if f.usage_failing {
             self.dot(USAGE_HIT.0 - 16, USAGE_HIT.1 + 8, 8, AMBER);
         }
+        if f.board_on && f.board_status != crate::board::OK {
+            let color = if f.board_status == crate::board::TAKEN {
+                DANGER
+            } else {
+                AMBER
+            };
+            self.dot(BOARD_HIT.0 - 16, BOARD_HIT.1 + 8, 8, color);
+        }
+        self.setting_label(BOARD_DELETE_HIT.1, "BOARD KILLS");
+        self.delete_button(f);
+    }
+
+    fn delete_button(&self, f: &Frame) {
+        let (x, y, w, h) = BOARD_DELETE_HIT;
+        let hover = f.hover == Some(Hit::BoardDelete) && !f.prompt;
+        let (word, ink) = match f.board_delete {
+            DELETE_BUSY => ("Deleting", INK_OFF),
+            DELETE_ARMED => {
+                let fill = if hover {
+                    mix(DANGER, TEXT, 0.2)
+                } else {
+                    DANGER
+                };
+                self.rround(x, y, w, h, 6, fill);
+                ("Sure?", BG)
+            }
+            _ if f.prompt => ("Delete", INK_OFF),
+            _ => {
+                if hover {
+                    self.rround(x, y, w, h, 6, mix(CARD, DANGER, 0.3));
+                }
+                self.outline(x, y, w, h, 6, mix(EDGE, DANGER, 0.6));
+                ("Delete", DANGER)
+            }
+        };
+        self.text_rect(x, y, w, h, F_LABEL, ink, DT_CENTER | DT_VCENTER, word);
     }
 
     fn setting_label(&self, y: i32, label: &str) {

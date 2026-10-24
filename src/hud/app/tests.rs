@@ -3,8 +3,10 @@ use super::logwin::*;
 use super::settings::*;
 use super::tick::*;
 use super::*;
+use crate::game::run::{BossFight, Page, Run, RunEnd};
 use crate::hud::render::{
-    MUTE_HIT, UPDATE_LATER_HIT, UPDATE_NOW_HIT, UPDATE_SKIP_HIT, USAGE_NO_HIT, USAGE_YES_HIT,
+    BOARD_DELETE_HIT, BOARD_HIT, BODY_DY, MUTE_HIT, SPLIT_ROWS, UPDATE_LATER_HIT, UPDATE_NOW_HIT,
+    UPDATE_SKIP_HIT, USAGE_NO_HIT, USAGE_YES_HIT,
 };
 use crate::hud::timeline;
 use crate::relay::proto::Totals;
@@ -365,10 +367,10 @@ fn navigation() {
     assert!(app.run_prev());
     assert_eq!(app.sel_run, Some(0));
     let (gi, g) = app.viewed_group().unwrap();
-    assert_eq!((gi, g.len()), (1, 1));
+    assert_eq!((gi, g), (1, Page::Boss(2..3)));
     assert!(app.group_prev());
     let (gi, g) = app.viewed_group().unwrap();
-    assert_eq!((gi, g.len()), (0, 2));
+    assert_eq!((gi, g), (0, Page::Boss(0..2)));
     assert!(!app.group_prev());
     assert!(app.group_next());
     assert_eq!(app.sel_group, None);
@@ -396,6 +398,72 @@ fn navigation() {
 }
 
 #[test]
+fn stage_table_toggles_follows_the_page_and_scrolls() {
+    let mut app = headless();
+    let stage = |i: u64| BossFight {
+        name: "Stage_OuterHeven".into(),
+        start_ts: 100 + i * 100,
+        end_ts: Some(150 + i * 100),
+        dmg: 10 + i,
+        ..Default::default()
+    };
+    app.gs.runs.push(Run {
+        start_ts: 100,
+        end_ts: Some(5000),
+        end: Some(RunEnd::Lost),
+        stages: (0..20).map(stage).collect(),
+        ..Default::default()
+    });
+    assert!(!app.hit_enabled(Hit::Stages));
+    assert!(app.run_prev());
+    assert!(app.hit_enabled(Hit::Stages));
+    assert!(!app.hit_enabled(Hit::Splits));
+    assert!(app.hit_enabled(Hit::Info(Info::Dealt(0))));
+    assert!(app.activate(Hit::Stages));
+    assert!(app.stages_shown());
+    assert!(app.hit_enabled(Hit::Splits));
+    for info in [
+        Info::Dealt(0),
+        Info::LastKill,
+        Info::Taken(1),
+        Info::TopAttacks,
+    ] {
+        assert!(!app.hit_enabled(Hit::Info(info)), "{info:?}");
+    }
+    assert!(app.hit_enabled(Hit::Info(Info::Pages)));
+    assert_eq!(app.split_top, 20 - SPLIT_ROWS);
+    assert!(app.split_wheel(120));
+    assert_eq!(app.split_top, 3);
+    assert!(!app.split_wheel(60));
+    assert!(app.split_wheel(60));
+    assert_eq!(app.split_top, 0);
+    assert!(!app.split_wheel(120));
+    assert!(app.split_wheel(-1200));
+    assert_eq!(app.split_top, 20 - SPLIT_ROWS);
+    while app.group_prev() {}
+    assert_eq!(app.split_top, 0);
+    app.settings_open = true;
+    assert!(!app.hit_enabled(Hit::Stages) && !app.hit_enabled(Hit::Splits));
+    app.settings_open = false;
+    assert!(app.run_next());
+    assert!(!app.stages_shown() && !app.hit_enabled(Hit::Splits));
+    assert!(app.hit_enabled(Hit::Info(Info::Dealt(0))));
+    assert!(app.run_prev());
+    assert!(app.stages_shown());
+    assert_eq!(app.split_top, 20 - SPLIT_ROWS);
+    assert!(app.activate(Hit::Stages));
+    assert!(!app.stages_shown());
+    assert!(app.run_next());
+    app.gs.feed(&format!("{P}{STAGE_A}"));
+    assert!(app.is_live() && app.hit_enabled(Hit::Stages));
+    assert!(app.activate(Hit::Stages));
+    assert!(app.stages_shown() && app.hit_enabled(Hit::Splits));
+    assert!(!app.hit_enabled(Hit::Info(Info::LastHit)));
+    app.split_track();
+    assert_eq!((app.splits().len(), app.split_top), (1, 0));
+}
+
+#[test]
 fn killed_boss_moves_to_previous_page() {
     let mut app = headless();
     app.gs.feed(&format!("{P}{STAGE_A}"));
@@ -411,7 +479,7 @@ fn killed_boss_moves_to_previous_page() {
     assert_eq!(app.group_pages(), 1);
     assert!(app
         .viewed_group()
-        .is_some_and(|(i, g)| i == 0 && g.len() == 2));
+        .is_some_and(|(i, g)| i == 0 && g == Page::Boss(0..2)));
     assert!(!app.hit_enabled(Hit::FightPrev));
     app.gs.feed(&format!(
         "{P}Boss DespairPhase2 dead, personal damage dealt: "
@@ -427,7 +495,7 @@ fn killed_boss_moves_to_previous_page() {
     assert!(app.group_prev());
     assert!(app
         .viewed_group()
-        .is_some_and(|(i, g)| i == 0 && g.len() == 2));
+        .is_some_and(|(i, g)| i == 0 && g == Page::Boss(0..2)));
     assert!(!app.group_prev());
     assert!(app.group_next());
     assert!(app.is_live());
@@ -924,6 +992,42 @@ mod party_tests {
     }
 
     #[test]
+    fn a_wiped_fight_is_saved_as_not_down() {
+        let (mut app, want) = party_app();
+        app.set_history(crate::history::History::in_memory());
+        feed(
+            &mut app,
+            "09:12:50",
+            "ECLIPTICA - now in stage: Stage_Forest on phase: 0.7 as class: Blade",
+        );
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Pandora(Clone) on phase: 0.76",
+        );
+        let t0 = Instant::now();
+        let s = snap(t0, &want, &[("usr_a", 900), ("usr_me", 400)]);
+        app.party_step(t0, Some(&want), poll(Link::Connected, 1, vec![s]));
+        assert_eq!(app.archive.db.as_ref().unwrap().party_count(0), 0);
+        feed(
+            &mut app,
+            "09:19:20",
+            "Boss Pandora dead, personal damage dealt: ",
+        );
+        feed(&mut app, "09:19:20", "ECLIPTICA - now in lobby");
+        app.party_step(t0, Some(&want), poll(Link::Connected, 1, Vec::new()));
+        let db = app.archive.db.as_ref().unwrap();
+        assert_eq!(db.party_count(0), 1);
+        let rec = db.party_page(0, 0).unwrap();
+        assert_eq!(rec.boss, "Pandora");
+        assert!(!rec.down);
+        assert_eq!(rec.secs, 380);
+        assert_eq!(rec.rows[0].dealt, 900);
+        app.party_step(t0, Some(&want), poll(Link::Connected, 1, Vec::new()));
+        assert_eq!(app.archive.db.as_ref().unwrap().party_count(0), 1);
+    }
+
+    #[test]
     fn snaps_fill_the_table_with_roster_names() {
         let (mut app, want) = party_app();
         feed(
@@ -1164,10 +1268,7 @@ mod party_tests {
             "damage has been taken: 25, from source: (Kakarot) attack_RockStomp",
         );
         app.poll_party();
-        let sent = Some(Totals {
-            dealt: 100,
-            taken: 25,
-        });
+        let sent = Some(Totals::from((100, 25)));
         assert_eq!(fake.take(), [(Some(want.clone()), sent)]);
         feed(
             &mut app,
@@ -1540,4 +1641,48 @@ fn many_sessions_load_cost() {
     );
     std::thread::sleep(std::time::Duration::from_secs(4));
     drop(gs);
+}
+
+#[test]
+fn leaderboard_switch_sits_over_the_taken_card() {
+    let mut app = headless();
+    let (x, y, w, h) = BOARD_HIT;
+    let (bx, by) = (x + w / 2, y + BODY_DY + h / 2);
+    assert!(!app.hit_enabled(Hit::Board));
+    assert_ne!(app.enabled_hit(bx, by), Some(Hit::Board));
+    assert!(app.hit_enabled(Hit::Info(Info::Taken(0))));
+    app.activate(Hit::Settings);
+    assert_eq!(app.enabled_hit(bx, by), Some(Hit::Board));
+    for i in 0..3 {
+        assert!(!app.hit_enabled(Hit::Info(Info::Taken(i))));
+    }
+    assert!(!app.hit_enabled(Hit::Info(Info::TakenGraph)));
+    assert!(app.hit_enabled(Hit::Info(Info::Status)));
+    assert!(app.activate(Hit::Board));
+    assert!(app.board_on);
+    assert!(crate::board::ON.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(app.activate(Hit::Board));
+    assert!(!app.board_on);
+    assert!(!crate::board::ON.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[test]
+fn board_delete_needs_a_second_click() {
+    let mut app = headless();
+    let (x, y, w, h) = BOARD_DELETE_HIT;
+    let (bx, by) = (x + w / 2, y + BODY_DY + h / 2);
+    assert!(!app.hit_enabled(Hit::BoardDelete));
+    app.activate(Hit::Settings);
+    assert_eq!(app.enabled_hit(bx, by), Some(Hit::BoardDelete));
+    app.activate(Hit::Board);
+    app.activate(Hit::Board);
+    assert!(!app.board_deleting);
+    assert!(app.activate(Hit::BoardDelete));
+    assert!(!app.board_deleting);
+    assert!(app.board_armed.is_some());
+    assert!(app.activate(Hit::BoardDelete));
+    assert!(app.board_deleting);
+    assert!(app.board_armed.is_none());
+    assert!(crate::board::DELETING.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(!app.hit_enabled(Hit::BoardDelete));
 }

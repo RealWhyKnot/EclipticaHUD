@@ -32,6 +32,14 @@ The HUD asks once whether you want to share fight data, and it stays off unless 
 
 Player names and user IDs are taken out on your PC before anything is sent. Other players show up as P1, P2 and so on, and you show up as "you". The numbering starts over for each log file and for each saved fight. The instance keeps its number but loses the owner and region tags, and a named instance is sent as a hash instead of its name. Each upload starts with the date, the clock time of its first line and your UTC offset; after that, each line only keeps how long after the previous one it came. Each log file gets an ID made from its name and a random key that stays on your PC, so the server can join uploads from the same session. Nothing from before you turned the switch on is sent. The server keeps the uploads as files.
 
+## Leaderboard
+
+Turn on Leaderboard in settings to put your boss kill times on [ecliptica.whyknot.dev](https://ecliptica.whyknot.dev) under your VRChat display name. It's off by default. While it's on, the HUD sends your fight data and VRChat name. New kills show as pending while we check them, and only kills made with Leaderboard on count.
+
+Each entry has the kill time, how many players were in the instance, your class, the stage, damage dealt and taken, hits taken, the biggest hit you took, deaths and graphs of damage dealt and taken over the fight.
+
+The first time, the HUD makes a random key in `%APPDATA%\EclipticaHUD\board-key.txt`. That key owns your name on the board, so another PC can't post under it. Turning Leaderboard off stops sending new kills. To remove the ones already on the board, click Delete next to BOARD KILLS in settings.
+
 ## History
 
 The HUD copies the Ecliptica lines it uses from your VRChat log into `%APPDATA%\EclipticaHUD\history.db`, so your runs stay in the panel after VRChat deletes its old logs. Shared fights get saved there when they end, and the arrows at the bottom of the party window page back through them. The file stays on your PC.
