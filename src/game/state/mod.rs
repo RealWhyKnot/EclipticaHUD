@@ -40,7 +40,7 @@ pub enum Mode {
 }
 
 pub const DEFAULT_WINDOW: u64 = 10;
-pub const TOKEN_ALERT_SECS: u64 = 12;
+pub const TOKEN_ALERT_SECS: u64 = 10;
 
 #[derive(Default)]
 pub struct GameState {
