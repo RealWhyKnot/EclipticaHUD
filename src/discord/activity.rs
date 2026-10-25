@@ -484,9 +484,7 @@ mod tests {
         let a = activity(&gs, now, 1_800_000_000).unwrap();
         assert!(a.contains("\"details\":\"Fighting Jim C. Bringer\""), "{a}");
         assert!(
-            a.contains(
-                "\"state\":\"10.5k DPS | 21.1k damage | 0 taken\""
-            ),
+            a.contains("\"state\":\"10.5k DPS | 21.1k damage | 0 taken\""),
             "{a}"
         );
         assert!(a.contains("\"large_image\":\"boss_jimbringer\""));
