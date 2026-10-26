@@ -11,7 +11,7 @@ miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-a
 rusqlite = { version = "0.40", features = ["bundled"] }
 
 [dependencies.windows-sys]
-version = "0.60"
+version = "0.61"
 features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
