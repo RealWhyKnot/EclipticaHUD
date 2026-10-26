@@ -72,6 +72,7 @@ pub fn run() {
             app.set_discord(true);
         }
         app.set_party(load_party());
+        app.set_vr_config(crate::vr::load_config());
         let (w, h) = (app.renderer.width, app.renderer.height);
 
         let module = GetModuleHandleW(std::ptr::null());

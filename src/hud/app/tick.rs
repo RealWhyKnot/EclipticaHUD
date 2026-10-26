@@ -210,6 +210,7 @@ impl App {
     }
 
     fn cue_effects(&mut self) {
+        self.buzz_alerts();
         if self.gs.target_since != self.last_target_since {
             self.last_target_since = self.gs.target_since;
             if self.gs.target.is_some() {

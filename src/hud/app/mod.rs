@@ -1,5 +1,6 @@
 mod anim;
 mod archive;
+mod buzz;
 mod logwin;
 mod nav;
 mod party;
@@ -70,6 +71,7 @@ pub struct App {
     pub log: LogState,
     pub party_win: PartyWin,
     vr: VrOverlay,
+    buzz_seen: crate::vr::Seen,
     rgba: Vec<u8>,
     last_ts: u64,
     last_ts_at: Instant,
@@ -188,6 +190,7 @@ impl App {
                 last_tip: None,
             },
             vr: VrOverlay::new(),
+            buzz_seen: crate::vr::Seen::default(),
             rgba: Vec::new(),
             last_ts: 0,
             last_ts_at: Instant::now(),
