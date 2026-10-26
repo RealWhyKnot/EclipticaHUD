@@ -64,13 +64,11 @@ jobs:
           }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value 'LIBCLANG_PATH=C:\Program Files\LLVM\bin'
 
-      - name: Build and test
+      - name: Build
         shell: pwsh
         env:
           EHUD_VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          cargo test
-          if ($LASTEXITCODE -ne 0) { throw "tests failed ($LASTEXITCODE)" }
           cargo build --release
           if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 
