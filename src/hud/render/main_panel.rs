@@ -1,3 +1,4 @@
+use super::enemies::{enemies_shown, ClearingIn};
 use super::fmt::*;
 use super::frame::{Env, Frame};
 use super::graph::GRAPH_COLS;
@@ -549,21 +550,11 @@ impl Renderer {
                     DT_LEFT,
                     stage_name(&gs.stage),
                 );
-                self.text(M + 12, 114, W - 24, F_LABEL, DIM, DT_LEFT, "CLEARING");
-                let since = fmt_dur(gs.stage_secs(now));
-                self.text(M + 12, 128, W - 24, F_BOSS, AMBER, DT_LEFT, &since);
-                if let Some((got, total)) = gs.tokens_shown() {
-                    self.text_rect(
-                        M + 12,
-                        128,
-                        W - 24,
-                        22,
-                        F_TINY,
-                        DIM,
-                        DT_RIGHT | DT_VCENTER,
-                        &format!("{got}/{}", fmt_count(total as usize, "token", "tokens")),
-                    );
-                }
+                self.draw_clearing(&ClearingIn {
+                    secs: gs.stage_secs(now),
+                    tokens: gs.tokens_shown(),
+                    enemies: enemies_shown(gs, now),
+                });
             }
             (None, _) if gs.mode == Mode::Intermission && !f.empty() => {
                 let run = gs.live_run();

@@ -1,4 +1,7 @@
 mod breakdown;
+mod enemies;
+#[cfg(test)]
+mod enemies_tests;
 mod fmt;
 mod frame;
 mod graph;
