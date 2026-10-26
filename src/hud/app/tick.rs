@@ -155,6 +155,19 @@ impl App {
         }
     }
 
+    pub fn board_header(&self) -> crate::board::Header {
+        let gs = &self.gs;
+        crate::board::Header {
+            name: gs.me.clone().unwrap_or_default(),
+            party: gs.roster.len().max(1) as u32,
+            room: gs
+                .location
+                .as_deref()
+                .map_or_else(String::new, |l| crate::usage::hash(&["eboard room", l], 2)),
+            share_name: self.board_on,
+        }
+    }
+
     fn pump_log(&mut self) -> bool {
         let gs = &mut self.gs;
         let mut newest = 0u64;
@@ -169,15 +182,7 @@ impl App {
         });
         let w = &self.watch;
         self.archive.flush(w.path.as_deref(), w.pass, &kept, newest);
-        let gs = &self.gs;
-        crate::board::feed(&kept, || crate::board::Header {
-            name: gs.me.clone().unwrap_or_default(),
-            party: gs.roster.len().max(1) as u32,
-            room: gs
-                .location
-                .as_deref()
-                .map_or_else(String::new, |l| crate::usage::hash(&["eboard room", l], 2)),
-        });
+        crate::board::feed(&kept, || self.board_header());
         if rotated {
             self.gs.log_rotated();
         }

@@ -146,11 +146,11 @@ impl Conn {
                         joins.push(secret);
                     } else if evt.as_deref() == Some("ERROR") {
                         if link() != Link::Rejected {
-                            diag(&format!("discord error: {}", clip(&body)));
+                            diag(&format!("discord error: {}", clip(&redact(&body))));
                         }
                         set_link(Link::Rejected);
                     } else if json_str(&body, "cmd").as_deref() == Some("SET_ACTIVITY") {
-                        let shown: String = body.chars().take(DIAG_CLIP).collect();
+                        let shown: String = redact(&body).chars().take(DIAG_CLIP).collect();
                         if shown != self.last_reply {
                             diag(&format!("reply {shown}"));
                             self.last_reply = shown;
@@ -206,6 +206,74 @@ mod tests {
             set_activity_cmd(42, 8, None),
             "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":42},\"nonce\":\"8\"}"
         );
+    }
+
+    #[test]
+    fn pumped_replies_are_logged_without_the_secret() {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        let mut conn = Conn {
+            pipe: File::from(std::os::windows::io::OwnedHandle::from(reader)),
+            nonce: 0,
+            last_reply: String::new(),
+        };
+        let mut gs = GameState::default();
+        feed(&mut gs, "03:59:35", &format!("[Behaviour] Joining {LOC}"));
+        let now = feed(
+            &mut gs,
+            "04:02:02",
+            "ECLIPTICA - now in stage: Stage_BalboaRuins on phase: 0.19 as class: Nekomancer",
+        );
+        let a = activity(&gs, now, 1_800_000_000).unwrap();
+        let reply = format!("{{\"cmd\":\"SET_ACTIVITY\",\"data\":{a},\"nonce\":\"1\"}}");
+        let big = format!(
+            "{{\"cmd\":\"SET_ACTIVITY\",\"data\":{a},\"pad\":\"{}\"}}",
+            "x".repeat(60_000)
+        );
+        let join = format!(
+            "{{\"cmd\":\"DISPATCH\",\"data\":{{\"secret\":\"{LOC}\"}},\"evt\":\"ACTIVITY_JOIN\"}}"
+        );
+        let error = format!(
+            "{{\"cmd\":\"SET_ACTIVITY\",\"evt\":\"ERROR\",\"data\":{{\"message\":\"bad {LOC}\"}}}}"
+        );
+        take_logged();
+        set_link(Link::Off);
+        let sender = std::thread::spawn(move || {
+            for body in [&reply, &big, &join, &error] {
+                writer.write_all(&frame(1, body)).unwrap();
+            }
+            writer
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut joins = Vec::new();
+        while !sender.is_finished() || conn.available().unwrap() > 0 {
+            assert!(Instant::now() < deadline, "frames never arrived");
+            joins.extend(conn.pump().unwrap());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut writer = sender.join().unwrap();
+        assert_eq!(joins, [LOC]);
+        writer
+            .write_all(&frame(2, &format!("{{\"secret\":\"{LOC}\"}}")))
+            .unwrap();
+        let err = conn.pump().unwrap_err();
+        diag(&format!("connection lost: {err}"));
+        set_link(Link::Off);
+        let logged = take_logged();
+        assert!(logged.iter().any(|l| l.starts_with("reply ")), "{logged:?}");
+        assert!(
+            logged.iter().any(|l| l.starts_with("discord error: ")),
+            "{logged:?}"
+        );
+        assert!(
+            logged.iter().any(|l| l.starts_with("connection lost: ")),
+            "{logged:?}"
+        );
+        for line in &logged {
+            assert!(line.len() <= 1024 * 4, "{}", line.len());
+            for leak in ["usr_4e", "4e64b21b", "87887", "hidden("] {
+                assert!(!line.contains(leak), "{leak} in {line}");
+            }
+        }
     }
 
     #[test]

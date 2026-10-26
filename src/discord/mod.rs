@@ -1,9 +1,11 @@
 mod activity;
 mod ipc;
+mod redact;
 
 pub use activity::activity;
 use activity::{clip, esc, valid_location};
 use ipc::*;
+use redact::{log_line, redact};
 
 use crate::game::names::{boss_name, phase_name, stage_name};
 use crate::game::run::base_name;
@@ -56,7 +58,18 @@ pub(super) fn set_link(l: Link) {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static LOGGED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn take_logged() -> Vec<String> {
+    LOGGED.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
 pub(super) fn diag(msg: &str) {
+    let msg = log_line(msg);
     #[cfg(not(test))]
     if let Some(base) = std::env::var_os("APPDATA") {
         let path = std::path::PathBuf::from(base)
@@ -77,7 +90,7 @@ pub(super) fn diag(msg: &str) {
         }
     }
     #[cfg(test)]
-    let _ = msg;
+    LOGGED.with(|l| l.borrow_mut().push(msg));
 }
 
 fn launch_vrchat(location: &str) {
@@ -195,7 +208,7 @@ fn worker(rx: Receiver<Msg>) {
                     "set_activity {}",
                     activity.as_deref().map_or_else(
                         || "clear".to_string(),
-                        |a| a.chars().take(DIAG_CLIP).collect()
+                        |a| redact(a).chars().take(DIAG_CLIP).collect()
                     )
                 ));
                 sent = Some(activity.clone());

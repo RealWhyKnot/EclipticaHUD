@@ -1680,12 +1680,25 @@ fn leaderboard_switch_sits_over_the_taken_card() {
     }
     assert!(!app.hit_enabled(Hit::Info(Info::TakenGraph)));
     assert!(app.hit_enabled(Hit::Info(Info::Status)));
+    assert!(!app.board_header().share_name);
     assert!(app.activate(Hit::Board));
     assert!(app.board_on);
     assert!(crate::board::ON.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(app.board_header().share_name);
     assert!(app.activate(Hit::Board));
     assert!(!app.board_on);
     assert!(!crate::board::ON.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(!app.board_header().share_name);
+}
+
+#[test]
+fn deleting_board_kills_does_not_share_the_name() {
+    let mut app = headless();
+    app.delete_board();
+    assert!(!app.board_header().share_name);
+    app.set_board(true);
+    app.delete_board();
+    assert!(app.board_header().share_name);
 }
 
 #[test]

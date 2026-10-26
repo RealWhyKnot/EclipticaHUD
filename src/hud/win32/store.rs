@@ -73,6 +73,15 @@ pub(super) fn load_board() -> String {
         .to_string()
 }
 
+pub(super) fn board_from(text: &str) -> (bool, bool) {
+    match text.trim() {
+        "1" => (true, false),
+        "2" => (false, true),
+        "3" => (true, true),
+        _ => (false, false),
+    }
+}
+
 pub(super) fn save_board(on: bool) {
     let deleting = crate::board::DELETING.load(std::sync::atomic::Ordering::Relaxed);
     let state = match (on, deleting) {
@@ -210,6 +219,23 @@ mod tests {
             (" 1 ", true),
         ] {
             assert_eq!(party_on_from(text), on, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn board_state_reads_both_flags() {
+        for (text, want) in [
+            ("", (false, false)),
+            ("0", (false, false)),
+            ("1", (true, false)),
+            ("1\r\n", (true, false)),
+            ("2", (false, true)),
+            ("3", (true, true)),
+            (" 3 ", (true, true)),
+            ("4", (false, false)),
+            ("on", (false, false)),
+        ] {
+            assert_eq!(board_from(text), want, "{text:?}");
         }
     }
 

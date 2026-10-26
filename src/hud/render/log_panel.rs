@@ -148,7 +148,7 @@ impl Renderer {
                     ts: t.ts,
                     tag: ("aggro", F_TINY, ACCENT),
                     who: (&t.player, TEXT),
-                    what: Some(boss_name(base_name(&t.boss))),
+                    what: Some(&boss_name(base_name(&t.boss))),
                 },
             ),
             Row::Death { ts, .. } => self.log_row(

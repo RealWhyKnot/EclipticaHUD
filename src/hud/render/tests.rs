@@ -1408,3 +1408,102 @@ fn stage_table_never_leaves_its_card() {
         }
     }
 }
+
+fn boss_fight(boss: &str) -> (GameState, u64) {
+    let line = |t: u64, m: &str| format!("2026.09.07 09:00:{t:02} Debug      -  {m}");
+    let mut gs = GameState::default();
+    gs.feed(&line(0, "User Authenticated: Me (Alt) (usr_1)"));
+    gs.feed(&line(
+        0,
+        "ECLIPTICA - now in stage: Stage_Test on phase: 0.5 as class: Blade",
+    ));
+    gs.feed(&line(
+        1,
+        &format!("ECLIPTICA - now fighting boss: {boss}(Clone) on phase: 0.5"),
+    ));
+    for t in 2..20 {
+        gs.feed(&line(t, "Dealing 50 STRIKE damage"));
+    }
+    gs.feed(&line(
+        20,
+        &format!("ownership of {boss} transferred to Me (Alt)"),
+    ));
+    let now = crate::game::event::split_line(&line(20, "x")).unwrap().ts;
+    (gs, now)
+}
+
+fn pixels(r: &Renderer) -> Vec<u32> {
+    (0..r.height)
+        .flat_map(|y| (0..r.width).map(move |x| (x, y)))
+        .map(|(x, y)| pix(r, x, y))
+        .collect()
+}
+
+const LONG_BOSSES: [&str; 4] = [
+    "OnyxPilotOfTheVeryLongAndUnreasonablyNamedEclipseVanguard",
+    "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+    "Mk2GolemMk2GolemMk2GolemMk2GolemMk2GolemMk2GolemMk2GolemMk2Golem",
+    "東京BossÉclairBêteΩmegaLord東京BossÉclairBêteΩmegaLord東京Boss",
+];
+
+#[test]
+fn long_boss_names_stay_in_the_title_slot() {
+    for dpi in [96, 120, 144, 192] {
+        let draw = |boss: &str| {
+            let mut r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+            let (gs, now) = boss_fight(boss);
+            r.draw_main(&gs, &Frame { now, ..frame() });
+            let px = pixels(&r);
+            (r, px)
+        };
+        let (r, short) = draw("Kakarot");
+        let (x0, x1) = (r.px(M), r.px(M + 226));
+        let (y0, y1) = (r.px(88), r.px(88) + r.px(40));
+        let w = r.width;
+        for boss in LONG_BOSSES {
+            let id = boss.repeat(8);
+            assert!(
+                crate::game::names::boss_name(&id).chars().count() > 100,
+                "{dpi} {boss}"
+            );
+            let (_, long) = draw(&id);
+            let at = |x: i32, y: i32| (y * w + x) as usize;
+            for y in 0..r.height {
+                for x in 0..w {
+                    let inside = (x0..x1).contains(&x) && (y0..y1).contains(&y);
+                    assert!(
+                        inside || short[at(x, y)] == long[at(x, y)],
+                        "{dpi} {boss} drew outside the title at {x},{y}"
+                    );
+                }
+            }
+            let tail =
+                (x1 - r.px(24)..x1).any(|x| (y0..y1).any(|y| short[at(x, y)] != long[at(x, y)]));
+            assert!(tail, "{dpi} {boss} left the end of the title slot empty");
+        }
+    }
+}
+
+#[test]
+fn long_boss_names_stay_in_the_log_body() {
+    let draw = |boss: &str| {
+        let mut r = Renderer::new(96, LOG_W, LOG_H);
+        let (gs, _) = boss_fight(boss);
+        r.draw_log(timeline::live(&gs), &log_view(Filter::All));
+        let px = pixels(&r);
+        (r, px)
+    };
+    let (r, short) = draw("Kakarot");
+    let (bx, by, bw, bh) = LOG_BODY;
+    for boss in LONG_BOSSES {
+        let (_, long) = draw(&boss.repeat(8));
+        assert_ne!(short, long, "{boss}");
+        for y in 0..r.height {
+            for x in 0..r.width {
+                let inside = (bx..bx + bw).contains(&x) && (by..by + bh).contains(&y);
+                let i = (y * r.width + x) as usize;
+                assert!(inside || short[i] == long[i], "{boss} at {x},{y}");
+            }
+        }
+    }
+}

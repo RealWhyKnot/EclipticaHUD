@@ -76,7 +76,7 @@ pub fn label(msg: &str) -> Option<(String, String)> {
     let ok = !base.is_empty()
         && base.len() <= MAX_TEXT
         && base.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
-    let shown = short(boss_name(base));
+    let shown = short(&boss_name(base));
     (ok && !shown.is_empty()).then(|| (base.to_string(), shown))
 }
 
@@ -85,6 +85,7 @@ pub struct Header {
     pub name: String,
     pub party: u32,
     pub room: String,
+    pub share_name: bool,
 }
 
 impl Header {
@@ -107,6 +108,9 @@ pub fn body(
         h.party.max(1),
         h.room
     );
+    if h.share_name {
+        out.push_str("share name\n");
+    }
     let labels: BTreeMap<String, String> = lines.iter().filter_map(|(_, m)| label(m)).collect();
     for (base, shown) in labels {
         out.push_str(&format!("label {base}\t{shown}\n"));

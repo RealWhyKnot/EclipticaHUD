@@ -7,6 +7,7 @@ fn header() -> Header {
         name: "Bear Hands".into(),
         party: 3,
         room: "0123456789abcdef0123456789abcdef".into(),
+        share_name: true,
     }
 }
 
@@ -55,17 +56,42 @@ fn body_has_header_labels_and_lines() {
     ]);
     let b = body(KEY, "00112233aabbccdd", 7, 1_790_000_003_250, &header(), &l);
     let want = format!(
-        "eboard 2\nkey {KEY}\nname Bear Hands\nstream 00112233aabbccdd\nseq 7\nnow 1790000003250\nparty 3\nroom 0123456789abcdef0123456789abcdef\nlabel FlyLord\tBeelzebub\n1790000000\tECLIPTICA - now fighting boss: FlyLord(Clone) on phase: 0.25\n1790000001\tDealing 5 STRIKE damage\n1790000002\tECLIPTICA - now fighting boss: FlyLordPhase2(Clone) on phase: 0.25\n"
+        "eboard 2\nkey {KEY}\nname Bear Hands\nstream 00112233aabbccdd\nseq 7\nnow 1790000003250\nparty 3\nroom 0123456789abcdef0123456789abcdef\nshare name\nlabel FlyLord\tBeelzebub\n1790000000\tECLIPTICA - now fighting boss: FlyLord(Clone) on phase: 0.25\n1790000001\tDealing 5 STRIKE damage\n1790000002\tECLIPTICA - now fighting boss: FlyLordPhase2(Clone) on phase: 0.25\n"
     );
     assert_eq!(b, want);
+}
+
+#[test]
+fn the_name_is_shared_only_when_asked() {
+    let l = lines(&["Dealing 5 STRIKE damage"]);
+    let shared = body(KEY, "00112233aabbccdd", 0, 1, &header(), &l);
+    assert_eq!(shared.lines().filter(|l| *l == "share name").count(), 1);
+    let quiet = Header {
+        share_name: false,
+        ..header()
+    };
+    let b = body(KEY, "00112233aabbccdd", 0, 1, &quiet, &l);
+    assert!(!b.contains("share name"), "{b}");
+    assert_eq!(b, shared.replace("share name\n", ""));
 }
 
 #[test]
 fn unknown_bosses_still_get_a_label() {
     assert_eq!(
         label("ECLIPTICA - now fighting boss: BrandNewThing(Clone) on phase: 1"),
-        Some(("BrandNewThing".into(), "BrandNewThing".into()))
+        Some(("BrandNewThing".into(), "Brand New Thing".into()))
     );
+    assert_eq!(
+        label("ECLIPTICA - now fighting boss: OnyxPilotPhase2(Clone) on phase: 1"),
+        Some(("OnyxPilot".into(), "Onyx Pilot".into()))
+    );
+    let long = "AbCd".repeat(10);
+    let (base, shown) = label(&format!(
+        "ECLIPTICA - now fighting boss: {long}(Clone) on phase: 1"
+    ))
+    .unwrap();
+    assert_eq!(base, long);
+    assert_eq!(shown, "Ab Cd Ab Cd Ab Cd Ab Cd Ab Cd Ab Cd Ab C");
     assert_eq!(label("Dealing 5 STRIKE damage"), None);
 }
 

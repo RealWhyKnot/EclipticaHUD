@@ -15,6 +15,7 @@ use crate::game::source::describe_source;
 use crate::game::state::{GameState, Life, Mode};
 use crate::update::{Badge, VERSION};
 use crate::vr::VrStatus;
+use std::borrow::Cow;
 use windows_sys::Win32::Graphics::Gdi::*;
 
 const DASH: &str = "-";
@@ -492,7 +493,7 @@ impl Renderer {
         match (gs.boss.as_ref().filter(|_| !f.empty()), &gs.target) {
             (Some(boss), target) => {
                 let shown = boss_name(base_name(boss));
-                self.text(tx, 88, M + 226 - tx, F_BOSS, TEXT, DT_LEFT, shown);
+                self.text(tx, 88, M + 226 - tx, F_BOSS, TEXT, DT_LEFT, &shown);
                 if mine {
                     self.text(
                         M + 12,
@@ -666,8 +667,8 @@ impl Renderer {
             F_BOSS,
             TEXT,
             DT_LEFT,
-            if h.is_stage() {
-                stage_name(h.name)
+            &if h.is_stage() {
+                Cow::Borrowed(stage_name(h.name))
             } else {
                 boss_name(base_name(h.name))
             },
