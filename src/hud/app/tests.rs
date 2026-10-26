@@ -30,6 +30,7 @@ impl crate::relay::Relay for FakeRelay {
             link: crate::relay::Link::Off,
             session: 0,
             snaps: Vec::new(),
+            runs: Vec::new(),
         }
     }
 }
@@ -911,6 +912,7 @@ mod party_tests {
             link,
             session,
             snaps,
+            runs: Vec::new(),
         })
     }
 
@@ -1379,6 +1381,76 @@ mod party_tests {
         assert_eq!(fake.take(), [(None, None)]);
         assert!(!app.poll_party());
         assert!(fake.take().is_empty());
+    }
+
+    #[test]
+    fn a_late_joiner_syncs_from_the_party_until_sharing_stops() {
+        use crate::game::state::GameState;
+        use crate::hud::render::RunSync;
+        let (mut app, want) = party_app();
+        app.vrc_running = true;
+        feed(
+            &mut app,
+            "09:13:00",
+            "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+        );
+        let t0 = Instant::now();
+        app.party_step(
+            t0,
+            Some(&want),
+            poll(
+                Link::Connected,
+                1,
+                vec![snap(t0, &want, &[("usr_me", 0), ("usr_a", 300)])],
+            ),
+        );
+        let ts = |t: &str| {
+            crate::game::event::split_line(&format!("2026.09.07 {t} Debug      -  x"))
+                .unwrap()
+                .ts
+        };
+        let now = ts("09:13:05");
+        app.catch_up(Some(&want), Vec::new(), now);
+        assert_eq!(app.run_sync(Instant::now()), RunSync::Waiting);
+        assert_eq!(
+            app.run_sync(Instant::now() + Duration::from_secs(31)),
+            RunSync::Idle
+        );
+        let mut peer = GameState::default();
+        for (t, m) in [
+            ("09:00:00", "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer"),
+            ("09:05:00", "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0"),
+            ("09:08:00", "ECLIPTICA - now in intermission"),
+            ("09:10:00", "ECLIPTICA - now in stage: Stage_Hallow on phase: 0.1 as class: Spellhammer"),
+            ("09:12:58", "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"),
+        ] {
+            peer.feed(&format!("2026.09.07 {t} Debug      -  {m}"));
+        }
+        let run = crate::relay::PeerRun {
+            at: Instant::now(),
+            room: want.room(),
+            held: 0,
+            payload: crate::relay::proto::encode_run(&peer.summary().unwrap(), now),
+        };
+        app.catch_up(Some(&want), vec![run], now);
+        assert_eq!(app.run_sync(Instant::now()), RunSync::Done);
+        assert_eq!(
+            app.run_sync(Instant::now() + Duration::from_secs(9)),
+            RunSync::Idle
+        );
+        assert_eq!(app.gs.stage_no, Some(2));
+        let names: Vec<&str> = app.gs.runs[0]
+            .fights
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(names, ["Nan", "Kakarot"]);
+        assert!(app.gs.runs[0].fights[0].missed);
+        app.set_party(false);
+        assert!(app.gs.runs[0].fights.iter().all(|f| !f.missed));
+        assert!(app.gs.runs[0].stages.is_empty());
+        assert_eq!(app.gs.stage_no, None);
+        assert_eq!(app.run_sync(Instant::now()), RunSync::Idle);
     }
 
     #[test]

@@ -6,6 +6,14 @@ use crate::relay::party::PartyRow;
 use crate::update::Badge;
 use crate::vr::VrStatus;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum RunSync {
+    #[default]
+    Idle,
+    Waiting,
+    Done,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Env {
     NoVrchat,
@@ -59,6 +67,7 @@ pub struct Frame {
     pub stages_btn: bool,
     pub stages: bool,
     pub split_top: usize,
+    pub sync: RunSync,
 }
 
 impl Frame {

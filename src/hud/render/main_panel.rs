@@ -1,6 +1,6 @@
 use super::enemies::{enemies_shown, ClearingIn};
 use super::fmt::*;
-use super::frame::{Env, Frame};
+use super::frame::{Env, Frame, RunSync};
 use super::graph::GRAPH_COLS;
 use super::hit::{Hit, TipCtx, DELETE_ARMED, DELETE_BUSY};
 use super::layout::*;
@@ -20,6 +20,19 @@ use std::borrow::Cow;
 use windows_sys::Win32::Graphics::Gdi::*;
 
 const DASH: &str = "-";
+pub(super) const SYNCING: &str = "syncing with party";
+pub(super) const SYNCED: &str = "synced with party";
+
+fn sync_tag(f: &Frame) -> Option<(&'static str, u32)> {
+    match f.sync {
+        RunSync::Waiting => Some((SYNCING, ACCENT)),
+        RunSync::Done => Some((SYNCED, GOOD)),
+        RunSync::Idle => None,
+    }
+}
+
+pub(super) const MISSED: &str = "before you joined";
+pub(super) const MISSED_FROM: &str = "result and time from your party";
 pub(super) const COL: i32 = (W - 24) / 3;
 
 enum Live<'a> {
@@ -289,6 +302,7 @@ impl Renderer {
         let (status, status_color) = match (f.env, &gs.mode) {
             (Env::NoVrchat, _) => ("VRChat is not running".to_string(), DIM),
             (Env::NotInWorld, _) => ("waiting for you to join Ecliptica".to_string(), DIM),
+            (_, Mode::Idle) if gs.boss.is_some() => ("in a boss fight".to_string(), GOOD),
             (_, Mode::Idle) => ("in Ecliptica, waiting for a run".to_string(), DIM),
             (_, Mode::Lobby) => ("in lobby".to_string(), AMBER),
             (_, Mode::Intermission) => ("intermission".to_string(), ACCENT),
@@ -362,7 +376,9 @@ impl Renderer {
             f.ctl(Hit::RunNext, free && f.run_sel, false),
             GLYPH_NEXT,
         );
+        let tag = sync_tag(f);
         let (run_label, run_color) = match f.view_run {
+            None if tag.is_some() => (format!("RUN {}/{}", f.view_page + 1, f.pages), DIM),
             None => (
                 format!("RUN {}/{}   not started", f.view_page + 1, f.pages),
                 DIM,
@@ -400,6 +416,34 @@ impl Renderer {
                 (s, color)
             }
         };
+        let tag = tag.filter(|_| f.view_run.is_none() || f.live());
+        if let Some((tag, color)) = tag {
+            let gap = "   ";
+            let base = self.unscale(self.text_w(F_LABEL, &format!("{run_label}{gap}")));
+            let full = base + self.unscale(self.text_w(F_LABEL, tag));
+            let x = 44 + ((LOGICAL_W - 88 - full) / 2).max(0);
+            self.text_rect(
+                x,
+                54,
+                base,
+                24,
+                F_LABEL,
+                run_color,
+                DT_LEFT | DT_VCENTER,
+                &run_label,
+            );
+            self.text_rect(
+                x + base,
+                54,
+                LOGICAL_W - 44 - x - base,
+                24,
+                F_LABEL,
+                color,
+                DT_LEFT | DT_VCENTER,
+                tag,
+            );
+            return;
+        }
         self.text_rect(
             44,
             54,
@@ -711,6 +755,10 @@ impl Renderer {
         let shown = if f.live() { live_group.as_ref() } else { hist };
         let (gx, _, gw, gh) = GRAPH_RECT;
         match shown {
+            Some(g) if g.missed => {
+                self.graph_well(gx, gy, gw, gh);
+                self.text_rect(gx, gy, gw, gh, F_TINY, DIM, DT_CENTER | DT_VCENTER, MISSED);
+            }
             Some(g) if taken => {
                 self.graph(gx, gy, gw, gh, &g.taken_graph(f.now, GRAPH_COLS), DANGER)
             }
@@ -792,6 +840,11 @@ impl Renderer {
                 }
                 None => self.text(M + 12, line_y, W - 24, F_BODY, DIM, DT_LEFT, "no kills yet"),
             }
+        } else if let Some(h) = hist.filter(|h| h.missed) {
+            self.stat(192, 0, "DMG", DASH, DIM);
+            self.stat(192, 1, "DPS", DASH, DIM);
+            self.stat(192, 2, "TIME", &fmt_dur(h.duration(now)), AMBER);
+            self.text(M + 12, line_y, W - 24, F_BODY, DIM, DT_LEFT, MISSED_FROM);
         } else if let Some(h) = hist {
             let dur = h.duration(now);
             self.stat(192, 0, "DMG", &group_digits(h.dmg), AMBER);
@@ -903,6 +956,12 @@ impl Renderer {
         };
         let line = |y: i32, r: &Split| {
             cell(y, 1, F_BODY, TEXT, &fmt_split(r.secs));
+            if r.missed {
+                for col in 2..=4 {
+                    cell(y, col, F_BODY, DIM, DASH);
+                }
+                return;
+            }
             cell(y, 2, F_BODY, AMBER, &num(full_d, r.dmg));
             cell(y, 3, F_BODY, DANGER, &num(full_t, r.taken));
             let dc = if r.deaths > 0 { DANGER } else { DIM };
@@ -1085,6 +1144,14 @@ impl Renderer {
             let deaths = gs.live_run().map_or(0, |r| r.deaths);
             let note = (!f.empty() && deaths > 0).then(|| fmt_run_deaths(deaths));
             self.breakdown(list_y, &t.attacks, note.as_deref(), t.empty);
+        } else if hist.is_some_and(|h| h.missed) {
+            self.stat(stat_y, 0, "TAKEN", DASH, DIM);
+            self.stat(stat_y, 1, "DTPS", DASH, DIM);
+            self.stat(stat_y, 2, "HITS", DASH, DIM);
+            self.card_graph(f, gs, hist, top + 54, true);
+            self.small_stat(small_y, 0, "BIGGEST HIT", DASH);
+            self.small_stat(small_y, 1, "AVG HIT", DASH);
+            self.breakdown(list_y, &[], None, DASH);
         } else if let Some(h) = hist {
             let dur = h.duration(now).max(1);
             self.stat(stat_y, 0, "TAKEN", &group_digits(h.taken), DANGER);

@@ -81,6 +81,7 @@ impl App {
             stages_btn: self.stages_ok(),
             stages: self.stages_shown(),
             split_top: self.split_top,
+            sync: self.run_sync(std::time::Instant::now()),
         };
         self.renderer.draw_main(&self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
@@ -109,7 +110,11 @@ impl App {
         let tip = self.tip();
         let tip_changed = tip != self.last_tip;
         self.last_tip = tip;
+        let sync = self.run_sync(std::time::Instant::now());
+        let sync_changed = sync != self.last_sync;
+        self.last_sync = sync;
         let redraw = tip_changed
+            || sync_changed
             || self.gs.changed
             || anim
             || (env == Env::InWorld && self.gs.live_run().is_some())

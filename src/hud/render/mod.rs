@@ -19,7 +19,7 @@ mod theme;
 #[cfg(test)]
 mod tour;
 
-pub use frame::{Env, Frame, LogView, PartyFight, PartyPane, PartyView};
+pub use frame::{Env, Frame, LogView, PartyFight, PartyPane, PartyView, RunSync};
 pub use hit::{tip_ready, Hit, Info, LogHit, PartyHit, DELETE_ARMED, DELETE_BUSY};
 pub use layout::*;
 pub use theme::ease_out_cubic;

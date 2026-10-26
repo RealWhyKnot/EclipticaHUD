@@ -435,7 +435,7 @@ mod tests {
         let start = feed(
             &mut gs,
             "04:02:02",
-            "ECLIPTICA - now in stage: Stage_BalboaRuins on phase: 0.19 as class: Nekomancer",
+            "ECLIPTICA - now in stage: Stage_BalboaRuins on phase: 0 as class: Nekomancer",
         );
         let now = feed(&mut gs, "04:02:26", "ECLIPTICA saving SESSION ID 2505");
         let a = activity(&gs, now, 1_800_000_000).unwrap();

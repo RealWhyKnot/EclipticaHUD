@@ -1,5 +1,7 @@
 use super::proto::tests::{LOC, USR};
-use super::proto::{claim_hash, member_hash, room_hash, Msg, Totals, MAX_DMG};
+use super::proto::{
+    claim_hash, decode_run, member_hash, room_hash, Msg, Totals, MAX_DMG, RUN, RUNS,
+};
 
 fn dealt(n: u64) -> Totals {
     Totals::from((n, 0))
@@ -326,6 +328,7 @@ fn fake_server_helpers() {
 struct Peer {
     s: TcpStream,
     path: String,
+    runs: std::collections::VecDeque<Vec<u8>>,
 }
 
 impl Peer {
@@ -361,7 +364,11 @@ impl Peer {
             "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {acc}\r\n\r\n"
         )
         .unwrap();
-        Peer { s, path }
+        Peer {
+            s,
+            path,
+            runs: Default::default(),
+        }
     }
 
     fn frame(&mut self) -> Option<(u8, Vec<u8>)> {
@@ -390,7 +397,7 @@ impl Peer {
         Some((op, p))
     }
 
-    fn data(&mut self) -> Option<(u8, Vec<u8>)> {
+    fn raw(&mut self) -> Option<(u8, Vec<u8>)> {
         loop {
             let (op, p) = self.frame()?;
             if op == 0x9 {
@@ -402,6 +409,26 @@ impl Peer {
             }
             return Some((op, p));
         }
+    }
+
+    fn data(&mut self) -> Option<(u8, Vec<u8>)> {
+        loop {
+            let (op, p) = self.raw()?;
+            if op == 0x2 && p.first() == Some(&RUN) {
+                self.runs.push_back(p);
+                continue;
+            }
+            return Some((op, p));
+        }
+    }
+
+    fn run(&mut self) -> Vec<u8> {
+        if let Some(p) = self.runs.pop_front() {
+            return p;
+        }
+        let (op, p) = self.raw().unwrap();
+        assert_eq!((op, p.first()), (0x2, Some(&RUN)));
+        p
     }
 
     fn send(&mut self, op: u8, p: &[u8]) {
@@ -796,6 +823,46 @@ fn live_relay_rejoins_after_restart() {
     }
 }
 
+#[test]
+#[ignore]
+fn live_relay_catches_up_a_late_joiner() {
+    let url = std::env::var("EHUD_E2E_URL").expect("EHUD_E2E_URL");
+    let usr2 = "usr_55555555-5555-5555-5555-555555555555";
+    let (sharer, late) = (hub(), hub());
+    let (w1, w2) = (live_want(&url, LOC, USR), live_want(&url, LOC, usr2));
+    sharer.sync(Some(w1.clone()), None);
+    wait_for(|| (sharer.poll().link == Link::Connected).then_some(()));
+    let sample = super::proto::tests::sample();
+    sharer.share_run(Some(sample.clone()), 1500);
+    std::thread::sleep(Duration::from_millis(RUN_GAP_MS + 2500));
+    late.sync(Some(w2.clone()), None);
+    let runs = wait_for(|| Some(late.poll().runs).filter(|r| !r.is_empty()));
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].room, w2.room());
+    assert!((2..=4).contains(&runs[0].held), "{}", runs[0].held);
+    let got = runs[0].summary(1500 + u64::from(runs[0].held)).unwrap();
+    assert_eq!(got.stages, sample.stages);
+    assert_eq!(got.marks.len(), sample.marks.len());
+    for (a, b) in got.marks.iter().zip(&sample.marks) {
+        assert_eq!((a.name.as_str(), a.boss), (b.name.as_str(), b.boss));
+        assert!(b.start.abs_diff(a.start) <= 10, "{} {}", a.start, b.start);
+    }
+    let more = Summary {
+        stages: Some(4),
+        ..sample.clone()
+    };
+    sharer.share_run(Some(more), 1600);
+    let runs = wait_for(|| Some(late.poll().runs).filter(|r| !r.is_empty()));
+    assert_eq!(runs[0].summary(1600).unwrap().stages, Some(4));
+    sharer.share_run(None, 1700);
+    std::thread::sleep(Duration::from_millis(2500));
+    assert!(late.poll().runs.is_empty());
+    assert!(sharer.poll().runs.is_empty());
+    for h in [sharer, late] {
+        assert!(h.shutdown(Duration::from_secs(5)));
+    }
+}
+
 pub(crate) fn hub() -> &'static Hub {
     Box::leak(Box::new(Hub::new()))
 }
@@ -810,4 +877,48 @@ pub(crate) fn push(hub: &Hub, id: u64, snap: Snap) {
 
 pub(crate) fn drop_link(hub: &Hub) {
     hub.set_link(Link::Retrying);
+}
+
+#[test]
+fn client_shares_its_run_and_reads_peer_runs() {
+    let hub: &'static Hub = Box::leak(Box::new(Hub::new()));
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let w = test_want(port, LOC);
+    hub.sync(Some(w.clone()), None);
+    let mut p = Peer::accept(&l);
+    assert_eq!(p.data().unwrap().1[0], 0x01);
+    wait_for(|| (hub.poll().link == Link::Connected).then_some(()));
+    assert_eq!(p.run(), [RUN]);
+    let sample = super::proto::tests::sample();
+    hub.share_run(Some(sample.clone()), 1500);
+    let sent = p.run();
+    let got = decode_run(&sent[1..], 1500).unwrap();
+    let shift = sample.start - got.start;
+    assert!(shift <= 10, "{shift}");
+    assert_eq!(got.stages, Some(3));
+    for (a, b) in got.marks.iter().zip(&sample.marks) {
+        assert_eq!(
+            (a.name.as_str(), a.start + shift),
+            (b.name.as_str(), b.start)
+        );
+    }
+    let mut frame = vec![RUNS];
+    frame.extend_from_slice(&42u32.to_le_bytes());
+    frame.extend_from_slice(&sent[1..]);
+    p.send(0x2, &frame);
+    let runs = wait_for(|| Some(hub.poll().runs).filter(|r| !r.is_empty()));
+    assert_eq!(runs.len(), 1);
+    assert_eq!((runs[0].held, runs[0].room), (42, w.room()));
+    assert_eq!(runs[0].summary(1542 + shift), Some(sample));
+    p.send(0x2, &[RUNS, 1, 2]);
+    p.send(0x2, &[0x03]);
+    let snaps = wait_for(|| Some(hub.poll().snaps).filter(|s| !s.is_empty()));
+    assert!(snaps[0].entries.is_empty());
+    assert_eq!(hub.poll().link, Link::Connected);
+    hub.share_run(None, 1600);
+    assert_eq!(p.run(), [RUN]);
+    let closed = p.close_later();
+    assert!(hub.shutdown(Duration::from_secs(5)));
+    assert_eq!(closed.join().unwrap(), 1001);
 }

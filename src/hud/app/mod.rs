@@ -14,8 +14,8 @@ use crate::discord::{self, Link, Presence};
 use crate::game::state::GameState;
 use crate::history::History;
 use crate::hud::render::{
-    tip_ready, Env, Hit, Info, LogHit, PartyHit, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W,
-    MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE, PARTY_H, PARTY_W,
+    tip_ready, Env, Hit, Info, LogHit, PartyHit, Renderer, RunSync, LOGICAL_H, LOGICAL_W, LOG_H,
+    LOG_W, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE, PARTY_H, PARTY_W,
 };
 use crate::hud::timeline::Filter;
 use crate::update::Badge;
@@ -121,6 +121,7 @@ pub struct App {
     dead_since: Option<Instant>,
     was_dead: bool,
     last_tip: Option<Hit>,
+    last_sync: RunSync,
     last_log_tip: Option<LogHit>,
     timer_ms: u32,
     badge: Badge,
@@ -239,6 +240,7 @@ impl App {
             dead_since: None,
             was_dead: false,
             last_tip: None,
+            last_sync: RunSync::Idle,
             last_log_tip: None,
             timer_ms: 1000,
             badge: Badge::None,

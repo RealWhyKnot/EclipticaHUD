@@ -13,8 +13,8 @@ use windows_sys::Win32::Graphics::Gdi::*;
 
 const OFF_LINES: [&str; 3] = [
     "While a boss fight is on, the HUD sends the server how much damage you've dealt and taken, at most once a second.",
-    "Players in this instance who turn sharing on see those numbers beside your VRChat name, and you see theirs.",
-    "The server keeps totals in memory only and drops yours when your run ends or you disconnect.",
+    "Players in this instance who turn sharing on see those numbers beside your VRChat name, and you see theirs. Late joiners also see your run's stages and bosses but don't keep them.",
+    "The server keeps all of it in memory only and drops yours when your run ends or you disconnect.",
 ];
 
 pub(super) fn dead_look(life: Life) -> Option<(u32, &'static str)> {

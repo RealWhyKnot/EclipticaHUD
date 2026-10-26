@@ -5,6 +5,9 @@ use crate::game::run::{
 use std::collections::{HashSet, VecDeque};
 
 mod apply;
+mod catchup;
+
+pub use catchup::{Mark, Summary, MAX_MARKS};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Life {

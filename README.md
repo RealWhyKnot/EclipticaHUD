@@ -26,6 +26,8 @@ Open the party window (the button next to settings) and turn sharing on to see t
 
 During a boss fight the HUD sends your damage dealt and taken to `ecliptica.whyknot.dev` at most once a second, along with hashes of the instance and your VRChat user ID. Names come from each player's own log, and the server keeps nothing on disk.
 
+It also sends the stages and bosses of your current run and when each one started and ended. If you join partway through a run, the HUD fills in the stages and bosses you missed from players who share, and the run line says "syncing with party" until it has them. That history only shows for the current run and isn't saved.
+
 ## Sharing fight data
 
 The HUD asks once whether you want to share fight data, and it stays off unless you say yes. You can change your answer later with the Share fight data switch in settings. With it on, the HUD sends the Ecliptica lines it reads from your log to `ecliptica.whyknot.dev` about every ten minutes, to help us improve the HUD. That includes boss and enemy names, stages, the damage you dealt and took and what hit you, the player count, the world ID and instance number, and the HUD version. It also sends the run, fight and stage totals the HUD works out from those lines. In other worlds it only notes that you left Ecliptica. Saved shared fights go too, as numbers with no names attached.

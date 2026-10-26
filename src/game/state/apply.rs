@@ -144,6 +144,7 @@ impl GameState {
             lost: false,
             series: Vec::new(),
             taken_series: Vec::new(),
+            missed: false,
         });
     }
 
@@ -266,7 +267,8 @@ impl GameState {
         run.stage = name;
         run.class = class;
         if fresh {
-            run.stage_no = Some(run.stages.len() as u32 + 1);
+            run.from_start |= progress <= 0.0;
+            run.stage_no = run.stage_count(true);
         }
         self.stage_no = run.stage_no;
     }
@@ -318,7 +320,7 @@ impl GameState {
                 r.fights
                     .iter_mut()
                     .rev()
-                    .find(|f| f.name == k.boss && f.kill.is_none())
+                    .find(|f| f.name == k.boss && f.kill.is_none() && !f.missed)
             })
         else {
             return;
@@ -367,6 +369,7 @@ impl GameState {
             r.targets = std::mem::take(&mut self.history);
             r.death_log = std::mem::take(&mut self.deaths_log);
         }
+        self.drop_borrowed();
         self.boss = None;
         self.target = None;
         self.pending_kill = None;

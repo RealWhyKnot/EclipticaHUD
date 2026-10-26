@@ -3,6 +3,7 @@ pub mod party;
 pub mod proto;
 pub mod sha256;
 
+use crate::game::state::Summary;
 use proto::{Claim, Member, Msg, Room, Totals};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,9 @@ use std::time::{Duration, Instant};
 
 pub const DEFAULT_URL: &str = "wss://ecliptica.whyknot.dev/ws";
 const SNAP_QUEUE: usize = 8;
+const RUN_QUEUE: usize = 8;
 const SEND_GAP_MS: u64 = 1000;
+const RUN_GAP_MS: u64 = 5000;
 const MAX_BACKOFF_S: u64 = 60;
 const MAX_STEP: u32 = 5;
 const STABLE_SECS: u64 = 30;
@@ -237,6 +240,63 @@ impl Throttle {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct RunThrottle {
+    sent: Option<Option<Summary>>,
+    at: Option<u64>,
+}
+
+impl RunThrottle {
+    pub fn due(&mut self, now_ms: u64, run: Option<&Summary>) -> bool {
+        if self.sent.as_ref().is_some_and(|s| s.as_ref() == run)
+            || self.at.is_some_and(|t| now_ms < t + RUN_GAP_MS)
+        {
+            return false;
+        }
+        self.sent = Some(run.cloned());
+        self.at = Some(now_ms);
+        true
+    }
+
+    pub fn wait_ms(&self, now_ms: u64, run: Option<&Summary>) -> u64 {
+        let pending = self.sent.as_ref().is_none_or(|s| s.as_ref() != run);
+        match (pending, self.at) {
+            (true, Some(t)) => (t + RUN_GAP_MS).saturating_sub(now_ms).max(1),
+            (true, None) => 1,
+            (false, _) => RUN_GAP_MS,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OwnRun {
+    pub summary: Summary,
+    pub now: u64,
+    pub at: Instant,
+}
+
+impl OwnRun {
+    pub fn encode(&self) -> Vec<u8> {
+        let now = self.now + self.at.elapsed().as_secs();
+        proto::encode_run(&self.summary, now)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PeerRun {
+    pub at: Instant,
+    pub room: Room,
+    pub held: u32,
+    pub payload: Vec<u8>,
+}
+
+impl PeerRun {
+    pub fn summary(&self, now: u64) -> Option<Summary> {
+        let held = self.held as u64 + self.at.elapsed().as_secs();
+        proto::decode_run(&self.payload, now.saturating_sub(held))
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Link {
     #[default]
@@ -263,12 +323,15 @@ struct Shared {
     link: Link,
     session: u64,
     snaps: VecDeque<Snap>,
+    run: Option<OwnRun>,
+    runs: VecDeque<PeerRun>,
 }
 
 impl Shared {
     fn end_session(&mut self) {
         self.session += 1;
         self.snaps.clear();
+        self.runs.clear();
     }
 }
 
@@ -279,20 +342,27 @@ pub struct Hub {
 
 pub static HUB: Hub = Hub::new();
 
+#[derive(Default)]
 pub struct Poll {
     pub link: Link,
     pub session: u64,
     pub snaps: Vec<Snap>,
+    pub runs: Vec<PeerRun>,
 }
 
 pub trait Relay: Sync {
     fn sync(&'static self, want: Option<Want>, dmg: Option<Totals>);
     fn poll(&self) -> Poll;
+    fn share_run(&self, _run: Option<Summary>, _now: u64) {}
 }
 
 impl Relay for Hub {
     fn sync(&'static self, want: Option<Want>, dmg: Option<Totals>) {
         Hub::sync(self, want, dmg);
+    }
+
+    fn share_run(&self, run: Option<Summary>, now: u64) {
+        Hub::share_run(self, run, now);
     }
 
     fn poll(&self) -> Poll {
@@ -310,6 +380,8 @@ impl Hub {
                 link: Link::Off,
                 session: 0,
                 snaps: VecDeque::new(),
+                run: None,
+                runs: VecDeque::new(),
             }),
             cv: Condvar::new(),
         }
@@ -340,12 +412,26 @@ impl Hub {
         }
     }
 
+    pub fn share_run(&self, run: Option<Summary>, now: u64) {
+        let mut s = self.lock();
+        if s.run.as_ref().map(|r| &r.summary) == run.as_ref() {
+            return;
+        }
+        s.run = run.map(|summary| OwnRun {
+            summary,
+            now,
+            at: Instant::now(),
+        });
+        self.cv.notify_all();
+    }
+
     pub fn poll(&self) -> Poll {
         let mut s = self.lock();
         Poll {
             link: s.link,
             session: s.session,
             snaps: s.snaps.drain(..).collect(),
+            runs: s.runs.drain(..).collect(),
         }
     }
 
@@ -376,6 +462,17 @@ impl Hub {
             s.snaps.pop_front();
         }
         s.snaps.push_back(snap);
+    }
+
+    fn push_run(&self, session: u64, run: PeerRun) {
+        let mut s = self.lock();
+        if s.session != session || s.link != Link::Connected {
+            return;
+        }
+        if s.runs.len() >= RUN_QUEUE {
+            s.runs.pop_front();
+        }
+        s.runs.push_back(run);
     }
 
     fn set_link(&self, link: Link) -> u64 {

@@ -56,6 +56,7 @@ pub(super) fn frame() -> Frame {
         stages_btn: false,
         stages: false,
         split_top: 0,
+        sync: RunSync::Idle,
     }
 }
 
@@ -1506,4 +1507,253 @@ fn long_boss_names_stay_in_the_log_body() {
             }
         }
     }
+}
+
+fn caught_up() -> GameState {
+    let (peer, mut gs) = late_party();
+    assert_eq!(gs.catch_up(&peer.summary().unwrap()), Some(true));
+    gs
+}
+
+fn late_party() -> (GameState, GameState) {
+    let line = |gs: &mut GameState, t: &str, m: &str| {
+        gs.feed(&format!("2026.10.26 {t} Debug      -  {m}"));
+    };
+    let mut peer = GameState::default();
+    line(
+        &mut peer,
+        "15:40:00",
+        "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer",
+    );
+    line(&mut peer, "15:41:00", "Dealing 4000 STRIKE damage");
+    line(
+        &mut peer,
+        "15:44:00",
+        "ECLIPTICA - now fighting boss: Nan(Clone) on phase: 0",
+    );
+    line(&mut peer, "15:45:00", "Dealing 9000 STRIKE damage");
+    line(
+        &mut peer,
+        "15:47:30",
+        "Boss Nan dead, personal damage dealt: ",
+    );
+    line(&mut peer, "15:47:30", "STRIKE DMG: 9000");
+    line(&mut peer, "15:47:30", "NON-STRIKE DMG: 0");
+    line(&mut peer, "15:47:40", "ECLIPTICA - now in intermission");
+    line(
+        &mut peer,
+        "15:52:00",
+        "ECLIPTICA - now in stage: Stage_Hallow on phase: 0.1 as class: Spellhammer",
+    );
+    line(
+        &mut peer,
+        "16:01:00",
+        "ECLIPTICA - now fighting boss: HaKli(Clone) on phase: 0",
+    );
+    let mut gs = GameState::default();
+    line(
+        &mut gs,
+        "16:01:04",
+        "ECLIPTICA - now fighting boss: HaKli(Clone) on phase: 0",
+    );
+    for s in 5..60 {
+        line(
+            &mut gs,
+            &format!("16:01:{s:02}"),
+            "Dealing 700 STRIKE damage",
+        );
+    }
+    line(
+        &mut gs,
+        "16:02:00",
+        "Dealing 300 damage to you from HaKli Slam",
+    );
+    (peer, gs)
+}
+
+fn missed_frames(gs: &GameState) -> [Frame; 2] {
+    let now = crate::game::event::split_line("2026.10.26 16:02:00 Debug      -  x")
+        .unwrap()
+        .ts;
+    let pages = gs.runs[0].pages().len();
+    [
+        Frame {
+            now,
+            run_sel: true,
+            group_sel: true,
+            view_run: Some(0),
+            view_group: Some(0),
+            group_pages: pages,
+            pages: 1,
+            ..frame()
+        },
+        Frame {
+            now,
+            stages_btn: true,
+            stages: true,
+            ..frame()
+        },
+    ]
+}
+
+#[test]
+fn missed_pages_show_no_damage_numbers() {
+    let gs = caught_up();
+    let run = &gs.runs[0];
+    assert!(run.page(0).unwrap().missed);
+    assert!(!run.page(1).unwrap().missed);
+    let splits = gs.run_splits(0, u64::MAX);
+    assert_eq!(splits.len(), 2);
+    assert!(splits[0].missed);
+    assert!(!splits[1].missed);
+    use super::main_panel::{COL, MISSED, MISSED_FROM};
+    for dpi in [96, 120, 144, 192] {
+        let mut r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        assert!(text_w(&r, F_BODY, MISSED_FROM) <= r.px(W - 24), "{dpi}");
+        assert!(text_w(&r, F_TINY, MISSED) <= r.px(GRAPH_RECT.2), "{dpi}");
+        for f in missed_frames(&gs) {
+            r.draw_main(&gs, &f);
+            for y in r.px(BODY_DY + 110)..r.height - r.px(40) {
+                for x in (0..r.px(M)).chain(r.px(M + W)..r.width) {
+                    assert_eq!(pix(&r, x, y), BG, "margin {x},{y} at {dpi}");
+                }
+            }
+        }
+    }
+    let [page, _] = missed_frames(&gs);
+    let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+    r.draw_main(&gs, &page);
+    let amber = (BODY_DY + 190..BODY_DY + 236)
+        .flat_map(|y| (M..M + COL * 2).map(move |x| (x, y)))
+        .filter(|&(x, y)| pix(&r, x, y) == AMBER)
+        .count();
+    assert_eq!(amber, 0);
+}
+
+#[test]
+#[ignore]
+fn write_missed_page_images() {
+    let tag = std::env::var("EHUD_PICK").unwrap_or_else(|_| "after".into());
+    let gs = caught_up();
+    let label_h = 28;
+    let (w, h) = (LOGICAL_W as u32, LOGICAL_H as u32);
+    let mut sheet = Sheet::new(w * 2 + 12, h + label_h as u32);
+    for (i, f) in missed_frames(&gs).iter().enumerate() {
+        let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+        r.draw_main(&gs, f);
+        sheet.put(
+            &r,
+            i as u32 * (w + 12),
+            label_h as u32,
+            (0, 0, LOGICAL_W, LOGICAL_H),
+        );
+    }
+    for (i, caption) in [
+        format!("{tag}: missed boss page"),
+        format!("{tag}: stage table"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let r = Renderer::new(96, LOGICAL_W, label_h);
+        r.fill(0, 0, LOGICAL_W, label_h, BG);
+        r.text(8, 4, LOGICAL_W - 16, F_BOSS, TEXT, DT_LEFT, caption);
+        sheet.put(&r, i as u32 * (w + 12), 0, (0, 0, LOGICAL_W, label_h));
+    }
+    sheet.save(&format!("missed_{tag}.png"));
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(".devflow")
+        .join("pick");
+    std::fs::write(
+        dir.join(format!("missed_{tag}.rgb")),
+        [
+            &sheet.w.to_le_bytes()[..],
+            &sheet.h.to_le_bytes(),
+            &sheet.rgb,
+        ]
+        .concat(),
+    )
+    .unwrap();
+}
+
+fn sync_frames() -> [(&'static str, GameState, RunSync); 3] {
+    let (_, waiting) = late_party();
+    [
+        ("joined late, syncing", waiting, RunSync::Waiting),
+        ("synced", caught_up(), RunSync::Done),
+        ("synced, later", caught_up(), RunSync::Idle),
+    ]
+}
+
+fn sync_now() -> u64 {
+    crate::game::event::split_line("2026.10.26 16:02:00 Debug      -  x")
+        .unwrap()
+        .ts
+}
+
+#[test]
+fn sync_tag_shows_in_the_run_line() {
+    use super::main_panel::{SYNCED, SYNCING};
+    for dpi in [96, 120, 144, 192] {
+        let mut r = Renderer::new(dpi, LOGICAL_W, LOGICAL_H);
+        let pager = r.px(LOGICAL_W - 88);
+        for tag in [SYNCING, SYNCED] {
+            let label = format!("RUN 99/99   stage 99   {tag}");
+            assert!(text_w(&r, F_LABEL, &label) <= pager, "{dpi} {label}");
+        }
+        for (_, gs, sync) in sync_frames() {
+            r.draw_main(
+                &gs,
+                &Frame {
+                    now: sync_now(),
+                    sync,
+                    ..frame()
+                },
+            );
+            let count = |c: u32| {
+                (r.px(54)..r.px(78))
+                    .flat_map(|y| (0..r.width).map(move |x| (x, y)))
+                    .filter(|&(x, y)| pix(&r, x, y) == c)
+                    .count()
+            };
+            let (accent, good) = (count(ACCENT), count(GOOD));
+            match sync {
+                RunSync::Waiting => assert!(accent > 0 && good == 0, "{dpi}"),
+                RunSync::Done => assert!(good > 0 && accent == 0, "{dpi}"),
+                RunSync::Idle => assert!(good == 0 && accent == 0, "{dpi}"),
+            }
+            for y in r.px(54)..r.px(78) {
+                for x in (r.px(LOGICAL_W - 44)..r.width).chain(0..r.px(44)) {
+                    let c = pix(&r, x, y);
+                    assert!(c != ACCENT && c != GOOD, "{dpi} {x},{y}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn write_sync_images() {
+    let label_h = 28;
+    let (w, h) = (LOGICAL_W as u32, LOGICAL_H as u32);
+    let mut sheet = Sheet::new(w * 3 + 24, h + label_h as u32);
+    for (i, (caption, gs, sync)) in sync_frames().iter().enumerate() {
+        let x = i as u32 * (w + 12);
+        let mut r = Renderer::new(96, LOGICAL_W, LOGICAL_H);
+        r.draw_main(
+            gs,
+            &Frame {
+                now: sync_now(),
+                sync: *sync,
+                ..frame()
+            },
+        );
+        sheet.put(&r, x, label_h as u32, (0, 0, LOGICAL_W, LOGICAL_H));
+        let r = Renderer::new(96, LOGICAL_W, label_h);
+        r.fill(0, 0, LOGICAL_W, label_h, BG);
+        r.text(8, 4, LOGICAL_W - 16, F_BOSS, TEXT, DT_LEFT, caption);
+        sheet.put(&r, x, 0, (0, 0, LOGICAL_W, label_h));
+    }
+    sheet.save("sync.png");
 }

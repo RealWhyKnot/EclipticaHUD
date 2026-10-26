@@ -1,4 +1,5 @@
 use super::sha256::sha256;
+use crate::game::state::{Mark, Summary, MAX_MARKS};
 
 pub type Room = [u8; 16];
 pub type Member = [u8; 8];
@@ -19,6 +20,109 @@ pub const MAX_MEMBERS: usize = 82;
 pub const MAX_SNAP_LEN: usize = 1 + SNAP2_ENTRY * MAX_MEMBERS;
 pub const MAX_DMG: u64 = 1 << 40;
 pub const MAX_LIFE: u8 = 3;
+pub const RUN: u8 = 0x07;
+pub const RUNS: u8 = 0x08;
+pub const RUN_VERSION: u8 = 1;
+pub const MAX_NAME: usize = 64;
+pub const MAX_RUN_LEN: usize = 7 + MAX_MARKS * (10 + MAX_NAME);
+pub const MAX_AGE: u32 = 86_400;
+pub const MAX_RECV: usize = if MAX_SNAP_LEN > 5 + MAX_RUN_LEN {
+    MAX_SNAP_LEN
+} else {
+    5 + MAX_RUN_LEN
+};
+const BOSS: u8 = 1;
+const KILLED: u8 = 2;
+const LOST: u8 = 4;
+const OPEN: u8 = 8;
+
+pub fn encode_run(s: &Summary, now: u64) -> Vec<u8> {
+    let age = |ts: u64| (now.saturating_sub(ts).min(MAX_AGE as u64) as u32).to_le_bytes();
+    let marks: Vec<&Mark> = s
+        .marks
+        .iter()
+        .filter(|m| (1..=MAX_NAME).contains(&m.name.len()))
+        .take(MAX_MARKS)
+        .collect();
+    let mut out = Vec::with_capacity(MAX_RUN_LEN);
+    out.push(RUN_VERSION);
+    out.extend_from_slice(&age(s.start));
+    out.push(s.stages.and_then(|n| u8::try_from(n).ok()).unwrap_or(0));
+    out.push(marks.len() as u8);
+    for m in marks {
+        let flags = (u8::from(m.boss) * BOSS)
+            | (u8::from(m.killed) * KILLED)
+            | (u8::from(m.lost) * LOST)
+            | (u8::from(m.end.is_none()) * OPEN);
+        out.push(flags);
+        out.extend_from_slice(&age(m.start));
+        if let Some(end) = m.end {
+            out.extend_from_slice(&age(end.max(m.start)));
+        }
+        out.push(m.name.len() as u8);
+        out.extend_from_slice(m.name.as_bytes());
+    }
+    out
+}
+
+pub fn decode_run(b: &[u8], base: u64) -> Option<Summary> {
+    fn take<'a>(b: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+        let (head, rest) = b.split_at_checked(n)?;
+        *b = rest;
+        Some(head)
+    }
+    fn age(b: &mut &[u8]) -> Option<u32> {
+        let a = u32::from_le_bytes(take(b, 4)?.try_into().ok()?);
+        (a <= MAX_AGE).then_some(a)
+    }
+    let mut b = b;
+    if b.len() > MAX_RUN_LEN || take(&mut b, 1)? != [RUN_VERSION] {
+        return None;
+    }
+    let ts = |a: u32| base.saturating_sub(a as u64);
+    let run_age = age(&mut b)?;
+    let stages = take(&mut b, 1)?[0];
+    let count = take(&mut b, 1)?[0] as usize;
+    if count > MAX_MARKS {
+        return None;
+    }
+    let mut marks = Vec::with_capacity(count);
+    let mut prev = run_age;
+    for _ in 0..count {
+        let flags = take(&mut b, 1)?[0];
+        if flags & !(BOSS | KILLED | LOST | OPEN) != 0 {
+            return None;
+        }
+        let start = age(&mut b)?;
+        let end = match flags & OPEN {
+            0 => Some(age(&mut b)?),
+            _ => None,
+        };
+        if start > prev || end.is_some_and(|e| e > start) {
+            return None;
+        }
+        prev = start;
+        let len = take(&mut b, 1)?[0] as usize;
+        let name = std::str::from_utf8(take(&mut b, len)?).ok()?;
+        if name.is_empty() || name.chars().any(char::is_control) {
+            return None;
+        }
+        let boss = flags & BOSS != 0;
+        marks.push(Mark {
+            boss,
+            name: name.to_string(),
+            start: ts(start),
+            end: end.map(ts),
+            killed: boss && flags & KILLED != 0,
+            lost: boss && flags & LOST != 0,
+        });
+    }
+    b.is_empty().then_some(Summary {
+        start: ts(run_age),
+        stages: (stages > 0).then_some(stages as u32),
+        marks,
+    })
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Totals {
@@ -97,6 +201,11 @@ pub enum Msg {
     Dmg(Totals),
     End,
     Snap(Vec<(Member, Totals)>),
+    Run(Vec<u8>),
+    Runs {
+        held: u32,
+        payload: Vec<u8>,
+    },
 }
 
 impl Msg {
@@ -122,6 +231,8 @@ impl Msg {
                 out
             }
             Msg::End => vec![END],
+            Msg::Run(payload) => [&[RUN][..], payload].concat(),
+            Msg::Runs { held, payload } => [&[RUNS][..], &held.to_le_bytes(), payload].concat(),
             Msg::Snap(entries) => {
                 let life = entries.iter().any(|(_, t)| t.life != 0);
                 let mut out = Vec::with_capacity(1 + SNAP2_ENTRY * entries.len());
@@ -147,6 +258,17 @@ impl Msg {
                 claim: rest[24..].try_into().ok()?,
             }),
             END if rest.is_empty() => Some(Msg::End),
+            RUN if rest.is_empty() || decode_run(rest, u64::MAX).is_some() => {
+                Some(Msg::Run(rest.to_vec()))
+            }
+            RUNS if rest.len() > 4 => {
+                let held = u32::from_le_bytes(rest[..4].try_into().ok()?);
+                let payload = &rest[4..];
+                (held <= MAX_AGE && decode_run(payload, u64::MAX).is_some()).then(|| Msg::Runs {
+                    held,
+                    payload: payload.to_vec(),
+                })
+            }
             DMG if b.len() == DMG_LEN => Totals::read(rest).map(Msg::Dmg),
             DMG2 if b.len() == DMG2_LEN => {
                 let life = rest[16];
@@ -396,12 +518,112 @@ pub(crate) mod tests {
             assert_eq!(Msg::decode(&s).is_some(), ok, "snap2 {len}");
         }
         assert_eq!(Msg::decode(&[]), None);
-        for kind in [0x00, 0x07, 0x7f, 0xff] {
+        for kind in [0x00, 0x09, 0x7f, 0xff] {
             assert_eq!(Msg::decode(&[kind]), None);
             assert_eq!(Msg::decode(&[kind; 9]), None);
             assert_eq!(Msg::decode(&[kind; 17]), None);
             assert_eq!(Msg::decode(&[kind; 25]), None);
             assert_eq!(Msg::decode(&[kind; 41]), None);
         }
+    }
+
+    pub(crate) fn sample() -> Summary {
+        let mark = |boss, name: &str, start, end, killed| Mark {
+            boss,
+            name: name.into(),
+            start,
+            end,
+            killed,
+            lost: false,
+        };
+        Summary {
+            start: 1000,
+            stages: Some(3),
+            marks: vec![
+                mark(false, "Stage_Hallow", 1010, Some(1300), false),
+                mark(true, "Nan(Clone)", 1100, Some(1250), true),
+                mark(false, "Stage_GMBigcity", 1400, None, false),
+            ],
+        }
+    }
+
+    pub(crate) const RUN_FIXTURE: &str = "01f40100000303        00ea010000c8000000        0c53746167655f48616c6c6f77        0390010000fa000000        0a4e616e28436c6f6e6529        0864000000        0f53746167655f474d42696763697479";
+
+    #[test]
+    fn run_fixture() {
+        let fixture = unhex(&RUN_FIXTURE.split_whitespace().collect::<String>());
+        assert_eq!(encode_run(&sample(), 1500), fixture);
+        assert_eq!(decode_run(&fixture, 1500), Some(sample()));
+        let mut moved = sample();
+        moved.start += 20;
+        for m in &mut moved.marks {
+            m.start += 20;
+            m.end = m.end.map(|e| e + 20);
+        }
+        assert_eq!(decode_run(&fixture, 1520), Some(moved));
+    }
+
+    #[test]
+    fn run_stage_count_is_optional() {
+        let mut s = sample();
+        s.stages = None;
+        let b = encode_run(&s, 1500);
+        assert_eq!(b[5], 0);
+        assert_eq!(decode_run(&b, 1500), Some(s.clone()));
+        s.stages = Some(300);
+        assert_eq!(encode_run(&s, 1500)[5], 0);
+    }
+
+    #[test]
+    fn malformed_runs_are_rejected() {
+        let good = encode_run(&sample(), 1500);
+        let bad = |f: &dyn Fn(&mut Vec<u8>)| {
+            let mut b = good.clone();
+            f(&mut b);
+            decode_run(&b, 1500)
+        };
+        assert!(bad(&|_| {}).is_some());
+        assert!(bad(&|b| b[0] = 2).is_none());
+        assert!(bad(&|b| b.push(0)).is_none());
+        assert!(bad(&|b| {
+            b.pop();
+        })
+        .is_none());
+        assert!(bad(&|b| b[6] = 4).is_none());
+        assert!(bad(&|b| b[6] = MAX_MARKS as u8 + 1).is_none());
+        assert!(bad(&|b| b[7] = 0x10).is_none());
+        assert!(bad(&|b| b[8] = 0xf5).is_none());
+        assert!(bad(&|b| b[13] = 2).is_none());
+        assert!(bad(&|b| b[16] = 0).is_none());
+        assert!(bad(&|b| b[17] = 7).is_none());
+        assert!(bad(&|b| b[1..5].copy_from_slice(&(MAX_AGE + 1).to_le_bytes())).is_none());
+        let long = Summary {
+            marks: vec![sample().marks[0].clone(); MAX_MARKS + 5],
+            ..sample()
+        };
+        let b = encode_run(&long, 1500);
+        assert_eq!(b[6] as usize, MAX_MARKS);
+        assert!(b.len() <= MAX_RUN_LEN);
+        assert_eq!(decode_run(&b, 1500).unwrap().marks.len(), MAX_MARKS);
+        let named = |n: &str| Summary {
+            marks: vec![Mark {
+                name: n.into(),
+                ..sample().marks[0].clone()
+            }],
+            ..sample()
+        };
+        assert!(encode_run(&named(""), 1500)[6] == 0);
+        assert!(encode_run(&named(&"x".repeat(MAX_NAME + 1)), 1500)[6] == 0);
+        assert!(decode_run(
+            &encode_run(
+                &named(
+                    "a
+b"
+                ),
+                1500
+            ),
+            1500
+        )
+        .is_none());
     }
 }

@@ -74,6 +74,7 @@ pub struct BossFight {
     pub lost: bool,
     pub series: Vec<u32>,
     pub taken_series: Vec<u32>,
+    pub missed: bool,
 }
 
 const SERIES_CAP: usize = 7200;
@@ -112,6 +113,7 @@ pub struct Split {
     pub dmg: u64,
     pub taken: u64,
     pub deaths: u32,
+    pub missed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -136,9 +138,25 @@ pub struct Run {
     pub targets: VecDeque<TargetEntry>,
     pub death_log: VecDeque<(u64, u64)>,
     pub stages: Vec<StageStats>,
+    pub borrowed: Option<Borrowed>,
+    pub from_start: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Borrowed {
+    pub start_ts: Option<u64>,
+    pub skipped: Option<u32>,
 }
 
 impl Run {
+    pub fn stage_count(&self, open: bool) -> Option<u32> {
+        let base = match self.from_start {
+            true => 0,
+            false => self.borrowed?.skipped?,
+        };
+        Some(base + self.stages.len() as u32 + u32::from(open)).filter(|n| *n > 0)
+    }
+
     pub fn dmg(&self) -> u64 {
         self.fights.iter().map(|f| f.dmg).sum::<u64>()
             + self.stages.iter().map(|s| s.dmg).sum::<u64>()
@@ -179,8 +197,9 @@ impl Run {
     pub fn active_secs(&self, now: u64) -> u64 {
         self.fights
             .iter()
+            .chain(&self.stages)
+            .filter(|f| !f.missed)
             .map(|f| f.secs(now))
-            .chain(self.stages.iter().map(|s| s.secs(now)))
             .sum()
     }
 
@@ -245,6 +264,7 @@ impl Run {
                 dmg: s.dmg,
                 taken: s.taken,
                 deaths: s.deaths,
+                missed: s.missed,
             })
             .collect();
         for f in &self.fights {
@@ -254,6 +274,7 @@ impl Run {
                 sp.dmg += f.dmg;
                 sp.taken += f.taken;
                 sp.deaths += f.deaths;
+                sp.missed &= f.missed;
             }
         }
         out
@@ -294,6 +315,7 @@ pub struct FightGroup<'a> {
     pub last: &'a BossFight,
     pub n_phases: usize,
     pub cleared: Option<bool>,
+    pub missed: bool,
 }
 
 impl<'a> FightGroup<'a> {
@@ -317,6 +339,7 @@ impl<'a> FightGroup<'a> {
             last,
             n_phases: fights.len(),
             cleared,
+            missed: fights.iter().all(|f| f.missed),
         })
     }
 
@@ -437,6 +460,7 @@ mod tests {
             lost: false,
             series: Vec::new(),
             taken_series: Vec::new(),
+            missed: false,
         };
         let run = Run {
             fights: vec![
@@ -485,6 +509,7 @@ mod tests {
             dmg,
             taken: dmg / 10,
             deaths,
+            missed: false,
         };
         assert_eq!(
             rows,
@@ -518,6 +543,7 @@ mod tests {
             lost: false,
             series: Vec::new(),
             taken_series: Vec::new(),
+            missed: false,
         }
     }
 

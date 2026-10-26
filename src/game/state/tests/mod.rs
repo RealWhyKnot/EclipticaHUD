@@ -1,4 +1,5 @@
 mod boss;
+mod catchup;
 mod deaths;
 mod enemies;
 mod kills;

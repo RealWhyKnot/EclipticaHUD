@@ -2,15 +2,20 @@ use super::anim::*;
 use super::App;
 use crate::game::names::boss_name;
 use crate::game::run::base_name;
-use crate::game::state::GameState;
+use crate::game::state::{GameState, Summary};
 use crate::history::{History, PartyRecord, SavedRow};
 use crate::hud::render::{
-    ease_out_cubic, tip_ready, Env, PartyFight, PartyHit, PartyPane, PartyView,
+    ease_out_cubic, tip_ready, Env, PartyFight, PartyHit, PartyPane, PartyView, RunSync,
 };
 use crate::relay::party::{Party, PartyRow};
 use crate::relay::proto::{member_hash, room_hash, Member, Room, Totals};
-use crate::relay::{self, Link, Poll, Relay, Want};
+use crate::relay::{self, Link, PeerRun, Poll, Relay, Want};
 use std::time::Instant;
+
+const PEER_RUN_SECS: u64 = 600;
+const PEER_RUNS: usize = 8;
+const SYNC_WAIT_MS: u128 = 30_000;
+const SYNCED_MS: u128 = 8_000;
 
 pub(super) struct PartyState {
     table: Party,
@@ -28,6 +33,10 @@ pub(super) struct PartyState {
     saved: Option<PartyRecord>,
     page: usize,
     pages: Option<usize>,
+    peer_room: Option<Room>,
+    peer_runs: Vec<(u64, Summary)>,
+    sync_since: Option<Instant>,
+    synced_at: Option<Instant>,
     pub(super) relay: &'static dyn Relay,
 }
 
@@ -49,6 +58,10 @@ impl PartyState {
             saved: None,
             page: 0,
             pages: None,
+            peer_room: None,
+            peer_runs: Vec::new(),
+            sync_since: None,
+            synced_at: None,
             relay: &relay::HUB,
         }
     }
@@ -170,6 +183,12 @@ impl App {
         self.party_on = on;
         if !on {
             self.party.table.clear();
+            self.party.relay.share_run(None, 0);
+            self.party.peer_room = None;
+            self.party.peer_runs.clear();
+            self.party.sync_since = None;
+            self.party.synced_at = None;
+            self.gs.drop_borrowed();
         }
     }
 
@@ -184,11 +203,75 @@ impl App {
             self.gs.location.as_deref(),
             self.gs.me_usr.as_deref(),
         );
-        let dmg = want.as_ref().and(relay_totals(&self.gs, self.now()));
+        let clock = self.now();
+        let dmg = want.as_ref().and(relay_totals(&self.gs, clock));
         let relay = self.party.relay;
         relay.sync(want.clone(), dmg);
-        let poll = relay.poll();
+        relay.share_run(want.as_ref().and_then(|_| self.gs.summary()), clock);
+        let mut poll = relay.poll();
+        self.catch_up(want.as_ref(), std::mem::take(&mut poll.runs), clock);
         self.party_step(Instant::now(), want.as_ref(), Some(poll))
+    }
+
+    pub(super) fn catch_up(&mut self, want: Option<&Want>, runs: Vec<PeerRun>, now: u64) {
+        let p = &mut self.party;
+        let room = want.map(Want::room);
+        if p.peer_room != room {
+            p.peer_room = room;
+            p.peer_runs.clear();
+            p.sync_since = None;
+            p.synced_at = None;
+        }
+        let Some(room) = room else {
+            return;
+        };
+        if !self.gs.needs_history() {
+            p.sync_since = None;
+        } else if p.sync_since.is_none() {
+            p.sync_since = Some(Instant::now());
+        }
+        for r in runs.iter().filter(|r| r.room == room) {
+            if let Some(s) = r.summary(now) {
+                if p.peer_runs.len() >= PEER_RUNS {
+                    p.peer_runs.remove(0);
+                }
+                p.peer_runs.push((now, s));
+            }
+        }
+        let gs = &mut self.gs;
+        let mut got = false;
+        p.peer_runs.retain(|(at, s)| {
+            now < at + PEER_RUN_SECS
+                && match gs.catch_up(s) {
+                    None => true,
+                    Some(applied) => {
+                        got |= applied;
+                        false
+                    }
+                }
+        });
+        if got {
+            p.synced_at = Some(Instant::now());
+        }
+    }
+
+    pub(super) fn run_sync(&self, at: Instant) -> RunSync {
+        let p = &self.party;
+        let since = |t: Option<Instant>| t.map(|t| at.saturating_duration_since(t).as_millis());
+        if since(p.synced_at).is_some_and(|ms| ms < SYNCED_MS) {
+            return RunSync::Done;
+        }
+        let waiting = p.peer_room.is_some()
+            && p.synced_at.is_none()
+            && p.pane.link == Link::Connected
+            && p.table.others() > 0
+            && self.gs.needs_history()
+            && since(p.sync_since).is_some_and(|ms| ms < SYNC_WAIT_MS);
+        if waiting {
+            RunSync::Waiting
+        } else {
+            RunSync::Idle
+        }
     }
 
     pub(super) fn party_step(

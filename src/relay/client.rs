@@ -1,5 +1,5 @@
-use super::proto::{Msg, Room, MAX_SNAP_LEN};
-use super::{rand, Backoff, Hub, Link, Snap, Throttle, Url, Want};
+use super::proto::{Msg, Room, MAX_RECV, RUNS};
+use super::{rand, Backoff, Hub, Link, PeerRun, RunThrottle, Snap, Throttle, Url, Want};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU16, Ordering};
 use std::sync::Arc;
@@ -372,6 +372,7 @@ fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
     };
     let epoch = Instant::now();
     let mut throttle = Throttle::default();
+    let mut runs = RunThrottle::default();
     let outcome = loop {
         let s = hub.lock();
         if s.want.as_ref() != Some(want) {
@@ -385,6 +386,15 @@ fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
         }
         let now = epoch.elapsed().as_millis() as u64;
         let dmg = s.dmg;
+        let run = s.run.as_ref().map(|r| &r.summary);
+        if runs.due(now, run) {
+            let payload = s.run.as_ref().map(|r| r.encode()).unwrap_or_default();
+            drop(s);
+            if !conn.ws.send(&Msg::Run(payload).encode()) {
+                break Outcome::Lost;
+            }
+            continue;
+        }
         if let Some(msg) = throttle.due(now, dmg) {
             drop(s);
             if !conn.ws.send(&msg.encode()) {
@@ -392,8 +402,8 @@ fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
             }
             continue;
         }
-        let wait = Duration::from_millis(throttle.wait_ms(now, dmg));
-        drop(hub.cv.wait_timeout(s, wait));
+        let wait = throttle.wait_ms(now, dmg).min(runs.wait_ms(now, run));
+        drop(hub.cv.wait_timeout(s, Duration::from_millis(wait)));
     };
     let code = rx.code.load(Ordering::Relaxed);
     conn.ws.shutdown(code);
@@ -426,8 +436,8 @@ fn wait_done(hub: &Hub, rx: &Rx) -> bool {
 }
 
 fn receive(hub: &Hub, ws: &Ws, rx: &Rx, id: u64, room: Room) {
-    let mut buf = vec![0u8; MAX_SNAP_LEN + 1];
-    let mut msg: Vec<u8> = Vec::with_capacity(MAX_SNAP_LEN);
+    let mut buf = vec![0u8; MAX_RECV + 1];
+    let mut msg: Vec<u8> = Vec::with_capacity(MAX_RECV);
     let mut bad = false;
     while let Some((n, kind)) = ws.receive(&mut buf) {
         if kind == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE {
@@ -441,23 +451,39 @@ fn receive(hub: &Hub, ws: &Ws, rx: &Rx, id: u64, room: Room) {
             WINHTTP_WEB_SOCKET_BINARY_FRAGMENT_BUFFER_TYPE
             | WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE => {
                 msg.extend_from_slice(&buf[..n]);
-                if msg.len() > MAX_SNAP_LEN {
+                if msg.len() > MAX_RECV {
                     false
                 } else if kind == WINHTTP_WEB_SOCKET_BINARY_FRAGMENT_BUFFER_TYPE {
                     true
-                } else if let Some(Msg::Snap(entries)) = Msg::decode(&msg) {
-                    hub.push_snap(
-                        id,
-                        Snap {
-                            at: Instant::now(),
-                            room,
-                            entries,
-                        },
-                    );
-                    msg.clear();
-                    true
                 } else {
-                    false
+                    let ok = match Msg::decode(&msg) {
+                        Some(Msg::Snap(entries)) => {
+                            hub.push_snap(
+                                id,
+                                Snap {
+                                    at: Instant::now(),
+                                    room,
+                                    entries,
+                                },
+                            );
+                            true
+                        }
+                        Some(Msg::Runs { held, payload }) => {
+                            hub.push_run(
+                                id,
+                                PeerRun {
+                                    at: Instant::now(),
+                                    room,
+                                    held,
+                                    payload,
+                                },
+                            );
+                            true
+                        }
+                        _ => msg.first() == Some(&RUNS),
+                    };
+                    msg.clear();
+                    ok
                 }
             }
             _ => false,
