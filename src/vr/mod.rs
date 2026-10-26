@@ -1,4 +1,3 @@
-mod buzz;
 mod pose;
 #[cfg(test)]
 mod pose_tests;
@@ -7,7 +6,6 @@ use crate::process;
 use pose::M34;
 use std::time::Instant;
 
-pub use buzz::{alerts, Alert, Seen};
 pub use pose::{Hand, Place};
 
 const OVERLAY_KEY: &str = "whyknot.eclipticahud";
@@ -23,7 +21,6 @@ const MAX_GRIP_OFFSET_M: f32 = 0.25;
 pub struct VrConfig {
     pub hand: Hand,
     pub place: Place,
-    pub buzz: bool,
 }
 
 impl Default for VrConfig {
@@ -31,7 +28,6 @@ impl Default for VrConfig {
         VrConfig {
             hand: Hand::Left,
             place: Place::Back,
-            buzz: true,
         }
     }
 }
@@ -50,11 +46,6 @@ fn apply(cfg: &mut VrConfig, key: &str, value: &str) {
             "inside" => cfg.place = Place::Inside,
             _ => {}
         },
-        "buzz" => match v.as_str() {
-            "1" | "on" | "true" | "yes" => cfg.buzz = true,
-            "0" | "off" | "false" | "no" => cfg.buzz = false,
-            _ => {}
-        },
         _ => {}
     }
 }
@@ -66,7 +57,7 @@ pub fn config_from(text: &str, env: &dyn Fn(&str) -> Option<String>) -> VrConfig
             apply(&mut cfg, k, v);
         }
     }
-    for key in ["hand", "place", "buzz"] {
+    for key in ["hand", "place"] {
         if let Some(v) = env(&format!("EHUD_VR_{}", key.to_ascii_uppercase())) {
             apply(&mut cfg, key, &v);
         }
@@ -84,15 +75,6 @@ pub fn load_config() -> VrConfig {
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();
     config_from(&text, &|k| std::env::var(k).ok())
-}
-
-fn manifest_dir() -> Option<std::path::PathBuf> {
-    let base = std::env::var_os("APPDATA")?;
-    Some(
-        std::path::PathBuf::from(base)
-            .join("EclipticaHUD")
-            .join("vr"),
-    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -160,16 +142,12 @@ struct Inner {
     party_tried: bool,
     grip: Option<(u32, Hand, M34)>,
     main_wh: (f32, f32),
-    haptics: Option<buzz::Haptics>,
-    haptics_tried: bool,
 }
 
 pub struct VrOverlay {
     inner: Option<Inner>,
     last_try: Option<Instant>,
     config: VrConfig,
-    limiter: buzz::Limiter,
-    epoch: Instant,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -316,8 +294,6 @@ impl VrOverlay {
             inner: None,
             last_try: None,
             config: VrConfig::default(),
-            limiter: buzz::Limiter::default(),
-            epoch: Instant::now(),
         }
     }
 
@@ -344,8 +320,6 @@ impl VrOverlay {
             party_tried: false,
             grip: None,
             main_wh: (0.0, 0.0),
-            haptics: None,
-            haptics_tried: false,
         });
     }
 
@@ -447,28 +421,6 @@ impl VrOverlay {
             }
         }
     }
-
-    pub fn buzz(&mut self, alert: Alert) {
-        if !self.config.buzz {
-            return;
-        }
-        let Some(inner) = self.inner.as_mut() else {
-            return;
-        };
-        if inner.haptics.is_none() && !inner.haptics_tried {
-            inner.haptics_tried = true;
-            inner.haptics = manifest_dir().and_then(|d| buzz::Haptics::init(&inner.context, &d));
-        }
-        let Some(h) = inner.haptics.as_ref() else {
-            return;
-        };
-        if self
-            .limiter
-            .allow(alert, self.epoch.elapsed().as_secs_f64())
-        {
-            h.fire(&inner.context, self.config.hand, alert);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -480,36 +432,23 @@ mod tests {
     }
 
     #[test]
-    fn config_defaults_to_left_back_with_buzz_on() {
+    fn config_defaults_to_left_back() {
         let c = config_from("", &no_env);
         assert_eq!(c, VrConfig::default());
-        assert_eq!((c.hand, c.place, c.buzz), (Hand::Left, Place::Back, true));
-    }
-
-    #[test]
-    fn buzz_off_turns_it_off() {
-        assert!(!config_from("buzz=off", &no_env).buzz);
-        assert!(!config_from("buzz = 0\n", &no_env).buzz);
-        assert!(config_from("buzz=maybe", &no_env).buzz);
-        let env = |k: &str| (k == "EHUD_VR_BUZZ").then(|| "no".to_string());
-        assert!(!config_from("", &env).buzz);
+        assert_eq!((c.hand, c.place), (Hand::Left, Place::Back));
     }
 
     #[test]
     fn config_reads_the_file_and_env_wins() {
         let text = "hand = Right\nplace=inside\nlook=bar\nbuzz=off\njunk\n=\nhand=sideways\n";
         let c = config_from(text, &no_env);
-        assert_eq!(
-            (c.hand, c.place, c.buzz),
-            (Hand::Right, Place::Inside, false)
-        );
+        assert_eq!((c.hand, c.place), (Hand::Right, Place::Inside));
         let env = |k: &str| match k {
             "EHUD_VR_PLACE" => Some("old".to_string()),
-            "EHUD_VR_BUZZ" => Some("on".to_string()),
             _ => None,
         };
         let c = config_from(text, &env);
-        assert_eq!((c.hand, c.place, c.buzz), (Hand::Right, Place::Old, true));
+        assert_eq!((c.hand, c.place), (Hand::Right, Place::Old));
     }
 
     #[test]

@@ -21,16 +21,17 @@ impl Renderer {
         let next = format!("New version: {}", tag.trim_start_matches(['v', 'V']));
         self.text_rect(bx, PROMPT_T + 64, bw, 20, F_BODY, GOOD, c, &next);
         let (ny, nh) = (UPDATE_NOW_HIT.1, UPDATE_NOW_HIT.3);
+        let later = f.ctl(Hit::UpdateLater, true, false);
+        let ink = self.control(UPDATE_LATER_HIT, later);
+        let (lx, ly, lw, lh) = UPDATE_LATER_HIT;
+        self.text_rect(lx, ly, lw, lh, F_BODY, ink, c, "Later");
         match f.update {
             Badge::Installing(_) => {
-                self.text_rect(bx, ny, bw, nh, F_BODY, DIM, c, "Downloading...");
+                let (nx, _, nw, _) = UPDATE_NOW_HIT;
+                self.text_rect(nx, ny, nw, nh, F_BODY, DIM, c, "Downloading...");
             }
             _ => {
                 self.choice(f, Hit::UpdateNow, UPDATE_NOW_HIT, GOOD, "Update");
-                let later = f.ctl(Hit::UpdateLater, true, false);
-                let ink = self.control(UPDATE_LATER_HIT, later);
-                let (lx, ly, lw, lh) = UPDATE_LATER_HIT;
-                self.text_rect(lx, ly, lw, lh, F_BODY, ink, c, "Later");
                 let (_, sy, _, sh) = UPDATE_SKIP_HIT;
                 if matches!(f.update, Badge::Failed(_)) {
                     self.text_rect(bx, sy, bw, sh, F_TINY, DANGER, c, "Update failed");

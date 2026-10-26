@@ -1147,7 +1147,7 @@ impl Renderer {
             Badge::Installing(_) => ("updating".to_string(), AMBER),
             Badge::Failed(_) => ("update failed".to_string(), DANGER),
         };
-        if matches!(f.update, Badge::Ready(_)) && !f.prompt {
+        if matches!(f.update, Badge::Ready(_) | Badge::Installing(_)) && !f.prompt {
             let color = if f.hov(Hit::Update) { TEXT } else { ucolor };
             let x = UPDATE_HIT.0;
             self.link(

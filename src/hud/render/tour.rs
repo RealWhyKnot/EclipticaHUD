@@ -565,6 +565,31 @@ fn main_states() -> Vec<(&'static str, u8, Frame)> {
             },
         ),
         (
+            "main_prompt_downloading",
+            2,
+            Frame {
+                env: Env::InWorld,
+                view_run: None,
+                view_group: None,
+                group_pages: 0,
+                update: Badge::Installing("v2026.10.29.0".to_string()),
+                prompt: true,
+                ..live()
+            },
+        ),
+        (
+            "main_downloading_hidden",
+            2,
+            Frame {
+                env: Env::InWorld,
+                view_run: None,
+                view_group: None,
+                group_pages: 0,
+                update: Badge::Installing("v2026.10.29.0".to_string()),
+                ..live()
+            },
+        ),
+        (
             "main_ask_usage",
             2,
             Frame {

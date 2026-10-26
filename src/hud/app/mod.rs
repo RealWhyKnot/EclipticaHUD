@@ -1,6 +1,5 @@
 mod anim;
 mod archive;
-mod buzz;
 mod logwin;
 mod nav;
 mod party;
@@ -71,7 +70,6 @@ pub struct App {
     pub log: LogState,
     pub party_win: PartyWin,
     vr: VrOverlay,
-    buzz_seen: crate::vr::Seen,
     rgba: Vec<u8>,
     last_ts: u64,
     last_ts_at: Instant,
@@ -190,7 +188,6 @@ impl App {
                 last_tip: None,
             },
             vr: VrOverlay::new(),
-            buzz_seen: crate::vr::Seen::default(),
             rgba: Vec::new(),
             last_ts: 0,
             last_ts_at: Instant::now(),
@@ -271,6 +268,10 @@ impl App {
         self.prompt_open && self.badge != Badge::None && self.gs.boss.is_none()
     }
 
+    pub fn can_restart(&self) -> bool {
+        self.gs.boss.is_none()
+    }
+
     pub fn usage_prompt_shown(&self) -> bool {
         self.usage_ask && !self.prompt_shown() && self.gs.boss.is_none()
     }
@@ -305,7 +306,8 @@ impl App {
         if self.prompt_shown() {
             return match hit {
                 Hit::Close | Hit::Log | Hit::Pin | Hit::Party => true,
-                Hit::UpdateNow | Hit::UpdateLater => self.update_ready(),
+                Hit::UpdateNow => self.update_ready(),
+                Hit::UpdateLater => true,
                 Hit::UpdateSkip => matches!(self.badge, Badge::Ready(_)),
                 _ => false,
             };
@@ -359,7 +361,7 @@ impl App {
             Hit::Info(i) if i.live_only() => self.is_live(),
             Hit::Info(i) if i.history_only() => !self.is_live(),
             Hit::Info(_) => true,
-            Hit::Update => self.update_ready(),
+            Hit::Update => self.badge != Badge::None,
             Hit::UpdateNow | Hit::UpdateLater | Hit::UpdateSkip => false,
             Hit::UsageYes | Hit::UsageNo => false,
             Hit::Mute => self.is_live() && self.gs.boss.is_some(),
@@ -475,6 +477,10 @@ impl App {
     pub fn delete_board(&mut self) {
         self.board_deleting = true;
         crate::board::forget();
+    }
+
+    pub fn set_vr_config(&mut self, config: crate::vr::VrConfig) {
+        self.vr.set_config(config);
     }
 
     pub fn set_discord(&mut self, on: bool) {

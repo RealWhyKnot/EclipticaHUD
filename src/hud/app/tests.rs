@@ -790,9 +790,29 @@ fn update_prompt_is_modal_and_waits_for_boss_fights() {
     assert!(app.prompt_shown());
     assert_eq!(app.enabled_hit(nx, ny), None);
     assert_eq!(app.enabled_hit(sx, sy), None);
+    assert_eq!(app.enabled_hit(lx, ly), Some(Hit::UpdateLater));
+    assert!(app.activate(Hit::UpdateLater));
+    assert!(!app.prompt_shown());
+    assert!(app.hit_enabled(Hit::Settings));
+    assert_eq!(app.enabled_hit(300, LOGICAL_H - 20), Some(Hit::Update));
+    assert!(app.activate(Hit::Update));
+    assert!(app.prompt_shown());
     app.badge = Badge::Failed("v2026.10.29.0".into());
     assert_eq!(app.enabled_hit(nx, ny), Some(Hit::UpdateNow));
     assert_eq!(app.enabled_hit(sx, sy), None);
+}
+
+#[test]
+fn update_restart_waits_for_boss_fights() {
+    let mut app = headless();
+    assert!(app.can_restart());
+    app.gs.feed(&format!(
+        "{P}ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"
+    ));
+    assert!(!app.can_restart());
+    app.gs
+        .feed(&format!("{P}Boss Kakarot dead, personal damage dealt: "));
+    assert!(app.can_restart());
 }
 
 #[test]
