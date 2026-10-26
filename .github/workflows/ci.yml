@@ -18,6 +18,11 @@ permissions:
   contents: read
 
 jobs:
+  checks:
+    permissions:
+      contents: read
+    uses: RealWhyKnot/workflows/.github/workflows/repo-checks.yml@v1
+
   test:
     name: Lint, build and test
     runs-on: windows-latest
@@ -35,11 +40,11 @@ jobs:
           }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value 'LIBCLANG_PATH=C:\Program Files\LLVM\bin'
 
-      - name: Rust components
-        shell: pwsh
-        run: |
-          rustup component add rustfmt clippy
-          if ($LASTEXITCODE -ne 0) { throw "rustup component add failed ($LASTEXITCODE)" }
+      - name: Set up Rust
+        uses: RealWhyKnot/workflows/setup-rust@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
 
       - name: Format check
         run: cargo fmt --check
