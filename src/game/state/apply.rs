@@ -10,6 +10,7 @@ use crate::game::source::describe_source;
 // const DEATH_HOLD: u64 = 2;
 const LOG_CAP: usize = 500;
 pub const ROSTER_CAP: usize = 128;
+const NAME_LAG: u64 = 1;
 
 impl GameState {
     pub fn apply(&mut self, ts: u64, ev: Event) {
@@ -79,9 +80,9 @@ impl GameState {
                     self.roster_seq += 1;
                 }
             }
-            Event::EnemySpawn { slot, kind } => self.enemy_spawn(slot, kind),
+            Event::EnemySpawn { slot, kind } => self.enemy_spawn(ts, slot, kind),
             Event::EnemyRetire(slot) => self.enemy_retire(ts, slot),
-            Event::EnemyName(name) => self.enemy_name(name),
+            Event::EnemyName(name) => self.enemy_name(ts, name),
             // Death logging is gone: the game stopped writing its death line reliably (a downed
             // player can go without it entirely), and nothing else in the log marks a death.
             // Event::PlayerDead => self.player_dead(ts),
@@ -331,6 +332,8 @@ impl GameState {
         let end = self.clear_ts.take().unwrap_or(ts);
         self.last_clear = None;
         self.alive.clear();
+        self.enemy_seen = false;
+        self.drop_pending();
         if self.stage_stats.start_ts == 0 {
             return;
         }
@@ -425,29 +428,58 @@ impl GameState {
         self.changed = true;
     }
 
-    fn enemy_spawn(&mut self, slot: u32, kind: u32) {
-        self.last_spawn = None;
-        if !self.pre_boss() || !self.pool_known || self.summon_kinds.contains(&kind) {
+    fn enemy_spawn(&mut self, ts: u64, slot: u32, kind: u32) {
+        if !self.pre_boss() || !self.pool_known {
+            self.drop_pending();
+            return;
+        }
+        self.pending_spawns.push_back((slot, kind, ts));
+        if self.summon_kinds.contains(&kind) {
             return;
         }
         self.alive.insert(slot);
-        self.last_spawn = Some((slot, kind, self.clear_ts.take()));
+        self.enemy_seen = true;
+        if let Some(c) = self.clear_ts.take() {
+            self.held_clear = Some(c);
+        }
     }
 
-    fn enemy_name(&mut self, name: String) {
-        let Some((slot, kind, before)) = self.last_spawn.take() else {
+    pub(super) fn expire_pending(&mut self, now: u64) {
+        while self
+            .pending_spawns
+            .front()
+            .is_some_and(|p| p.2 + NAME_LAG < now)
+        {
+            self.pending_spawns.pop_front();
+        }
+        if self.pending_spawns.is_empty() {
+            self.held_clear = None;
+        }
+    }
+
+    fn drop_pending(&mut self) {
+        self.pending_spawns.clear();
+        self.held_clear = None;
+    }
+
+    fn enemy_name(&mut self, ts: u64, name: String) {
+        self.expire_pending(ts);
+        let Some((slot, kind, _)) = self.pending_spawns.pop_front() else {
             return;
         };
         if player_summon(&name) {
             self.summon_kinds.insert(kind);
             if self.alive.remove(&slot) && self.alive.is_empty() {
-                self.clear_ts = before;
+                self.clear_ts = self.held_clear;
+                self.enemy_seen &= self.last_clear.is_some();
             }
+        }
+        if self.pending_spawns.is_empty() {
+            self.held_clear = None;
         }
     }
 
     fn enemy_retire(&mut self, ts: u64, slot: u32) {
-        self.last_spawn = None;
         if !self.pre_boss() {
             if matches!(self.mode, Mode::Idle | Mode::Lobby | Mode::Intermission) {
                 self.pool_reset_seen = true;
@@ -465,7 +497,7 @@ impl GameState {
         let Some(at) = self.token_clear else {
             return;
         };
-        if now < at + TOKEN_ALERT_SECS || self.last_spawn.is_some() {
+        if now < at + TOKEN_ALERT_SECS || !self.pending_spawns.is_empty() {
             return;
         }
         self.token_clear = None;

@@ -63,6 +63,7 @@ struct Seen {
     clear: Option<u64>,
     tokens: Option<(u32, u32)>,
     alerts: u64,
+    enemies: Option<usize>,
     targets: u64,
     taken_seq: u64,
     peak: u64,
@@ -174,6 +175,13 @@ impl Seen {
                     );
                 }
             }
+        }
+        let enemies = gs.enemies_left();
+        if enemies != self.enemies {
+            if let Some(n) = enemies {
+                println!("{t}  enemies  {n}");
+            }
+            self.enemies = enemies;
         }
         let clear = gs.stage_clear();
         if clear != self.clear {

@@ -76,8 +76,10 @@ pub struct GameState {
     last_save: Option<u64>,
     stage_boss_seen: bool,
     alive: HashSet<u32>,
+    enemy_seen: bool,
     summon_kinds: HashSet<u32>,
-    last_spawn: Option<(u32, u32, Option<u64>)>,
+    pending_spawns: VecDeque<(u32, u32, u64)>,
+    held_clear: Option<u64>,
     pool_reset_seen: bool,
     pool_known: bool,
     last_death: Option<u64>,
@@ -153,6 +155,15 @@ impl GameState {
         self.mode == Mode::Stage && self.boss.is_none() && self.stage_stats.start_ts != 0
     }
 
+    pub fn enemies_left(&self) -> Option<usize> {
+        (self.pre_boss() && self.pool_known && self.enemy_seen).then_some(self.alive.len())
+    }
+
+    pub fn clear_settled(&self, now: u64) -> bool {
+        self.stage_clear()
+            .is_some_and(|c| now > c + TOKEN_ALERT_SECS)
+    }
+
     pub fn stage_clear(&self) -> Option<u64> {
         self.clear_ts.filter(|_| self.pre_boss())
     }
@@ -224,6 +235,7 @@ impl GameState {
 
     pub fn feed_msg(&mut self, ts: u64, msg: &str) -> bool {
         self.last_ts = self.last_ts.max(ts);
+        self.expire_pending(ts);
         self.poll_token_alert(ts);
         let ev = parse_msg(msg);
         let mut kept = ev.is_some();

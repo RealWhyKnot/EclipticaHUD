@@ -329,6 +329,43 @@ fn rotation_in_tick_closes_run() {
 }
 
 #[test]
+fn closing_a_run_truncates_the_wal() {
+    let dir = std::env::temp_dir().join(format!("ehud_wal_close_{}", std::process::id()));
+    let logs = dir.join("logs");
+    std::fs::create_dir_all(&logs).unwrap();
+    let wal = dir.join("history.db-wal");
+    let wal_len = || std::fs::metadata(&wal).map_or(0, |m| m.len());
+    let mut app = App::new(96);
+    app.set_history(crate::history::History::open(&dir.join("history.db")));
+    app.watch = LogWatch::for_dir(logs.clone());
+    let log_a = logs.join("output_log_2026-01-01_00-00-00.txt");
+    std::fs::write(
+        &log_a,
+        format!("2026.01.01 10:00:00 Debug      -  {STAGE_A}\n"),
+    )
+    .unwrap();
+    app.tick();
+    assert!(app.gs.live_run().is_some());
+    assert!(wal_len() > 0);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&log_a)
+        .unwrap()
+        .write_all(format!("2026.01.01 10:00:05 Debug      -  {STAGE_A}\n").as_bytes())
+        .unwrap();
+    app.tick();
+    assert!(app.gs.live_run().is_some());
+    assert!(wal_len() > 0);
+    let log_b = logs.join("output_log_2026-01-02_00-00-00.txt");
+    std::fs::write(&log_b, "").unwrap();
+    app.tick();
+    assert!(app.gs.runs[0].end_ts.is_some());
+    assert_eq!(wal_len(), 0);
+    drop(app);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn navigation() {
     let mut app = headless();
     app.gs.feed(&format!("{P}{STAGE_A}"));
@@ -1517,6 +1554,36 @@ fn archives_from_older_builds_line_up_after_an_upgrade() {
     want.extend(kept_of(&tail, false));
     assert_eq!(got.len(), old.len() + 2);
     assert_eq!(got, want);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn lines_drained_from_the_old_log_are_archived_under_its_name() {
+    let dir = temp_logs("drain_archive");
+    let old = "output_log_2026-01-01_00-00-00.txt";
+    let new = "output_log_2026-01-02_00-00-00.txt";
+    let (head, tail) = DEATHS.split_at(DEATHS.find("2026.01.01 10:00:10").unwrap());
+    std::fs::write(dir.join(old), head).unwrap();
+    let mut app = App::new(96);
+    app.set_history(crate::history::History::in_memory());
+    app.watch = LogWatch::for_dir(dir.clone());
+    app.tick();
+    let before = app.archive.db.as_ref().unwrap().stored(old);
+    std::fs::write(dir.join(new), "").unwrap();
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join(old))
+        .unwrap()
+        .write_all(tail.as_bytes())
+        .unwrap();
+    app.tick();
+    assert_eq!(app.watch.path.as_deref(), Some(dir.join(old).as_path()));
+    app.tick();
+    assert_eq!(app.watch.path.as_deref(), Some(dir.join(new).as_path()));
+    let db = app.archive.db.as_ref().unwrap();
+    assert!(before < 10);
+    assert_eq!(db.stored(old), 10);
+    assert_eq!(db.stored(new), 0);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -1,5 +1,6 @@
 mod boss;
 mod deaths;
+mod enemies;
 mod kills;
 mod lifecycle;
 mod rates;

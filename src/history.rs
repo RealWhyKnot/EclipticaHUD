@@ -4,6 +4,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
+const BUSY_WAIT: Duration = Duration::from_secs(2);
+
+const WAL_LIMIT: i64 = 1 << 20;
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY,
@@ -142,16 +146,35 @@ pub struct History {
     unsure: Option<(String, u64, u64)>,
 }
 
+impl Drop for History {
+    fn drop(&mut self) {
+        self.checkpoint();
+    }
+}
+
 impl History {
     pub fn open(path: &Path) -> Option<History> {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
         let db = Connection::open(path).ok()?;
-        let _ = db.busy_timeout(Duration::from_secs(2));
+        let _ = db.busy_timeout(BUSY_WAIT);
         let _ = db.pragma_update(None, "journal_mode", "WAL");
         let _ = db.pragma_update(None, "synchronous", "NORMAL");
+        let _ = db.pragma_update(None, "journal_size_limit", WAL_LIMIT);
         History::init(db)
+    }
+
+    pub fn checkpoint(&self) -> bool {
+        let _ = self.db.busy_timeout(Duration::ZERO);
+        let done = self
+            .db
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .is_ok_and(|busy| busy == 0);
+        let _ = self.db.busy_timeout(BUSY_WAIT);
+        done
     }
 
     #[cfg(test)]

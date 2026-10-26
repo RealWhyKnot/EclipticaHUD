@@ -11,6 +11,7 @@ pub(super) struct Archive {
     next: u64,
     have: Option<(u64, u64)>,
     end: u64,
+    live: bool,
 }
 
 pub(super) fn log_name(p: &Path) -> Option<String> {
@@ -18,6 +19,14 @@ pub(super) fn log_name(p: &Path) -> Option<String> {
 }
 
 impl Archive {
+    pub(super) fn settle(&mut self, live: bool) {
+        if std::mem::replace(&mut self.live, live) && !live {
+            if let Some(db) = self.db.as_ref() {
+                db.checkpoint();
+            }
+        }
+    }
+
     pub(super) fn flush(
         &mut self,
         path: Option<&Path>,

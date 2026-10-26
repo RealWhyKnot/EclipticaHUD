@@ -186,6 +186,7 @@ impl App {
         if rotated {
             self.gs.log_rotated();
         }
+        self.archive.settle(self.gs.live_run().is_some());
         if newest > self.last_ts {
             self.last_ts = newest;
             self.last_ts_at = Instant::now();

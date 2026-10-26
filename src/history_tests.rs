@@ -283,3 +283,69 @@ fn opting_in_on_an_older_build_still_keeps_earlier_data_out() {
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn wal_size(path: &Path) -> u64 {
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    std::fs::metadata(wal).map_or(0, |m| m.len())
+}
+
+fn fill(h: &mut History, path: &Path, name: &str, batches: u64) -> u64 {
+    let mut biggest = 0;
+    for b in 0..batches {
+        let kept: Vec<(u64, String)> = (0..400)
+            .map(|i| {
+                let n = b * 400 + i;
+                (n, format!("{name} line {n} {}", "x".repeat(200)))
+            })
+            .collect();
+        h.archive(name, b * 400, &kept, b * 400 + 399);
+        biggest = biggest.max(wal_size(path));
+    }
+    biggest
+}
+
+#[test]
+fn wal_is_capped_and_truncated() {
+    let dir = std::env::temp_dir().join(format!("ehud-wal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("history.db");
+    let mut h = History::open(&path).unwrap();
+    let limit: i64 =
+        h.db.query_row("PRAGMA journal_size_limit", [], |r| r.get(0))
+            .unwrap();
+    assert_eq!(limit, WAL_LIMIT);
+    let biggest = fill(&mut h, &path, "a", 60);
+    assert!(biggest > WAL_LIMIT as u64 * 2, "wal only reached {biggest}");
+    let grown = wal_size(&path);
+    assert!(grown > 0);
+
+    let other = History::open(&path).unwrap();
+    let reading = other.db.unchecked_transaction().unwrap();
+    let _: i64 = reading
+        .query_row("SELECT COUNT(*) FROM lines", [], |r| r.get(0))
+        .unwrap();
+    fill(&mut h, &path, "b", 2);
+    let started = std::time::Instant::now();
+    assert!(!h.checkpoint());
+    assert!(started.elapsed() < Duration::from_millis(500));
+    drop(reading);
+
+    let started = std::time::Instant::now();
+    assert!(h.checkpoint());
+    let took = started.elapsed();
+    assert_eq!(wal_size(&path), 0);
+    println!(
+        "wal peaked at {biggest} bytes, {grown} before the checkpoint, truncate took {took:?}"
+    );
+    assert_eq!(h.stored("a"), 60 * 400);
+    assert_eq!(h.stored("b"), 2 * 400);
+
+    fill(&mut h, &path, "c", 3);
+    assert!(wal_size(&path) > 0);
+    drop(h);
+    assert_eq!(wal_size(&path), 0);
+    assert_eq!(other.stored("c"), 3 * 400);
+    drop(other);
+    let _ = std::fs::remove_dir_all(&dir);
+}
