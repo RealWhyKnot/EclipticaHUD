@@ -1,10 +1,20 @@
-use super::proto::{Msg, Room, MAX_RECV, RUNS};
-use super::{rand, Backoff, Hub, Link, PeerRun, RunThrottle, Snap, Throttle, Url, Want};
+use super::proto::{MAX_RECV, Msg, RUNS, Room};
+use super::{Backoff, Hub, Link, PeerRun, RunThrottle, Snap, Throttle, Url, Want, rand};
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU16, Ordering};
 use std::time::{Duration, Instant};
-use windows_sys::Win32::Networking::WinHttp::*;
+use windows_sys::Win32::Networking::WinHttp::{
+    WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_FLAG_SECURE,
+    WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT,
+    WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+    WINHTTP_WEB_SOCKET_BINARY_FRAGMENT_BUFFER_TYPE, WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE,
+    WINHTTP_WEB_SOCKET_BUFFER_TYPE, WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE, WinHttpCloseHandle,
+    WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpReceiveResponse,
+    WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts, WinHttpWebSocketClose,
+    WinHttpWebSocketCompleteUpgrade, WinHttpWebSocketQueryCloseStatus, WinHttpWebSocketReceive,
+    WinHttpWebSocketSend, WinHttpWebSocketShutdown,
+};
 
 const TIMEOUT_MS: i32 = 10_000;
 const CLOSE_WAIT: Duration = Duration::from_secs(2);
@@ -24,6 +34,7 @@ struct Handle(*mut c_void);
 impl Drop for Handle {
     fn drop(&mut self) {
         if !self.0.is_null() {
+            // SAFETY: the handle is non-null and owned by this value, which closes it once.
             unsafe { WinHttpCloseHandle(self.0) };
         }
     }
@@ -35,12 +46,13 @@ impl Ws {
     fn send(&self, b: &[u8]) -> bool {
         let h = self.0.load(Ordering::Acquire);
         !h.is_null()
+            // SAFETY: the handle was checked for null, and the pointer and length describe `b`.
             && unsafe {
                 WinHttpWebSocketSend(
                     h,
                     WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE,
-                    b.as_ptr() as *const c_void,
-                    b.len() as u32,
+                    b.as_ptr().cast::<c_void>(),
+                    crate::num::to_u32(b.len()),
                 )
             } == 0
     }
@@ -52,21 +64,23 @@ impl Ws {
         }
         let mut read = 0u32;
         let mut kind: WINHTTP_WEB_SOCKET_BUFFER_TYPE = 0;
+        // SAFETY: the handle was checked for null, and the pointer and length describe `buf`.
         let err = unsafe {
             WinHttpWebSocketReceive(
                 h,
-                buf.as_mut_ptr() as *mut c_void,
-                buf.len() as u32,
-                &mut read,
-                &mut kind,
+                buf.as_mut_ptr().cast::<c_void>(),
+                crate::num::to_u32(buf.len()),
+                &raw mut read,
+                &raw mut kind,
             )
         };
-        (err == 0).then_some((read as usize, kind))
+        (err == 0).then_some((crate::num::to_usize(read), kind))
     }
 
     fn shutdown(&self, code: u16) {
         let h = self.0.load(Ordering::Acquire);
         if !h.is_null() {
+            // SAFETY: the handle was checked for null, and a null reason with length 0 is allowed.
             unsafe { WinHttpWebSocketShutdown(h, code, std::ptr::null(), 0) };
         }
     }
@@ -74,6 +88,7 @@ impl Ws {
     fn abort(&self, code: u16) {
         let h = self.0.load(Ordering::Acquire);
         if !h.is_null() {
+            // SAFETY: the handle was checked for null, and a null reason with length 0 is allowed.
             unsafe { WinHttpWebSocketClose(h, code, std::ptr::null(), 0) };
         }
     }
@@ -84,20 +99,17 @@ impl Ws {
         let mut reason = [0u8; 123];
         let mut len = 0u32;
         let ok = !h.is_null()
+            // SAFETY: the handle was checked for null, and the pointer and length describe `reason`.
             && unsafe {
                 WinHttpWebSocketQueryCloseStatus(
                     h,
-                    &mut status,
-                    reason.as_mut_ptr() as *mut c_void,
-                    reason.len() as u32,
-                    &mut len,
+                    &raw mut status,
+                    reason.as_mut_ptr().cast::<c_void>(),
+                    crate::num::to_u32(reason.len()),
+                    &raw mut len,
                 )
             } == 0;
-        if ok {
-            status
-        } else {
-            0
-        }
+        if ok { status } else { 0 }
     }
 }
 
@@ -105,6 +117,7 @@ impl Drop for Ws {
     fn drop(&mut self) {
         let h = self.0.swap(std::ptr::null_mut(), Ordering::AcqRel);
         if !h.is_null() {
+            // SAFETY: the swap leaves null behind, which means this non-null handle is closed once.
             unsafe { WinHttpCloseHandle(h) };
         }
     }
@@ -118,6 +131,7 @@ struct Conn {
 
 fn open_session() -> Option<Handle> {
     let agent = wide(&format!("EclipticaHUD/{}", crate::update::VERSION));
+    // SAFETY: every string passed is a NUL-terminated UTF-16 buffer that outlives its call, and the handle is checked.
     unsafe {
         let mut raw = WinHttpOpen(
             agent.as_ptr(),
@@ -148,13 +162,14 @@ fn open_session() -> Option<Handle> {
 fn status(req: &Handle) -> Option<u32> {
     let mut code = 0u32;
     let mut len = 4u32;
+    // SAFETY: the request handle is live, and the buffer and its length describe `code`.
     let ok = unsafe {
         WinHttpQueryHeaders(
             req.0,
             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
             std::ptr::null(),
-            &mut code as *mut u32 as *mut c_void,
-            &mut len,
+            (&raw mut code).cast::<c_void>(),
+            &raw mut len,
             std::ptr::null_mut(),
         )
     };
@@ -164,6 +179,7 @@ fn status(req: &Handle) -> Option<u32> {
 pub(super) fn post(url: &Url, body: &[u8]) -> Option<u32> {
     let session = open_session()?;
     let len = u32::try_from(body.len()).ok()?;
+    // SAFETY: each handle is checked before use and closed by its Handle, and every buffer outlives its call.
     unsafe {
         let host = wide(&url.host);
         let connect = Handle(WinHttpConnect(session.0, host.as_ptr(), url.port, 0));
@@ -188,7 +204,7 @@ pub(super) fn post(url: &Url, body: &[u8]) -> Option<u32> {
                 req.0,
                 headers.as_ptr(),
                 u32::MAX,
-                body.as_ptr() as *const c_void,
+                body.as_ptr().cast::<c_void>(),
                 len,
                 len,
                 0,
@@ -204,6 +220,7 @@ pub(super) fn post(url: &Url, body: &[u8]) -> Option<u32> {
 impl Conn {
     fn open(url: &Url) -> Option<Conn> {
         let session = open_session()?;
+        // SAFETY: each handle is checked before use and closed by its Handle, and every buffer outlives its call.
         unsafe {
             let host = wide(&url.host);
             let connect = Handle(WinHttpConnect(session.0, host.as_ptr(), url.port, 0));
@@ -246,7 +263,7 @@ impl Conn {
             WinHttpSetOption(
                 ws,
                 WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT,
-                &close_secs as *const u32 as *const c_void,
+                (&raw const close_secs).cast::<c_void>(),
                 4,
             );
             Some(Conn {
@@ -266,7 +283,7 @@ struct Rx {
 }
 
 impl Rx {
-    fn raise(&self, hub: &Hub, flag: &AtomicBool) {
+    fn raise(hub: &Hub, flag: &AtomicBool) {
         let _guard = hub.lock();
         flag.store(true, Ordering::Release);
         hub.cv.notify_all();
@@ -302,7 +319,7 @@ pub(super) fn run(hub: &'static Hub) {
         }
         let started = Instant::now();
         let outcome = match Url::parse(&want.url).and_then(|u| Conn::open(&u)) {
-            Some(conn) => session(hub, conn, &want),
+            Some(conn) => session(hub, &conn, &want),
             None => Outcome::Failed,
         };
         refused = None;
@@ -332,7 +349,7 @@ pub(super) fn run(hub: &'static Hub) {
             s = hub
                 .cv
                 .wait_timeout(s, left)
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .0;
         }
         if s.want.as_ref() != Some(&want) {
@@ -341,7 +358,7 @@ pub(super) fn run(hub: &'static Hub) {
     }
 }
 
-fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
+fn session(hub: &'static Hub, conn: &Conn, want: &Want) -> Outcome {
     let room = want.room();
     let join = Msg::Join {
         room,
@@ -362,7 +379,7 @@ fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
         peer: AtomicU16::new(0),
     });
     let spawned = {
-        let (ws, rx) = (conn.ws.clone(), rx.clone());
+        let (ws, rx) = (std::sync::Arc::clone(&conn.ws), std::sync::Arc::clone(&rx));
         std::thread::Builder::new()
             .name("ehud-relay-rx".into())
             .spawn(move || receive(hub, &ws, &rx, id, room))
@@ -384,11 +401,15 @@ fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
         if rx.end.load(Ordering::Acquire) {
             break Outcome::Lost;
         }
-        let now = epoch.elapsed().as_millis() as u64;
+        let now = crate::num::to_u64(epoch.elapsed().as_millis());
         let dmg = s.dmg;
         let run = s.run.as_ref().map(|r| &r.summary);
         if runs.due(now, run) {
-            let payload = s.run.as_ref().map(|r| r.encode()).unwrap_or_default();
+            let payload = s
+                .run
+                .as_ref()
+                .map(super::OwnRun::encode)
+                .unwrap_or_default();
             drop(s);
             if !conn.ws.send(&Msg::Run(payload).encode()) {
                 break Outcome::Lost;
@@ -402,8 +423,8 @@ fn session(hub: &'static Hub, conn: Conn, want: &Want) -> Outcome {
             }
             continue;
         }
-        let wait = throttle.wait_ms(now, dmg).min(runs.wait_ms(now, run));
-        drop(hub.cv.wait_timeout(s, Duration::from_millis(wait)));
+        let pause = throttle.wait_ms(now, dmg).min(runs.wait_ms(now, run));
+        drop(hub.cv.wait_timeout(s, Duration::from_millis(pause)));
     };
     let code = rx.code.load(Ordering::Relaxed);
     conn.ws.shutdown(code);
@@ -429,9 +450,10 @@ fn wait_done(hub: &Hub, rx: &Rx) -> bool {
         s = hub
             .cv
             .wait_timeout(s, left.min(Duration::from_millis(50)))
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .0;
     }
+    drop(s);
     true
 }
 
@@ -492,9 +514,9 @@ fn receive(hub: &Hub, ws: &Ws, rx: &Rx, id: u64, room: Room) {
             bad = true;
             msg = Vec::new();
             rx.code.store(POLICY, Ordering::Relaxed);
-            rx.raise(hub, &rx.end);
+            Rx::raise(hub, &rx.end);
         }
     }
-    rx.raise(hub, &rx.end);
-    rx.raise(hub, &rx.done);
+    Rx::raise(hub, &rx.end);
+    Rx::raise(hub, &rx.done);
 }

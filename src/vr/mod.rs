@@ -6,19 +6,19 @@ use crate::process;
 use pose::M34;
 use std::time::Instant;
 
-pub use pose::{Hand, Place};
+pub(crate) use pose::{Hand, Place};
 
 const OVERLAY_KEY: &str = "whyknot.eclipticahud";
 const OVERLAY_NAME: &str = "Ecliptica HUD";
 const PARTY_KEY: &str = "whyknot.eclipticahud.party";
 const PARTY_NAME: &str = "Ecliptica HUD shared damage";
-pub const WIDTH_METERS: f32 = 0.28;
+pub(crate) const WIDTH_METERS: f32 = 0.28;
 const RETRY_SECS: u64 = 10;
 const MAX_FAILURES: u32 = 3;
 const MAX_GRIP_OFFSET_M: f32 = 0.25;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct VrConfig {
+pub(crate) struct VrConfig {
     pub hand: Hand,
     pub place: Place,
 }
@@ -50,7 +50,7 @@ fn apply(cfg: &mut VrConfig, key: &str, value: &str) {
     }
 }
 
-pub fn config_from(text: &str, env: &dyn Fn(&str) -> Option<String>) -> VrConfig {
+pub(crate) fn config_from(text: &str, env: &dyn Fn(&str) -> Option<String>) -> VrConfig {
     let mut cfg = VrConfig::default();
     for line in text.lines() {
         if let Some((k, v)) = line.split_once('=') {
@@ -65,7 +65,7 @@ pub fn config_from(text: &str, env: &dyn Fn(&str) -> Option<String>) -> VrConfig
     cfg
 }
 
-pub fn load_config() -> VrConfig {
+pub(crate) fn load_config() -> VrConfig {
     let text = std::env::var_os("APPDATA")
         .map(|b| {
             std::path::PathBuf::from(b)
@@ -111,13 +111,14 @@ fn grip_for(context: &openvr::Context, index: openvr::TrackedDeviceIndex, hand: 
         return pose::grip_for_model("", hand);
     };
     if let Ok(models) = context.render_models() {
+        // SAFETY: ControllerState is plain data for which all zeroes is a valid value.
         let state: openvr::ControllerState = unsafe { std::mem::zeroed() };
         let mode = openvr::render_models::ControllerMode::default();
         for name in [c"openxr_grip", c"handgrip"] {
-            if let Some(s) = models.component_state(&model, name, &state, &mode) {
-                if plausible_grip(&s.tracking_to_component_local) {
-                    return s.tracking_to_component_local;
-                }
+            if let Some(s) = models.component_state(&model, name, &state, &mode)
+                && plausible_grip(&s.tracking_to_component_local)
+            {
+                return s.tracking_to_component_local;
             }
         }
     }
@@ -144,17 +145,27 @@ struct Inner {
     main_wh: (f32, f32),
 }
 
-pub struct VrOverlay {
+pub(crate) struct VrOverlay {
     inner: Option<Inner>,
     last_try: Option<Instant>,
     config: VrConfig,
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum VrStatus {
+pub(crate) enum VrStatus {
     Off,
     On,
     Failing,
+}
+
+pub(crate) struct Panel<'a> {
+    pub(crate) rgba: &'a [u8],
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) changed: bool,
+    pub(crate) visible: bool,
+    pub(crate) alpha: f32,
+    pub(crate) scale: f32,
 }
 
 struct VrFrame<'a> {
@@ -209,27 +220,24 @@ impl Slot {
     }
 
     fn push(&mut self, context: &openvr::Context, f: &VrFrame, target: Option<(u32, M34)>) {
-        if self.visible != f.visible {
-            if let Ok(mut overlay) = context.overlay() {
-                if overlay.set_visibility(self.handle, f.visible).is_ok() {
-                    self.visible = f.visible;
-                }
-            }
+        if self.visible != f.visible
+            && let Ok(mut overlay) = context.overlay()
+            && overlay.set_visibility(self.handle, f.visible).is_ok()
+        {
+            self.visible = f.visible;
         }
         let alpha = f.alpha.clamp(0.0, 1.0);
-        if self.alpha != alpha {
-            if let Ok(mut overlay) = context.overlay() {
-                if overlay.set_opacity(self.handle, alpha).is_ok() {
-                    self.alpha = alpha;
-                }
-            }
+        if self.alpha.to_bits() != alpha.to_bits()
+            && let Ok(mut overlay) = context.overlay()
+            && overlay.set_opacity(self.handle, alpha).is_ok()
+        {
+            self.alpha = alpha;
         }
-        if self.width_m != f.width_m {
-            if let Ok(mut overlay) = context.overlay() {
-                if overlay.set_width(self.handle, f.width_m).is_ok() {
-                    self.width_m = f.width_m;
-                }
-            }
+        if self.width_m.to_bits() != f.width_m.to_bits()
+            && let Ok(mut overlay) = context.overlay()
+            && overlay.set_width(self.handle, f.width_m).is_ok()
+        {
+            self.width_m = f.width_m;
         }
         self.place(context, target);
         if !(f.changed || self.needs_frame) || f.rgba.is_empty() {
@@ -237,7 +245,13 @@ impl Slot {
         }
         let ok = match context.overlay() {
             Ok(mut overlay) => overlay
-                .set_raw_data(self.handle, f.rgba, f.width as usize, f.height as usize, 4)
+                .set_raw_data(
+                    self.handle,
+                    f.rgba,
+                    crate::num::to_usize(f.width),
+                    crate::num::to_usize(f.height),
+                    4,
+                )
                 .is_ok(),
             Err(_) => false,
         };
@@ -254,7 +268,7 @@ fn frame_wh(f: &VrFrame) -> (f32, f32) {
     let h = if f.width == 0 {
         0.0
     } else {
-        f.width_m * f.height as f32 / f.width as f32
+        f.width_m * crate::num::to_f32(f.height) / crate::num::to_f32(f.width)
     };
     (f.width_m, h)
 }
@@ -289,7 +303,7 @@ impl Inner {
 }
 
 impl VrOverlay {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         VrOverlay {
             inner: None,
             last_try: None,
@@ -297,7 +311,7 @@ impl VrOverlay {
         }
     }
 
-    pub fn set_config(&mut self, config: VrConfig) {
+    pub(crate) fn set_config(&mut self, config: VrConfig) {
         self.config = config;
     }
 
@@ -306,9 +320,9 @@ impl VrOverlay {
         if !process::running("vrserver.exe") {
             return;
         }
-        let context = match unsafe { openvr::init(openvr::ApplicationType::Overlay) } {
-            Ok(c) => c,
-            Err(_) => return,
+        // SAFETY: this runs only while `inner` is None, which means no other context is live.
+        let Ok(context) = (unsafe { openvr::init(openvr::ApplicationType::Overlay) }) else {
+            return;
         };
         let Some(main) = Slot::create(&context, Kind::Main, true) else {
             return;
@@ -323,7 +337,7 @@ impl VrOverlay {
         });
     }
 
-    pub fn status(&self) -> VrStatus {
+    pub(crate) fn status(&self) -> VrStatus {
         match &self.inner {
             None => VrStatus::Off,
             Some(inner) if inner.main.failures > 0 => VrStatus::Failing,
@@ -331,25 +345,15 @@ impl VrOverlay {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit(
-        &mut self,
-        rgba: &[u8],
-        width: u32,
-        height: u32,
-        changed: bool,
-        visible: bool,
-        alpha: f32,
-        scale: f32,
-    ) {
+    pub(crate) fn submit(&mut self, panel: &Panel<'_>) {
         let frame = &VrFrame {
-            rgba,
-            width,
-            height,
-            changed,
-            visible,
-            alpha,
-            width_m: pose::panel_width(self.config.place, WIDTH_METERS * scale),
+            rgba: panel.rgba,
+            width: panel.width,
+            height: panel.height,
+            changed: panel.changed,
+            visible: panel.visible,
+            alpha: panel.alpha,
+            width_m: pose::panel_width(self.config.place, WIDTH_METERS * panel.scale),
         };
         if self.inner.is_none() {
             let due = self
@@ -374,26 +378,16 @@ impl VrOverlay {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit_party(
-        &mut self,
-        rgba: &[u8],
-        width: u32,
-        height: u32,
-        changed: bool,
-        visible: bool,
-        alpha: f32,
-        scale: f32,
-    ) {
+    pub(crate) fn submit_party(&mut self, panel: &Panel<'_>) {
         let cfg = self.config;
         let frame = &VrFrame {
-            rgba,
-            width,
-            height,
-            changed,
-            visible,
-            alpha,
-            width_m: pose::panel_width(cfg.place, WIDTH_METERS * scale),
+            rgba: panel.rgba,
+            width: panel.width,
+            height: panel.height,
+            changed: panel.changed,
+            visible: panel.visible,
+            alpha: panel.alpha,
+            width_m: pose::panel_width(cfg.place, WIDTH_METERS * panel.scale),
         };
         let Some(inner) = self.inner.as_mut() else {
             return;
@@ -415,10 +409,10 @@ impl VrOverlay {
             return;
         }
         slot.push(&inner.context, frame, target);
-        if slot.failures >= MAX_FAILURES {
-            if let Ok(mut overlay) = inner.context.overlay() {
-                let _ = overlay.set_visibility(slot.handle, false);
-            }
+        if slot.failures >= MAX_FAILURES
+            && let Ok(mut overlay) = inner.context.overlay()
+        {
+            let _ = overlay.set_visibility(slot.handle, false);
         }
     }
 }
@@ -497,11 +491,11 @@ mod tests {
 
     #[test]
     fn party_overlay_sits_beside_the_main_one_with_tops_aligned() {
-        let main_h = |s: f32| WIDTH_METERS * s * 640.0 / 360.0;
-        let party_h = |s: f32| WIDTH_METERS * s * 392.0 / 360.0;
+        let main_height = |s: f32| WIDTH_METERS * s * 640.0 / 360.0;
+        let party_height = |s: f32| WIDTH_METERS * s * 392.0 / 360.0;
         for scale in [0.5f32, 1.0, 1.5, 2.0] {
-            let main_wh = (WIDTH_METERS * scale, main_h(scale));
-            let party_wh = (WIDTH_METERS * scale, party_h(scale));
+            let main_wh = (WIDTH_METERS * scale, main_height(scale));
+            let party_wh = (WIDTH_METERS * scale, party_height(scale));
             let m = pose::OLD_TRANSFORM;
             let p = pose::party(
                 &m,
@@ -516,8 +510,8 @@ mod tests {
                     assert_eq!(m[r][c], p[r][c]);
                 }
             }
-            let main_top = m[2][3] + main_h(scale) / 2.0;
-            let party_top = p[2][3] + party_h(scale) / 2.0;
+            let main_top = m[2][3] + main_height(scale) / 2.0;
+            let party_top = p[2][3] + party_height(scale) / 2.0;
             assert!((main_top - party_top).abs() < 0.001, "{scale}");
             let gap = (p[0][3] - m[0][3]) - WIDTH_METERS * scale;
             assert!((gap - 0.02 * scale).abs() < 0.0005, "{scale} {gap}");

@@ -8,23 +8,24 @@ mod settings;
 mod tests;
 mod tick;
 
-pub use settings::{fit_scale, WINDOW_STEPS};
+pub(crate) use settings::{WINDOW_STEPS, fit_scale};
 
 use crate::discord::{self, Link, Presence};
 use crate::game::state::GameState;
 use crate::history::History;
+use crate::hud::flags::{Flag, Flags};
 use crate::hud::render::{
-    tip_ready, Env, Hit, Info, LogHit, PartyHit, Renderer, RunSync, LOGICAL_H, LOGICAL_W, LOG_H,
-    LOG_W, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE, PARTY_H, PARTY_W,
+    Env, Hit, Info, LOG_H, LOG_W, LOGICAL_H, LOGICAL_W, LogHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA,
+    MIN_SCALE, PARTY_H, PARTY_W, PartyHit, Renderer, RunSync, tip_ready,
 };
 use crate::hud::timeline::Filter;
 use crate::update::Badge;
 use crate::vr::VrOverlay;
-use crate::vrchat::log::{log_dir, LogWatch};
+use crate::vrchat::log::{LogWatch, log_dir};
 use std::time::Instant;
 use windows_sys::Win32::Foundation::HWND;
 
-pub struct LogState {
+pub(crate) struct LogState {
     pub hwnd: HWND,
     pub dpi: u32,
     pub renderer: Renderer,
@@ -46,7 +47,7 @@ pub struct LogState {
     rows: usize,
 }
 
-pub struct PartyWin {
+pub(crate) struct PartyWin {
     pub hwnd: HWND,
     pub dpi: u32,
     pub renderer: Renderer,
@@ -62,7 +63,8 @@ pub struct PartyWin {
     last_tip: Option<PartyHit>,
 }
 
-pub struct App {
+pub(crate) struct App {
+    pub flags: Flags,
     pub gs: GameState,
     pub watch: LogWatch,
     archive: archive::Archive,
@@ -76,33 +78,20 @@ pub struct App {
     pub hover: Option<Hit>,
     pub hover_at: Option<Instant>,
     pub pressed: Option<Hit>,
-    pub tracking: bool,
-    pub sound_on: bool,
-    pub topmost: bool,
-    pub discord_on: bool,
-    pub usage_on: bool,
-    pub usage_failing: bool,
-    pub board_on: bool,
     board_armed: Option<Instant>,
-    pub board_deleting: bool,
     pub board_status: u8,
-    pub usage_ask: bool,
-    pub party_on: bool,
     party: party::PartyState,
     presence: Option<Presence>,
     presence_at: Option<Instant>,
     link: Link,
     pub sel_run: Option<usize>,
     pub sel_group: Option<usize>,
-    pub vrc_running: bool,
     vrc_checked: Option<Instant>,
     last_env: Option<Env>,
     pub dpi: u32,
     pub scale: f32,
     pub scale_cap: f32,
     pub alpha: u8,
-    pub settings_open: bool,
-    pub stages_on: bool,
     pub split_top: usize,
     split_wheel_acc: i32,
     split_seen: Option<(usize, usize)>,
@@ -113,19 +102,16 @@ pub struct App {
     progress_shown: f32,
     taken_flash_at: Option<Instant>,
     last_taken_seq: u64,
-    primed: bool,
     dps_shown: f32,
     fight_dps_shown: f32,
     taken_shown: f32,
     taken_rate_shown: f32,
     dead_since: Option<Instant>,
-    was_dead: bool,
     last_tip: Option<Hit>,
     last_sync: RunSync,
     last_log_tip: Option<LogHit>,
     timer_ms: u32,
     badge: Badge,
-    prompt_open: bool,
 }
 
 static BLIP: &[u8] = include_bytes!("../../../assets/target.wav");
@@ -135,10 +121,11 @@ static YOU: &[u8] = include_bytes!("../../../assets/target_you.wav");
 fn play(wav: &'static [u8]) {
     let _ = wav;
     #[cfg(not(test))]
+    // SAFETY: `wav` is a 'static buffer, which SND_ASYNC with SND_MEMORY needs to stay valid while it plays.
     unsafe {
         use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
         PlaySoundW(
-            wav.as_ptr() as _,
+            wav.as_ptr().cast(),
             std::ptr::null_mut(),
             SND_ASYNC | SND_MEMORY | SND_NODEFAULT,
         );
@@ -146,7 +133,7 @@ fn play(wav: &'static [u8]) {
 }
 
 impl App {
-    pub fn new(dpi: u32) -> Self {
+    pub(crate) fn new(dpi: u32) -> Self {
         App {
             gs: GameState::default(),
             watch: LogWatch::new(),
@@ -195,33 +182,42 @@ impl App {
             hover: None,
             hover_at: None,
             pressed: None,
-            tracking: false,
-            sound_on: true,
-            topmost: true,
-            discord_on: false,
-            usage_on: false,
-            usage_failing: false,
-            board_on: false,
+            flags: Flags::default()
+                .with(Flag::Tracking, false)
+                .with(Flag::Sound, true)
+                .with(Flag::Topmost, true)
+                .with(Flag::Discord, false)
+                .with(Flag::Usage, false)
+                .with(Flag::UsageFailing, false)
+                .with(Flag::Board, false)
+                .with(Flag::BoardDeleting, false)
+                .with(Flag::UsageAsk, false)
+                .with(Flag::Party, false)
+                .with(Flag::VrcRunning, true)
+                .with(Flag::SettingsOpen, false)
+                .with(Flag::Stages, false)
+                .with(Flag::Primed, false)
+                .with(Flag::WasDead, false)
+                .with(Flag::PromptOpen, false),
+
             board_armed: None,
-            board_deleting: false,
+
             board_status: crate::board::OK,
-            usage_ask: false,
-            party_on: false,
+
             party: party::PartyState::new(),
             presence: None,
             presence_at: None,
             link: Link::Off,
             sel_run: None,
             sel_group: None,
-            vrc_running: true,
+
             vrc_checked: None,
             last_env: None,
             dpi,
             scale: 1.0,
             scale_cap: MAX_SCALE,
             alpha: MAX_ALPHA,
-            settings_open: false,
-            stages_on: false,
+
             split_top: 0,
             split_wheel_acc: 0,
             split_seen: None,
@@ -232,25 +228,24 @@ impl App {
             progress_shown: 0.0,
             taken_flash_at: None,
             last_taken_seq: 0,
-            primed: false,
+
             dps_shown: 0.0,
             fight_dps_shown: 0.0,
             taken_shown: 0.0,
             taken_rate_shown: 0.0,
             dead_since: None,
-            was_dead: false,
+
             last_tip: None,
             last_sync: RunSync::Idle,
             last_log_tip: None,
             timer_ms: 1000,
             badge: Badge::None,
-            prompt_open: false,
         }
     }
 
-    pub fn rescale(&mut self) {
+    pub(crate) fn rescale(&mut self) {
         let scale = self.shown_scale();
-        let eff = |dpi: u32| (dpi as f32 * scale).round() as u32;
+        let eff = |dpi: u32| crate::num::to_u32((crate::num::to_f32(dpi) * scale).round());
         self.renderer = Renderer::new(eff(self.dpi), LOGICAL_W, LOGICAL_H);
         self.log.renderer = Renderer::new(eff(self.log.dpi), LOG_W, LOG_H);
         self.party_win.renderer = Renderer::new(eff(self.party_win.dpi), PARTY_W, PARTY_H);
@@ -258,44 +253,44 @@ impl App {
         self.party_win.vr_rgba.clear();
     }
 
-    pub fn alpha_byte(&self) -> u8 {
-        (self.alpha as u32 * 255 / 100) as u8
+    pub(crate) fn alpha_byte(&self) -> u8 {
+        crate::num::to_u8(u32::from(self.alpha) * 255 / 100)
     }
 
-    pub fn update_ready(&self) -> bool {
+    pub(crate) fn update_ready(&self) -> bool {
         matches!(self.badge, Badge::Ready(_) | Badge::Failed(_))
     }
 
-    pub fn prompt_shown(&self) -> bool {
-        self.prompt_open && self.badge != Badge::None && self.gs.boss.is_none()
+    pub(crate) fn prompt_shown(&self) -> bool {
+        self.flags.has(Flag::PromptOpen) && self.badge != Badge::None && self.gs.boss.is_none()
     }
 
-    pub fn can_restart(&self) -> bool {
+    pub(crate) fn can_restart(&self) -> bool {
         self.gs.boss.is_none()
     }
 
-    pub fn usage_prompt_shown(&self) -> bool {
-        self.usage_ask && !self.prompt_shown() && self.gs.boss.is_none()
+    pub(crate) fn usage_prompt_shown(&self) -> bool {
+        self.flags.has(Flag::UsageAsk) && !self.prompt_shown() && self.gs.boss.is_none()
     }
 
-    pub fn skip_update(&mut self) -> Option<String> {
-        self.prompt_open = false;
+    pub(crate) fn skip_update(&mut self) -> Option<String> {
+        self.flags.set(Flag::PromptOpen, false);
         let tag = crate::update::skip();
         self.badge = crate::update::badge();
         tag
     }
 
-    pub fn set_history(&mut self, db: Option<History>) {
+    pub(crate) fn set_history(&mut self, db: Option<History>) {
         self.archive.db = db;
     }
 
-    pub fn backfill_history(&mut self) {
+    pub(crate) fn backfill_history(&mut self) {
         let dir = log_dir();
         archive::backfill(&mut self.gs, dir.as_deref(), self.archive.db.as_mut());
     }
 
-    pub fn env(&self) -> Env {
-        if !self.vrc_running {
+    pub(crate) fn env(&self) -> Env {
+        if !self.flags.has(Flag::VrcRunning) {
             Env::NoVrchat
         } else if !self.gs.in_ecliptica() {
             Env::NotInWorld
@@ -304,12 +299,11 @@ impl App {
         }
     }
 
-    pub fn hit_enabled(&self, hit: Hit) -> bool {
+    pub(crate) fn hit_enabled(&self, hit: Hit) -> bool {
         if self.prompt_shown() {
             return match hit {
-                Hit::Close | Hit::Log | Hit::Pin | Hit::Party => true,
                 Hit::UpdateNow => self.update_ready(),
-                Hit::UpdateLater => true,
+                Hit::Close | Hit::Log | Hit::Pin | Hit::Party | Hit::UpdateLater => true,
                 Hit::UpdateSkip => matches!(self.badge, Badge::Ready(_)),
                 _ => false,
             };
@@ -321,21 +315,26 @@ impl App {
             );
         }
         match hit {
-            Hit::Close | Hit::Log | Hit::Pin | Hit::Settings | Hit::Party => true,
-            Hit::Discord | Hit::Sound | Hit::Usage | Hit::Board => self.settings_open,
-            Hit::BoardDelete => self.settings_open && !self.board_deleting,
-            Hit::ScaleDown => self.settings_open && self.shown_scale() > MIN_SCALE + 0.001,
-            Hit::ScaleUp => self.settings_open && self.shown_scale() < self.scale_max() - 0.001,
-            Hit::AlphaDown => self.settings_open && self.alpha > MIN_ALPHA,
-            Hit::AlphaUp => self.settings_open && self.alpha < MAX_ALPHA,
-            Hit::WindowDown => self.settings_open && self.gs.win() > WINDOW_STEPS[0],
-            Hit::WindowUp => {
-                self.settings_open && self.gs.win() < WINDOW_STEPS[WINDOW_STEPS.len() - 1]
+            Hit::Discord | Hit::Sound | Hit::Usage | Hit::Board => {
+                self.flags.has(Flag::SettingsOpen)
             }
-            Hit::Mute | Hit::FightPrev | Hit::FightNext | Hit::Stages | Hit::Splits
-                if self.settings_open =>
-            {
-                false
+            Hit::BoardDelete => {
+                self.flags.has(Flag::SettingsOpen) && !self.flags.has(Flag::BoardDeleting)
+            }
+            Hit::ScaleDown => {
+                self.flags.has(Flag::SettingsOpen) && self.shown_scale() > MIN_SCALE + 0.001
+            }
+            Hit::ScaleUp => {
+                self.flags.has(Flag::SettingsOpen) && self.shown_scale() < self.scale_max() - 0.001
+            }
+            Hit::AlphaDown => self.flags.has(Flag::SettingsOpen) && self.alpha > MIN_ALPHA,
+            Hit::AlphaUp => self.flags.has(Flag::SettingsOpen) && self.alpha < MAX_ALPHA,
+            Hit::WindowDown => {
+                self.flags.has(Flag::SettingsOpen) && self.gs.win() > WINDOW_STEPS[0]
+            }
+            Hit::WindowUp => {
+                self.flags.has(Flag::SettingsOpen)
+                    && self.gs.win() < WINDOW_STEPS[WINDOW_STEPS.len() - 1]
             }
             Hit::Info(
                 Info::Dealt(_)
@@ -348,7 +347,12 @@ impl App {
                 | Info::TakenMore(_)
                 | Info::TopAttacks,
             ) if self.stages_shown() => false,
-            Hit::Info(
+            Hit::Mute
+            | Hit::FightPrev
+            | Hit::FightNext
+            | Hit::Stages
+            | Hit::Splits
+            | Hit::Info(
                 Info::Boss
                 | Info::Result
                 | Info::Pages
@@ -356,16 +360,17 @@ impl App {
                 | Info::Dealt(_)
                 | Info::DealtGraph
                 | Info::LastKill,
-            ) if self.settings_open => false,
-            Hit::Info(i) if self.settings_open && i.under_settings() => false,
+            ) if self.flags.has(Flag::SettingsOpen) => false,
+            Hit::Info(i) if self.flags.has(Flag::SettingsOpen) && i.under_settings() => false,
             Hit::Info(Info::Version) => !self.update_ready(),
             Hit::Info(Info::Pages) => !self.is_live() && self.viewed_group().is_some(),
             Hit::Info(i) if i.live_only() => self.is_live(),
             Hit::Info(i) if i.history_only() => !self.is_live(),
-            Hit::Info(_) => true,
+            Hit::Close | Hit::Log | Hit::Pin | Hit::Settings | Hit::Party | Hit::Info(_) => true,
             Hit::Update => self.badge != Badge::None,
-            Hit::UpdateNow | Hit::UpdateLater | Hit::UpdateSkip => false,
-            Hit::UsageYes | Hit::UsageNo => false,
+            Hit::UpdateNow | Hit::UpdateLater | Hit::UpdateSkip | Hit::UsageYes | Hit::UsageNo => {
+                false
+            }
             Hit::Mute => self.is_live() && self.gs.boss.is_some(),
             Hit::RunPrev => self.viewed_page() > 0,
             Hit::RunNext => self.sel_run.is_some(),
@@ -376,14 +381,14 @@ impl App {
         }
     }
 
-    pub fn enabled_hit(&self, x: i32, y: i32) -> Option<Hit> {
+    pub(crate) fn enabled_hit(&self, x: i32, y: i32) -> Option<Hit> {
         self.renderer.hit_test_where(x, y, |h| self.hit_enabled(h))
     }
 
-    pub fn activate(&mut self, hit: Hit) -> bool {
+    pub(crate) fn activate(&mut self, hit: Hit) -> bool {
         match hit {
             Hit::Mute | Hit::Sound => {
-                self.sound_on = !self.sound_on;
+                self.flags.set(Flag::Sound, !self.flags.has(Flag::Sound));
                 true
             }
             Hit::RunPrev => self.run_prev(),
@@ -395,19 +400,20 @@ impl App {
                 true
             }
             Hit::Pin => {
-                self.topmost = !self.topmost;
+                self.flags
+                    .set(Flag::Topmost, !self.flags.has(Flag::Topmost));
                 true
             }
             Hit::Discord => {
-                self.set_discord(!self.discord_on);
+                self.set_discord(!self.flags.has(Flag::Discord));
                 true
             }
             Hit::Usage => {
-                self.set_usage(!self.usage_on, true);
+                self.set_usage(!self.flags.has(Flag::Usage));
                 true
             }
             Hit::Board => {
-                self.set_board(!self.board_on);
+                self.set_board(!self.flags.has(Flag::Board));
                 true
             }
             Hit::BoardDelete => {
@@ -424,11 +430,12 @@ impl App {
                 true
             }
             Hit::Settings => {
-                self.settings_open = !self.settings_open;
+                self.flags
+                    .set(Flag::SettingsOpen, !self.flags.has(Flag::SettingsOpen));
                 true
             }
             Hit::Stages => {
-                self.stages_on = !self.stages_on;
+                self.flags.set(Flag::Stages, !self.flags.has(Flag::Stages));
                 self.split_follow();
                 true
             }
@@ -443,50 +450,60 @@ impl App {
             Hit::WindowDown => self.step_window(false),
             Hit::WindowUp => self.step_window(true),
             Hit::Update => {
-                self.prompt_open = true;
+                self.flags.set(Flag::PromptOpen, true);
                 true
             }
             Hit::UpdateLater => {
-                self.prompt_open = false;
+                self.flags.set(Flag::PromptOpen, false);
                 true
             }
             Hit::UsageYes | Hit::UsageNo => {
-                self.usage_ask = false;
-                self.set_usage(hit == Hit::UsageYes, true);
+                self.flags.set(Flag::UsageAsk, false);
+                self.set_usage(hit == Hit::UsageYes);
                 true
             }
             Hit::Close | Hit::UpdateNow | Hit::UpdateSkip | Hit::Splits | Hit::Info(_) => false,
         }
     }
 
-    pub fn set_usage(&mut self, on: bool, fresh: bool) {
-        if on {
-            if let Some(db) = self.archive.db.as_mut() {
-                if fresh || !db.usage_cursors().contains_key("") {
-                    db.usage_start();
-                }
-            }
+    pub(crate) fn set_usage(&mut self, on: bool) {
+        if on && let Some(db) = self.archive.db.as_mut() {
+            db.usage_start();
         }
-        self.usage_on = on;
+        self.store_usage(on);
+    }
+
+    pub(crate) fn restore_usage(&mut self, on: bool) {
+        if on
+            && let Some(db) = self.archive.db.as_mut()
+            && !db.usage_cursors().contains_key("")
+        {
+            db.usage_start();
+        }
+        self.store_usage(on);
+    }
+
+    fn store_usage(&mut self, on: bool) {
+        self.flags.set(Flag::Usage, on);
         crate::usage::ON.store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn set_board(&mut self, on: bool) {
-        self.board_on = on;
+    pub(crate) fn set_board(&mut self, on: bool) {
+        self.flags.set(Flag::Board, on);
         crate::board::ON.store(on, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn delete_board(&mut self) {
-        self.board_deleting = true;
+    pub(crate) fn delete_board(&mut self) {
+        self.flags.set(Flag::BoardDeleting, true);
         crate::board::forget();
     }
 
-    pub fn set_vr_config(&mut self, config: crate::vr::VrConfig) {
+    pub(crate) fn set_vr_config(&mut self, config: crate::vr::VrConfig) {
         self.vr.set_config(config);
     }
 
-    pub fn set_discord(&mut self, on: bool) {
-        self.discord_on = on;
+    pub(crate) fn set_discord(&mut self, on: bool) {
+        self.flags.set(Flag::Discord, on);
         self.presence_at = None;
         if on {
             discord::register_scheme();
@@ -497,7 +514,7 @@ impl App {
     }
 
     fn feed_presence(&mut self, now: u64) {
-        if !self.discord_on
+        if !self.flags.has(Flag::Discord)
             || self
                 .presence_at
                 .is_some_and(|t| t.elapsed().as_millis() < 1000)
@@ -508,7 +525,7 @@ impl App {
         let unix_now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        let activity = if self.vrc_running {
+        let activity = if self.flags.has(Flag::VrcRunning) {
             discord::activity(&self.gs, now, unix_now)
         } else {
             None
@@ -518,7 +535,7 @@ impl App {
         }
     }
 
-    pub fn set_hover(&mut self, over: Option<Hit>) -> bool {
+    pub(crate) fn set_hover(&mut self, over: Option<Hit>) -> bool {
         if over == self.hover {
             return false;
         }
@@ -527,7 +544,7 @@ impl App {
         true
     }
 
-    pub fn tip(&self) -> Option<Hit> {
+    pub(crate) fn tip(&self) -> Option<Hit> {
         self.hover.filter(|_| tip_ready(self.hover_at))
     }
 }

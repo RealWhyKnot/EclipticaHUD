@@ -1,32 +1,32 @@
 use super::sha256::sha256;
-use crate::game::state::{Mark, Summary, MAX_MARKS};
+use crate::game::state::{MAX_MARKS, Mark, Summary};
 
-pub type Room = [u8; 16];
-pub type Member = [u8; 8];
-pub type Claim = [u8; 16];
+pub(crate) type Room = [u8; 16];
+pub(crate) type Member = [u8; 8];
+pub(crate) type Claim = [u8; 16];
 
-pub const JOIN: u8 = 0x01;
-pub const DMG: u8 = 0x02;
-pub const SNAP: u8 = 0x03;
-pub const END: u8 = 0x04;
-pub const DMG2: u8 = 0x05;
-pub const SNAP2: u8 = 0x06;
-pub const JOIN_LEN: usize = 41;
-pub const DMG_LEN: usize = 17;
-pub const DMG2_LEN: usize = 18;
-pub const SNAP_ENTRY: usize = 24;
-pub const SNAP2_ENTRY: usize = 25;
-pub const MAX_MEMBERS: usize = 82;
-pub const MAX_SNAP_LEN: usize = 1 + SNAP2_ENTRY * MAX_MEMBERS;
-pub const MAX_DMG: u64 = 1 << 40;
-pub const MAX_LIFE: u8 = 3;
-pub const RUN: u8 = 0x07;
-pub const RUNS: u8 = 0x08;
-pub const RUN_VERSION: u8 = 1;
-pub const MAX_NAME: usize = 64;
-pub const MAX_RUN_LEN: usize = 7 + MAX_MARKS * (10 + MAX_NAME);
-pub const MAX_AGE: u32 = 86_400;
-pub const MAX_RECV: usize = if MAX_SNAP_LEN > 5 + MAX_RUN_LEN {
+pub(crate) const JOIN: u8 = 0x01;
+pub(crate) const DMG: u8 = 0x02;
+pub(crate) const SNAP: u8 = 0x03;
+pub(crate) const END: u8 = 0x04;
+pub(crate) const DMG2: u8 = 0x05;
+pub(crate) const SNAP2: u8 = 0x06;
+pub(crate) const JOIN_LEN: usize = 41;
+pub(crate) const DMG_LEN: usize = 17;
+pub(crate) const DMG2_LEN: usize = 18;
+pub(crate) const SNAP_ENTRY: usize = 24;
+pub(crate) const SNAP2_ENTRY: usize = 25;
+pub(crate) const MAX_MEMBERS: usize = 82;
+pub(crate) const MAX_SNAP_LEN: usize = 1 + SNAP2_ENTRY * MAX_MEMBERS;
+pub(crate) const MAX_DMG: u64 = 1 << 40;
+pub(crate) const MAX_LIFE: u8 = 3;
+pub(crate) const RUN: u8 = 0x07;
+pub(crate) const RUNS: u8 = 0x08;
+pub(crate) const RUN_VERSION: u8 = 1;
+pub(crate) const MAX_NAME: usize = 64;
+pub(crate) const MAX_RUN_LEN: usize = 7 + MAX_MARKS * (10 + MAX_NAME);
+pub(crate) const MAX_AGE: u32 = 86_400;
+pub(crate) const MAX_RECV: usize = if MAX_SNAP_LEN > 5 + MAX_RUN_LEN {
     MAX_SNAP_LEN
 } else {
     5 + MAX_RUN_LEN
@@ -36,8 +36,9 @@ const KILLED: u8 = 2;
 const LOST: u8 = 4;
 const OPEN: u8 = 8;
 
-pub fn encode_run(s: &Summary, now: u64) -> Vec<u8> {
-    let age = |ts: u64| (now.saturating_sub(ts).min(MAX_AGE as u64) as u32).to_le_bytes();
+pub(crate) fn encode_run(s: &Summary, now: u64) -> Vec<u8> {
+    let age =
+        |ts: u64| crate::num::to_u32(now.saturating_sub(ts).min(u64::from(MAX_AGE))).to_le_bytes();
     let marks: Vec<&Mark> = s
         .marks
         .iter()
@@ -48,7 +49,7 @@ pub fn encode_run(s: &Summary, now: u64) -> Vec<u8> {
     out.push(RUN_VERSION);
     out.extend_from_slice(&age(s.start));
     out.push(s.stages.and_then(|n| u8::try_from(n).ok()).unwrap_or(0));
-    out.push(marks.len() as u8);
+    out.push(crate::num::to_u8(marks.len()));
     for m in marks {
         let flags = (u8::from(m.boss) * BOSS)
             | (u8::from(m.killed) * KILLED)
@@ -59,13 +60,13 @@ pub fn encode_run(s: &Summary, now: u64) -> Vec<u8> {
         if let Some(end) = m.end {
             out.extend_from_slice(&age(end.max(m.start)));
         }
-        out.push(m.name.len() as u8);
+        out.push(crate::num::to_u8(m.name.len()));
         out.extend_from_slice(m.name.as_bytes());
     }
     out
 }
 
-pub fn decode_run(b: &[u8], base: u64) -> Option<Summary> {
+pub(crate) fn decode_run(b: &[u8], base: u64) -> Option<Summary> {
     fn take<'a>(b: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
         let (head, rest) = b.split_at_checked(n)?;
         *b = rest;
@@ -79,10 +80,10 @@ pub fn decode_run(b: &[u8], base: u64) -> Option<Summary> {
     if b.len() > MAX_RUN_LEN || take(&mut b, 1)? != [RUN_VERSION] {
         return None;
     }
-    let ts = |a: u32| base.saturating_sub(a as u64);
+    let ts = |a: u32| base.saturating_sub(u64::from(a));
     let run_age = age(&mut b)?;
     let stages = take(&mut b, 1)?[0];
-    let count = take(&mut b, 1)?[0] as usize;
+    let count = crate::num::to_usize(take(&mut b, 1)?[0]);
     if count > MAX_MARKS {
         return None;
     }
@@ -102,7 +103,7 @@ pub fn decode_run(b: &[u8], base: u64) -> Option<Summary> {
             return None;
         }
         prev = start;
-        let len = take(&mut b, 1)?[0] as usize;
+        let len = crate::num::to_usize(take(&mut b, 1)?[0]);
         let name = std::str::from_utf8(take(&mut b, len)?).ok()?;
         if name.is_empty() || name.chars().any(char::is_control) {
             return None;
@@ -119,13 +120,13 @@ pub fn decode_run(b: &[u8], base: u64) -> Option<Summary> {
     }
     b.is_empty().then_some(Summary {
         start: ts(run_age),
-        stages: (stages > 0).then_some(stages as u32),
+        stages: (stages > 0).then_some(u32::from(stages)),
         marks,
     })
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Totals {
+pub(crate) struct Totals {
     pub dealt: u64,
     pub taken: u64,
     pub life: u8,
@@ -142,7 +143,7 @@ impl From<(u64, u64)> for Totals {
 }
 
 impl Totals {
-    pub fn capped(self) -> Totals {
+    pub(crate) fn capped(self) -> Totals {
         Totals {
             dealt: self.dealt.min(MAX_DMG),
             taken: self.taken.min(MAX_DMG),
@@ -165,14 +166,14 @@ impl Totals {
     }
 }
 
-pub fn room_hash(location: &str) -> Room {
+pub(crate) fn room_hash(location: &str) -> Room {
     let d = sha256(&[b"ehud-room-v1\0", location.as_bytes()]);
     let mut out = [0u8; 16];
     out.copy_from_slice(&d[..16]);
     out
 }
 
-pub fn member_hash(location: &str, usr: &str) -> Member {
+pub(crate) fn member_hash(location: &str, usr: &str) -> Member {
     let d = sha256(&[
         b"ehud-member-v1\0",
         location.as_bytes(),
@@ -184,7 +185,7 @@ pub fn member_hash(location: &str, usr: &str) -> Member {
     out
 }
 
-pub fn claim_hash(key: &[u8; 32], location: &str) -> Claim {
+pub(crate) fn claim_hash(key: &[u8; 32], location: &str) -> Claim {
     let d = sha256(&[b"ehud-claim-v1\0", key, location.as_bytes()]);
     let mut out = [0u8; 16];
     out.copy_from_slice(&d[..16]);
@@ -192,7 +193,7 @@ pub fn claim_hash(key: &[u8; 32], location: &str) -> Claim {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Msg {
+pub(crate) enum Msg {
     Join {
         room: Room,
         member: Member,
@@ -209,7 +210,7 @@ pub enum Msg {
 }
 
 impl Msg {
-    pub fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         match self {
             Msg::Join {
                 room,
@@ -249,7 +250,7 @@ impl Msg {
         }
     }
 
-    pub fn decode(b: &[u8]) -> Option<Msg> {
+    pub(crate) fn decode(b: &[u8]) -> Option<Msg> {
         let (&kind, rest) = b.split_first()?;
         match kind {
             JOIN if b.len() == JOIN_LEN => Some(Msg::Join {
@@ -371,7 +372,7 @@ pub(crate) mod tests {
     fn dmg_fixture() {
         let fx = "0215cd5b07000000002a00000000000000";
         assert_eq!(
-            hex(&Msg::Dmg(tl(123456789, 42, 2)).encode()),
+            hex(&Msg::Dmg(tl(123_456_789, 42, 2)).encode()),
             "0515cd5b07000000002a0000000000000002"
         );
         assert_eq!(
@@ -382,7 +383,7 @@ pub(crate) mod tests {
             hex(&Msg::Dmg(t(MAX_DMG, MAX_DMG)).encode()),
             "050000000000010000".to_string() + "000000000001000000"
         );
-        assert_eq!(Msg::decode(&unhex(fx)), Some(Msg::Dmg(t(123456789, 42))));
+        assert_eq!(Msg::decode(&unhex(fx)), Some(Msg::Dmg(t(123_456_789, 42))));
         let dmg2 = Msg::Dmg(tl(9, 8, 3));
         assert_eq!(Msg::decode(&dmg2.encode()), Some(dmg2));
         let mut bad = Msg::Dmg(tl(9, 8, 3)).encode();
@@ -429,14 +430,14 @@ pub(crate) mod tests {
         assert_eq!(Msg::decode(&[SNAP]), Some(Msg::Snap(Vec::new())));
         assert_eq!(hex(&Msg::Snap(Vec::new()).encode()), "03");
         let full = Msg::Snap(
-            (0..MAX_MEMBERS as u8)
-                .map(|i| ([i; 8], t(i as u64, 1)))
+            (0..crate::num::to_u8(MAX_MEMBERS))
+                .map(|i| ([i; 8], t(u64::from(i), 1)))
                 .collect(),
         );
         let bytes = full.encode();
         assert_eq!(bytes.len(), 1969);
         assert_eq!(Msg::decode(&bytes), Some(full));
-        let mut over = bytes.clone();
+        let mut over = bytes;
         over.extend_from_slice(&[9; SNAP_ENTRY]);
         assert_eq!(Msg::decode(&over), None);
         let mut big = unhex(&want);
@@ -473,15 +474,15 @@ pub(crate) mod tests {
         };
         assert_eq!(e[0].1.life, MAX_LIFE);
         let full = Msg::Snap(
-            (0..MAX_MEMBERS as u8)
-                .map(|i| ([i; 8], tl(i as u64, 1, 1)))
+            (0..crate::num::to_u8(MAX_MEMBERS))
+                .map(|i| ([i; 8], tl(u64::from(i), 1, 1)))
                 .collect(),
         );
         let bytes = full.encode();
         assert_eq!(bytes.len(), MAX_SNAP_LEN);
         assert_eq!(bytes.len(), 2051);
         assert_eq!(Msg::decode(&bytes), Some(full));
-        let mut over = bytes.clone();
+        let mut over = bytes;
         over.extend_from_slice(&[0; SNAP2_ENTRY]);
         assert_eq!(Msg::decode(&over), None);
         let mut long_old = vec![SNAP];
@@ -585,12 +586,14 @@ pub(crate) mod tests {
         assert!(bad(&|_| {}).is_some());
         assert!(bad(&|b| b[0] = 2).is_none());
         assert!(bad(&|b| b.push(0)).is_none());
-        assert!(bad(&|b| {
-            b.pop();
-        })
-        .is_none());
+        assert!(
+            bad(&|b| {
+                b.pop();
+            })
+            .is_none()
+        );
         assert!(bad(&|b| b[6] = 4).is_none());
-        assert!(bad(&|b| b[6] = MAX_MARKS as u8 + 1).is_none());
+        assert!(bad(&|b| b[6] = crate::num::to_u8(MAX_MARKS) + 1).is_none());
         assert!(bad(&|b| b[7] = 0x10).is_none());
         assert!(bad(&|b| b[8] = 0xf5).is_none());
         assert!(bad(&|b| b[13] = 2).is_none());
@@ -602,7 +605,7 @@ pub(crate) mod tests {
             ..sample()
         };
         let b = encode_run(&long, 1500);
-        assert_eq!(b[6] as usize, MAX_MARKS);
+        assert_eq!(crate::num::to_usize(b[6]), MAX_MARKS);
         assert!(b.len() <= MAX_RUN_LEN);
         assert_eq!(decode_run(&b, 1500).unwrap().marks.len(), MAX_MARKS);
         let named = |n: &str| Summary {
@@ -612,18 +615,20 @@ pub(crate) mod tests {
             }],
             ..sample()
         };
-        assert!(encode_run(&named(""), 1500)[6] == 0);
-        assert!(encode_run(&named(&"x".repeat(MAX_NAME + 1)), 1500)[6] == 0);
-        assert!(decode_run(
-            &encode_run(
-                &named(
-                    "a
+        assert_eq!(encode_run(&named(""), 1500)[6], 0);
+        assert_eq!(encode_run(&named(&"x".repeat(MAX_NAME + 1)), 1500)[6], 0);
+        assert!(
+            decode_run(
+                &encode_run(
+                    &named(
+                        "a
 b"
+                    ),
+                    1500
                 ),
                 1500
-            ),
-            1500
-        )
-        .is_none());
+            )
+            .is_none()
+        );
     }
 }

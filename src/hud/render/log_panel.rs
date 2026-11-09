@@ -1,14 +1,20 @@
 use super::frame::LogView;
 use super::hit::LogHit;
-use super::layout::*;
-use super::theme::*;
+use super::layout::{
+    LOG_BODY, LOG_CLOSE_BTN, LOG_COUNT, LOG_H, LOG_TAB_H, LOG_TAB_Y, LOG_TABS, LOG_TRACK, LOG_W,
+};
+use super::theme::{
+    ACCENT, BG, CARD, CARD_HI, DANGER, DIM, EDGE, F_BODY, F_LABEL, F_TINY, GLYPH_CLOSE, TEXT, mix,
+};
 use super::{Ctl, Renderer};
 use crate::game::event::fmt_clock;
 use crate::game::names::boss_name;
 use crate::game::run::base_name;
 use crate::game::source::{describe_source, generic_attacker};
 use crate::hud::timeline::{self, Row};
-use windows_sys::Win32::Graphics::Gdi::*;
+use windows_sys::Win32::Graphics::Gdi::{
+    DT_CENTER, DT_LEFT, DT_RIGHT, DT_VCENTER, GdiFlush, IntersectClipRect, RestoreDC, SaveDC,
+};
 
 struct LogRow<'a> {
     mark: u32,
@@ -19,14 +25,11 @@ struct LogRow<'a> {
 }
 
 impl Renderer {
-    pub fn draw_log(&mut self, src: Option<timeline::Source<'_>>, lv: &LogView) {
+    pub(crate) fn draw_log(&mut self, src: Option<timeline::Source<'_>>, lv: &LogView) {
         self.fill(0, 0, LOG_W, LOG_H, BG);
         let rows = timeline::timeline(src, lv.filter);
         self.text_rect(
-            14,
-            LOG_TAB_Y,
-            74,
-            LOG_TAB_H,
+            (14, LOG_TAB_Y, 74, LOG_TAB_H),
             F_LABEL,
             ACCENT,
             DT_LEFT | DT_VCENTER,
@@ -38,26 +41,22 @@ impl Renderer {
             n => format!("{n} events"),
         };
         let (cx, cy, cw, ch) = LOG_COUNT;
-        self.text_rect(cx, cy, cw, ch, F_TINY, DIM, DT_LEFT | DT_VCENTER, &count);
+        self.text_rect((cx, cy, cw, ch), F_TINY, DIM, DT_LEFT | DT_VCENTER, &count);
         for (filter, label, x, w) in LOG_TABS {
-            let ctl = Ctl::of(
-                true,
-                lv.filter == filter,
-                lv.hover == Some(LogHit::Tab(filter)),
-                false,
-            );
+            let ctl = Ctl::rest(lv.hover == Some(LogHit::Tab(filter))).lit(lv.filter == filter);
             self.text_button((x, LOG_TAB_Y, w, LOG_TAB_H), ctl, label);
         }
-        let close = Ctl::of(true, false, lv.hover == Some(LogHit::Close), false);
+        let close = Ctl::rest(lv.hover == Some(LogHit::Close));
         self.glyph_button(LOG_CLOSE_BTN, close, GLYPH_CLOSE);
 
         let (bx, by, bw, bh) = LOG_BODY;
         if rows.is_empty() {
             let msg = "nothing logged yet";
-            self.text_rect(bx, by, bw, bh, F_BODY, DIM, DT_CENTER | DT_VCENTER, msg);
+            self.text_rect((bx, by, bw, bh), F_BODY, DIM, DT_CENTER | DT_VCENTER, msg);
             if let Some(hit) = lv.tip {
                 self.tooltip(hit.rect(lv.thumb), hit.tip(), LOG_W, LOG_H);
             }
+            // SAFETY: GdiFlush takes no arguments and only waits for pending drawing.
             unsafe { GdiFlush() };
             return;
         }
@@ -77,11 +76,13 @@ impl Renderer {
         if let Some(hit) = lv.tip {
             self.tooltip(hit.rect(lv.thumb), hit.tip(), LOG_W, LOG_H);
         }
+        // SAFETY: GdiFlush takes no arguments and only waits for pending drawing.
         unsafe { GdiFlush() };
     }
 
     fn draw_rows(&self, rows: &[Row], lv: &LogView) {
         let (bx, by, bw, bh) = LOG_BODY;
+        // SAFETY: `self.dc` is this renderer's live DC, and the state saved here is restored before returning.
         unsafe {
             let saved = SaveDC(self.dc);
             IntersectClipRect(
@@ -91,8 +92,14 @@ impl Renderer {
                 self.px(bx + bw),
                 self.px(by + bh),
             );
-            let first = (lv.scroll / timeline::ROW_H as f32).floor().max(0.0) as usize;
-            let mut y = by + (first as i32 * timeline::ROW_H) - lv.scroll as i32 + lv.slide as i32;
+            let first = crate::num::to_usize(
+                (lv.scroll / crate::num::to_f32(timeline::ROW_H))
+                    .floor()
+                    .max(0.0),
+            );
+            let mut y = by + (crate::num::to_i32(first) * timeline::ROW_H)
+                - crate::num::to_i32(lv.scroll)
+                + crate::num::to_i32(lv.slide);
             for row in rows.iter().skip(first) {
                 if y > by + bh {
                     break;
@@ -110,13 +117,10 @@ impl Renderer {
                 self.fill(x, y + 12, w, 1, CARD_HI);
                 let name = boss_name(base_name(&f.name));
                 let label = format!("{name}  {}", &fmt_clock(f.start_ts)[..5]);
-                let tw = label.chars().count() as i32 * 7 + 16;
+                let tw = crate::num::to_i32(label.chars().count()) * 7 + 16;
                 self.fill(x, y, tw, timeline::ROW_H, BG);
                 self.text_rect(
-                    x + 4,
-                    y,
-                    tw,
-                    timeline::ROW_H,
+                    (x + 4, y, tw, timeline::ROW_H),
                     F_LABEL,
                     DIM,
                     DT_LEFT | DT_VCENTER,
@@ -130,7 +134,7 @@ impl Renderer {
                     x,
                     y,
                     w,
-                    LogRow {
+                    &LogRow {
                         mark: DANGER,
                         ts: h.ts,
                         tag: (&h.amount.to_string(), F_BODY, DANGER),
@@ -143,7 +147,7 @@ impl Renderer {
                 x,
                 y,
                 w,
-                LogRow {
+                &LogRow {
                     mark: ACCENT,
                     ts: t.ts,
                     tag: ("aggro", F_TINY, ACCENT),
@@ -155,7 +159,7 @@ impl Renderer {
                 x,
                 y,
                 w,
-                LogRow {
+                &LogRow {
                     mark: DANGER,
                     ts: *ts,
                     tag: ("death", F_TINY, DANGER),
@@ -166,17 +170,29 @@ impl Renderer {
         }
     }
 
-    fn log_row(&self, x: i32, y: i32, w: i32, r: LogRow) {
+    fn log_row(&self, x: i32, y: i32, width: i32, row: &LogRow) {
         let vc = DT_LEFT | DT_VCENTER;
-        let h = timeline::ROW_H;
-        self.rround(x, y + 5, 3, h - 10, 1, r.mark);
-        self.text_rect(x + 12, y, 62, h, F_TINY, DIM, vc, &fmt_clock(r.ts));
-        let (tag, font, color) = r.tag;
-        self.text_rect(x + 76, y, 44, h, font, color, DT_RIGHT | DT_VCENTER, tag);
-        let who_w = if r.what.is_some() { 120 } else { w - 130 };
-        self.text_rect(x + 130, y, who_w, h, F_BODY, r.who.1, vc, r.who.0);
-        if let Some(what) = r.what {
-            self.text_rect(x + 254, y, w - 254, h, F_BODY, DIM, vc, what);
+        let height = timeline::ROW_H;
+        self.rround(x, y + 5, 3, height - 10, 1, row.mark);
+        self.text_rect((x + 12, y, 62, height), F_TINY, DIM, vc, &fmt_clock(row.ts));
+        let (tag, font, color) = row.tag;
+        self.text_rect(
+            (x + 76, y, 44, height),
+            font,
+            color,
+            DT_RIGHT | DT_VCENTER,
+            tag,
+        );
+        let who_w = if row.what.is_some() { 120 } else { width - 130 };
+        self.text_rect(
+            (x + 130, y, who_w, height),
+            F_BODY,
+            row.who.1,
+            vc,
+            row.who.0,
+        );
+        if let Some(what) = row.what {
+            self.text_rect((x + 254, y, width - 254, height), F_BODY, DIM, vc, what);
         }
     }
 }

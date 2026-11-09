@@ -1,11 +1,11 @@
-use crate::game::run::{continues, BossFight, Run, TakenEntry, TargetEntry};
+use crate::game::run::{BossFight, Run, TakenEntry, TargetEntry, continues};
 use crate::game::state::GameState;
 use std::collections::VecDeque;
 
-pub const ROW_H: i32 = 24;
+pub(crate) const ROW_H: i32 = 24;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum Filter {
+pub(crate) enum Filter {
     #[default]
     All,
     Damage,
@@ -13,7 +13,7 @@ pub enum Filter {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Row<'a> {
+pub(crate) enum Row<'a> {
     Hit(&'a TakenEntry),
     Target(&'a TargetEntry),
     Fight(&'a BossFight),
@@ -32,14 +32,14 @@ impl Row<'_> {
 }
 
 #[derive(Clone, Copy)]
-pub struct Source<'a> {
+pub(crate) struct Source<'a> {
     pub fights: &'a [BossFight],
     pub hits: &'a VecDeque<TakenEntry>,
     pub targets: &'a VecDeque<TargetEntry>,
     pub deaths: &'a VecDeque<(u64, u64)>,
 }
 
-pub fn live(gs: &GameState) -> Option<Source<'_>> {
+pub(crate) fn live(gs: &GameState) -> Option<Source<'_>> {
     gs.live_run().map(|r| Source {
         fights: &r.fights,
         hits: &gs.taken,
@@ -48,7 +48,7 @@ pub fn live(gs: &GameState) -> Option<Source<'_>> {
     })
 }
 
-pub fn of_run(r: &Run) -> Source<'_> {
+pub(crate) fn of_run(r: &Run) -> Source<'_> {
     Source {
         fights: &r.fights,
         hits: &r.hits,
@@ -57,7 +57,7 @@ pub fn of_run(r: &Run) -> Source<'_> {
     }
 }
 
-pub fn timeline(src: Option<Source<'_>>, filter: Filter) -> Vec<Row<'_>> {
+pub(crate) fn timeline(src: Option<Source<'_>>, filter: Filter) -> Vec<Row<'_>> {
     let Some(src) = src else {
         return Vec::new();
     };
@@ -88,7 +88,7 @@ pub fn timeline(src: Option<Source<'_>>, filter: Filter) -> Vec<Row<'_>> {
                     .map(|(ts, seq)| Row::Death { ts: *ts, seq: *seq })
             })
             .flatten();
-        let pick = [h, t, f, d].into_iter().flatten().max_by_key(|r| r.key());
+        let pick = [h, t, f, d].into_iter().flatten().max_by_key(Row::key);
         let Some(row) = pick else { break };
         match row {
             Row::Hit(_) => {
@@ -117,31 +117,33 @@ pub fn timeline(src: Option<Source<'_>>, filter: Filter) -> Vec<Row<'_>> {
     result
 }
 
-pub fn content_h(rows: usize) -> i32 {
-    rows as i32 * ROW_H
+pub(crate) fn content_h(rows: usize) -> i32 {
+    crate::num::to_i32(rows) * ROW_H
 }
 
-pub fn max_scroll(rows: usize, view_h: i32) -> f32 {
-    (content_h(rows) - view_h).max(0) as f32
+pub(crate) fn max_scroll(rows: usize, view_h: i32) -> f32 {
+    crate::num::to_f32((content_h(rows) - view_h).max(0))
 }
 
-pub fn thumb(rows: usize, view_h: i32, scroll: f32) -> Option<(i32, i32)> {
+pub(crate) fn thumb(rows: usize, view_h: i32, scroll: f32) -> Option<(i32, i32)> {
     let content = content_h(rows);
     if content <= view_h {
         return None;
     }
-    let h = ((view_h as i64 * view_h as i64 / content as i64) as i32).clamp(24, view_h);
+    let h = crate::num::to_i32(i64::from(view_h) * i64::from(view_h) / i64::from(content))
+        .clamp(24, view_h);
     let max = max_scroll(rows, view_h);
-    let y = ((view_h - h) as f32 * (scroll / max).clamp(0.0, 1.0)) as i32;
+    let y = crate::num::to_i32(crate::num::to_f32(view_h - h) * (scroll / max).clamp(0.0, 1.0));
     Some((y, h))
 }
 
-pub fn drag_scroll(rows: usize, view_h: i32, scroll0: f32, dy: i32) -> f32 {
+pub(crate) fn drag_scroll(rows: usize, view_h: i32, scroll0: f32, dy: i32) -> f32 {
     let Some((_, h)) = thumb(rows, view_h, scroll0) else {
         return 0.0;
     };
-    let range = (view_h - h).max(1) as f32;
-    (scroll0 + dy as f32 * max_scroll(rows, view_h) / range).clamp(0.0, max_scroll(rows, view_h))
+    let range = crate::num::to_f32((view_h - h).max(1));
+    (scroll0 + crate::num::to_f32(dy) * max_scroll(rows, view_h) / range)
+        .clamp(0.0, max_scroll(rows, view_h))
 }
 
 #[cfg(test)]
@@ -275,7 +277,7 @@ mod tests {
     #[test]
     fn scroll_maths() {
         assert_eq!(max_scroll(3, 480), 0.0);
-        assert_eq!(max_scroll(40, 480), (40 * ROW_H - 480) as f32);
+        assert_eq!(max_scroll(40, 480), crate::num::to_f32(40 * ROW_H - 480));
         assert_eq!(thumb(3, 480, 0.0), None);
         let (y, h) = thumb(40, 480, 0.0).unwrap();
         assert_eq!((y, h), (0, 480 * 480 / (40 * ROW_H)));

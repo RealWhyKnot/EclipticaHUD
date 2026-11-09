@@ -2,6 +2,8 @@ use super::*;
 
 #[test]
 fn stage_counter() {
+    const HALLOW: &str =
+        "ECLIPTICA - now in stage: Stage_Hallow on phase: 0.1 as class: Spellhammer";
     let mut gs = GameState::default();
     feed_at(&mut gs, "09:10:01", HALL);
     assert_eq!(gs.stage_no, Some(1));
@@ -15,8 +17,6 @@ fn stage_counter() {
     kill_at(&mut gs, "09:15:00", "Nan", 500);
     feed_at(&mut gs, "09:15:10", "ECLIPTICA - now in intermission");
     assert_eq!(gs.stage_no, Some(1));
-    const HALLOW: &str =
-        "ECLIPTICA - now in stage: Stage_Hallow on phase: 0.1 as class: Spellhammer";
     feed_at(&mut gs, "09:20:00", HALLOW);
     assert_eq!(gs.stage_no, Some(2));
     assert_eq!(gs.runs[0].stage_no, Some(2));

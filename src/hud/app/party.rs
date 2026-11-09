@@ -1,14 +1,15 @@
-use super::anim::*;
 use super::App;
+use super::anim::{FADE_MS, timed};
 use crate::game::names::boss_name;
 use crate::game::run::base_name;
 use crate::game::state::{GameState, Summary};
 use crate::history::{History, PartyRecord, SavedRow};
+use crate::hud::flags::Flag;
 use crate::hud::render::{
-    ease_out_cubic, tip_ready, Env, PartyFight, PartyHit, PartyPane, PartyView, RunSync,
+    Env, PartyFight, PartyHit, PartyPane, PartyView, RunSync, ease_out_cubic, tip_ready,
 };
 use crate::relay::party::{Party, PartyRow};
-use crate::relay::proto::{member_hash, room_hash, Member, Room, Totals};
+use crate::relay::proto::{Member, Room, Totals, member_hash, room_hash};
 use crate::relay::{self, Link, PeerRun, Poll, Relay, Want};
 use std::time::Instant;
 
@@ -72,7 +73,7 @@ impl PartyState {
     }
 
     fn ms(&self, at: Instant) -> u64 {
-        at.saturating_duration_since(self.epoch).as_millis() as u64
+        crate::num::to_u64(at.saturating_duration_since(self.epoch).as_millis())
     }
 
     fn record(&self) -> Option<PartyRecord> {
@@ -179,8 +180,8 @@ fn relay_totals(gs: &GameState, now: u64) -> Option<Totals> {
 }
 
 impl App {
-    pub fn set_party(&mut self, on: bool) {
-        self.party_on = on;
+    pub(crate) fn set_party(&mut self, on: bool) {
+        self.flags.set(Flag::Party, on);
         if !on {
             self.party.table.clear();
             self.party.relay.share_run(None, 0);
@@ -192,14 +193,13 @@ impl App {
         }
     }
 
-    pub fn poll_party(&mut self) -> bool {
-        if !self.party_on && !self.party.pane.on {
+    pub(crate) fn poll_party(&mut self) -> bool {
+        if !self.flags.has(Flag::Party) && !self.party.pane.on {
             return false;
         }
-        let in_world = self.vrc_running && self.gs.in_ecliptica();
+        let in_world = self.flags.has(Flag::VrcRunning) && self.gs.in_ecliptica();
         let want = relay::want(
-            self.party_on,
-            in_world,
+            self.flags.has(Flag::Party) && in_world,
             self.gs.location.as_deref(),
             self.gs.me_usr.as_deref(),
         );
@@ -209,11 +209,11 @@ impl App {
         relay.sync(want.clone(), dmg);
         relay.share_run(want.as_ref().and_then(|_| self.gs.summary()), clock);
         let mut poll = relay.poll();
-        self.catch_up(want.as_ref(), std::mem::take(&mut poll.runs), clock);
+        self.catch_up(want.as_ref(), &std::mem::take(&mut poll.runs), clock);
         self.party_step(Instant::now(), want.as_ref(), Some(poll))
     }
 
-    pub(super) fn catch_up(&mut self, want: Option<&Want>, runs: Vec<PeerRun>, now: u64) {
+    pub(super) fn catch_up(&mut self, want: Option<&Want>, runs: &[PeerRun], now: u64) {
         let p = &mut self.party;
         let room = want.map(Want::room);
         if p.peer_room != room {
@@ -345,10 +345,10 @@ impl App {
                 }
             }
         }
-        if let Some(own) = p.own.filter(|_| self.party_on) {
+        if let Some(own) = p.own.filter(|_| self.flags.has(Flag::Party)) {
             p.table.set_own(now, own, relay_totals(gs, clock));
         }
-        let mut rows = if self.party_on {
+        let mut rows = if self.flags.has(Flag::Party) {
             p.table.view(now)
         } else {
             Vec::new()
@@ -358,7 +358,7 @@ impl App {
             row.name = me.to_string();
         }
         let live = PartyPane {
-            on: self.party_on,
+            on: self.flags.has(Flag::Party),
             ready: want.is_some(),
             link,
             here: gs.roster.len(),
@@ -377,7 +377,7 @@ impl App {
         changed
     }
 
-    pub fn party_toggle(&mut self) {
+    pub(crate) fn party_toggle(&mut self) {
         if self.party_win.visible {
             self.party_close();
         } else {
@@ -385,7 +385,7 @@ impl App {
         }
     }
 
-    pub fn party_open(&mut self) {
+    pub(crate) fn party_open(&mut self) {
         let w = &mut self.party_win;
         w.visible = true;
         w.alpha = 0;
@@ -393,20 +393,23 @@ impl App {
         w.opened_at = Some(Instant::now());
     }
 
-    pub fn party_close(&mut self) {
+    pub(crate) fn party_close(&mut self) {
         let w = &mut self.party_win;
         w.visible = false;
         w.hover = None;
         w.pressed = None;
     }
 
-    pub fn party_hit(&self, x: i32, y: i32) -> Option<PartyHit> {
-        self.party_win
-            .renderer
-            .party_hit_test(x, y, false, self.party.pane.pages > 0)
+    pub(crate) fn party_hit(&self, x: i32, y: i32) -> Option<PartyHit> {
+        self.party_win.renderer.party_hit_test(
+            x,
+            y,
+            crate::hud::render::Pointer::Mouse,
+            self.party.pane.pages > 0,
+        )
     }
 
-    pub fn party_set_hover(&mut self, over: Option<PartyHit>) -> bool {
+    pub(crate) fn party_set_hover(&mut self, over: Option<PartyHit>) -> bool {
         let w = &mut self.party_win;
         if over == w.hover {
             return false;
@@ -416,19 +419,19 @@ impl App {
         true
     }
 
-    pub fn party_tip(&self) -> Option<PartyHit> {
+    pub(crate) fn party_tip(&self) -> Option<PartyHit> {
         let w = &self.party_win;
         w.hover.filter(|_| tip_ready(w.hover_at))
     }
 
-    pub fn party_activate(&mut self, hit: PartyHit) -> bool {
+    pub(crate) fn party_activate(&mut self, hit: PartyHit) -> bool {
         match hit {
             PartyHit::Close => {
                 self.party_close();
                 true
             }
             PartyHit::Toggle => {
-                self.set_party(!self.party_on);
+                self.set_party(!self.flags.has(Flag::Party));
                 self.poll_party();
                 true
             }
@@ -450,10 +453,10 @@ impl App {
     }
 
     pub(super) fn party_vr_shown(&self) -> bool {
-        self.party_win.visible && self.party_on && self.env() == Env::InWorld
+        self.party_win.visible && self.flags.has(Flag::Party) && self.env() == Env::InWorld
     }
 
-    pub fn render_party(&mut self) {
+    pub(crate) fn render_party(&mut self) {
         let view = PartyView {
             pane: &self.party.pane,
             hover: self.party_win.hover,
@@ -482,7 +485,7 @@ impl App {
         let w = &self.party_win;
         let tip_pending = w.hover.is_some() && self.party_tip().is_none();
         let fade = timed(w.opened_at, FADE_MS);
-        let alpha = (ease_out_cubic(fade) * self.alpha_byte() as f32) as u8;
+        let alpha = crate::num::to_u8(ease_out_cubic(fade) * f32::from(self.alpha_byte()));
         let tip = self.party_tip();
         let tip_changed = tip != w.last_tip;
         let anim = w.visible && (fade < 1.0 || tip_pending);
@@ -499,15 +502,15 @@ impl App {
             self.render_party();
         }
         let w = &self.party_win;
-        self.vr.submit_party(
-            &w.vr_rgba,
-            w.renderer.width as u32,
-            w.renderer.height as u32,
-            vr_frame,
-            vr_shown,
-            self.alpha as f32 / 100.0,
-            self.scale,
-        );
+        self.vr.submit_party(&crate::vr::Panel {
+            rgba: &w.vr_rgba,
+            width: w.renderer.width.cast_unsigned(),
+            height: w.renderer.height.cast_unsigned(),
+            changed: vr_frame,
+            visible: vr_shown,
+            alpha: f32::from(self.alpha) / 100.0,
+            scale: self.scale,
+        });
         (anim, visible && (redraw || vr_frame))
     }
 }

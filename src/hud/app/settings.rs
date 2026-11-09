@@ -3,13 +3,14 @@ use crate::hud::render::{MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE};
 
 const SCALE_STEP: f32 = 0.1;
 pub(super) const ALPHA_STEP: u8 = 10;
-pub const WINDOW_STEPS: [u64; 12] = [3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30];
+pub(crate) const WINDOW_STEPS: [u64; 12] = [3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30];
 
-pub fn fit_scale(dpi: u32, size: (i32, i32), work: (i32, i32)) -> f32 {
+pub(crate) fn fit_scale(dpi: u32, size: (i32, i32), work: (i32, i32)) -> f32 {
     let mut s = MAX_SCALE;
     loop {
-        let px = (dpi as f32 * s).round() / 96.0;
-        let fits = (size.0 as f32 * px) as i32 <= work.0 && (size.1 as f32 * px) as i32 <= work.1;
+        let px = (crate::num::to_f32(dpi) * s).round() / 96.0;
+        let fits = crate::num::to_i32(crate::num::to_f32(size.0) * px) <= work.0
+            && crate::num::to_i32(crate::num::to_f32(size.1) * px) <= work.1;
         if fits || s <= MIN_SCALE + 0.001 {
             return s;
         }
@@ -18,20 +19,20 @@ pub fn fit_scale(dpi: u32, size: (i32, i32), work: (i32, i32)) -> f32 {
 }
 
 impl App {
-    pub fn set_scale(&mut self, scale: f32) {
+    pub(crate) fn set_scale(&mut self, scale: f32) {
         self.scale = scale.clamp(MIN_SCALE, MAX_SCALE);
         self.rescale();
     }
 
-    pub fn scale_max(&self) -> f32 {
+    pub(crate) fn scale_max(&self) -> f32 {
         self.scale_cap.clamp(MIN_SCALE, MAX_SCALE)
     }
 
-    pub fn shown_scale(&self) -> f32 {
+    pub(crate) fn shown_scale(&self) -> f32 {
         self.scale.min(self.scale_max())
     }
 
-    pub fn set_scale_cap(&mut self, cap: f32) -> bool {
+    pub(crate) fn set_scale_cap(&mut self, cap: f32) -> bool {
         let before = self.shown_scale();
         self.scale_cap = cap;
         let changed = (self.shown_scale() - before).abs() > 0.001;
@@ -41,7 +42,7 @@ impl App {
         changed
     }
 
-    pub fn set_alpha(&mut self, alpha: u8) {
+    pub(crate) fn set_alpha(&mut self, alpha: u8) {
         self.alpha = alpha.clamp(MIN_ALPHA, MAX_ALPHA);
     }
 
@@ -70,7 +71,7 @@ impl App {
         true
     }
 
-    pub fn set_window(&mut self, window: u64) {
+    pub(crate) fn set_window(&mut self, window: u64) {
         self.gs.window = window.clamp(WINDOW_STEPS[0], WINDOW_STEPS[WINDOW_STEPS.len() - 1]);
     }
 

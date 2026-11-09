@@ -1,7 +1,7 @@
 use crate::game::event::fmt_clock;
 
 pub(super) fn fmt_anim(v: f32) -> String {
-    (v.max(0.0).round() as u64).to_string()
+    crate::num::to_u64(v.max(0.0).round()).to_string()
 }
 
 pub(super) fn fmt_ago(now: u64, ts: u64) -> String {
@@ -49,14 +49,14 @@ pub(super) fn compact(n: u64) -> String {
     }
     let mut drop = n.ilog10() - 2;
     let p = 10u128.pow(drop);
-    let mut m = (n as u128 + p / 2) / p;
+    let mut m = (u128::from(n) + p / 2) / p;
     if m >= 1000 {
         m /= 10;
         drop += 1;
     }
     let k = drop.div_ceil(3);
     let digits = m.to_string();
-    let (int, frac) = digits.split_at((drop + 3 - 3 * k) as usize);
+    let (int, frac) = digits.split_at(crate::num::to_usize(drop + 3 - 3 * k));
     let dot = if frac.is_empty() { "" } else { "." };
-    format!("{int}{dot}{frac}{}", UNITS[k as usize - 1])
+    format!("{int}{dot}{frac}{}", UNITS[crate::num::to_usize(k) - 1])
 }

@@ -1,16 +1,16 @@
-use crate::game::event::{parse_msg, split_line, Event};
+use crate::game::event::{Event, parse_msg, split_line};
 use crate::game::run::{
-    base_name, BossFight, KillSummary, Run, Split, StageStats, TakenEntry, Tally, TargetEntry,
+    BossFight, KillSummary, Run, Split, StageStats, TakenEntry, Tally, TargetEntry, base_name,
 };
 use std::collections::{HashSet, VecDeque};
 
 mod apply;
 mod catchup;
 
-pub use catchup::{Mark, Summary, MAX_MARKS};
+pub(crate) use catchup::{MAX_MARKS, Mark, Summary};
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Life {
+pub(crate) enum Life {
     #[default]
     Alive = 0,
     OneLeft = 1,
@@ -19,11 +19,16 @@ pub enum Life {
 }
 
 impl Life {
-    pub fn wire(self) -> u8 {
-        self as u8
+    pub(crate) fn wire(self) -> u8 {
+        match self {
+            Life::Alive => 0,
+            Life::OneLeft => 1,
+            Life::Down => 2,
+            Life::Out => 3,
+        }
     }
 
-    pub fn from_wire(b: u8) -> Life {
+    pub(crate) fn from_wire(b: u8) -> Life {
         match b {
             1 => Life::OneLeft,
             2 => Life::Down,
@@ -34,7 +39,7 @@ impl Life {
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
-pub enum Mode {
+pub(crate) enum Mode {
     #[default]
     Idle,
     Lobby,
@@ -42,11 +47,24 @@ pub enum Mode {
     Stage,
 }
 
-pub const DEFAULT_WINDOW: u64 = 10;
-pub const TOKEN_ALERT_SECS: u64 = 8;
+pub(crate) const DEFAULT_WINDOW: u64 = 10;
+pub(crate) const TOKEN_ALERT_SECS: u64 = 8;
 
 #[derive(Default)]
-pub struct GameState {
+struct Seen {
+    stage_boss: bool,
+    enemy: bool,
+    pool_reset: bool,
+}
+
+#[derive(Default)]
+struct Dying {
+    cursed: bool,
+    is_final: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct GameState {
     bosses: HashSet<String>,
     pub mode: Mode,
     pub stage: String,
@@ -77,13 +95,11 @@ pub struct GameState {
     pending_tokens: Vec<(bool, u32)>,
     pub tokens_got: u32,
     last_save: Option<u64>,
-    stage_boss_seen: bool,
+    seen: Seen,
     alive: HashSet<u32>,
-    enemy_seen: bool,
     summon_kinds: HashSet<u32>,
     pending_spawns: VecDeque<(u32, u32, u64)>,
     held_clear: Option<u64>,
-    pool_reset_seen: bool,
     pool_known: bool,
     last_death: Option<u64>,
     alive_since: Option<u64>,
@@ -99,8 +115,7 @@ pub struct GameState {
     hits: VecDeque<(u64, u64)>,
     pending_kill: Option<KillSummary>,
     dead_until: u64,
-    cursed: bool,
-    death_final: bool,
+    dying: Dying,
     last_ts: u64,
     seq: u64,
     pub changed: bool,
@@ -115,7 +130,8 @@ impl GameState {
                 ..Default::default()
             });
         }
-        self.runs.last_mut().unwrap()
+        let last = self.runs.len() - 1;
+        &mut self.runs[last]
     }
 
     fn open_fight(&mut self) -> Option<&mut BossFight> {
@@ -126,11 +142,11 @@ impl GameState {
             .filter(|f| f.end_ts.is_none())
     }
 
-    pub fn live_run(&self) -> Option<&Run> {
+    pub(crate) fn live_run(&self) -> Option<&Run> {
         self.runs.last().filter(|r| r.end_ts.is_none())
     }
 
-    pub fn run_splits(&self, i: usize, now: u64) -> Vec<Split> {
+    pub(crate) fn run_splits(&self, i: usize, now: u64) -> Vec<Split> {
         let Some(run) = self.runs.get(i) else {
             return Vec::new();
         };
@@ -140,34 +156,34 @@ impl GameState {
         run.splits(now, open)
     }
 
-    pub fn targets_me(&self) -> bool {
+    pub(crate) fn targets_me(&self) -> bool {
         self.me.is_some() && self.target == self.me
     }
 
-    pub fn relay_dmg(&self) -> Option<(u64, u64)> {
+    pub(crate) fn relay_dmg(&self) -> Option<(u64, u64)> {
         (self.fight_start != 0).then_some((self.fight_dmg, self.fight_taken))
     }
 
-    pub fn in_ecliptica(&self) -> bool {
+    pub(crate) fn in_ecliptica(&self) -> bool {
         self.world
             .as_deref()
             .is_some_and(|w| w.starts_with("Ecliptica"))
     }
 
-    pub fn pre_boss(&self) -> bool {
+    pub(crate) fn pre_boss(&self) -> bool {
         self.mode == Mode::Stage && self.boss.is_none() && self.stage_stats.start_ts != 0
     }
 
-    pub fn enemies_left(&self) -> Option<usize> {
-        (self.pre_boss() && self.pool_known && self.enemy_seen).then_some(self.alive.len())
+    pub(crate) fn enemies_left(&self) -> Option<usize> {
+        (self.pre_boss() && self.pool_known && self.seen.enemy).then_some(self.alive.len())
     }
 
-    pub fn clear_settled(&self, now: u64) -> bool {
+    pub(crate) fn clear_settled(&self, now: u64) -> bool {
         self.stage_clear()
             .is_some_and(|c| now > c + TOKEN_ALERT_SECS)
     }
 
-    pub fn stage_clear(&self) -> Option<u64> {
+    pub(crate) fn stage_clear(&self) -> Option<u64> {
         self.clear_ts.filter(|_| self.pre_boss())
     }
 
@@ -175,12 +191,12 @@ impl GameState {
         self.stage_clear().unwrap_or(now)
     }
 
-    pub fn stage_secs(&self, now: u64) -> u64 {
+    pub(crate) fn stage_secs(&self, now: u64) -> u64 {
         self.stage_end(now)
             .saturating_sub(self.stage_stats.start_ts)
     }
 
-    pub fn stage_dps(&self, now: u64) -> u64 {
+    pub(crate) fn stage_dps(&self, now: u64) -> u64 {
         per_sec(
             self.stage_stats.dmg,
             self.stage_stats.start_ts,
@@ -188,7 +204,7 @@ impl GameState {
         )
     }
 
-    pub fn stage_taken_rate(&self, now: u64) -> u64 {
+    pub(crate) fn stage_taken_rate(&self, now: u64) -> u64 {
         per_sec(
             self.stage_stats.taken,
             self.stage_stats.start_ts,
@@ -196,47 +212,47 @@ impl GameState {
         )
     }
 
-    pub fn tokens_missing(&self) -> Option<(u32, u32)> {
+    pub(crate) fn tokens_missing(&self) -> Option<(u32, u32)> {
         self.tokens_shown().filter(|(got, total)| got < total)
     }
 
-    pub fn tokens_shown(&self) -> Option<(u32, u32)> {
+    pub(crate) fn tokens_shown(&self) -> Option<(u32, u32)> {
         if self.mode != Mode::Stage || self.level_tokens.is_empty() {
             return None;
         }
-        let total = self.level_tokens.len() as u32;
+        let total = crate::num::to_u32(self.level_tokens.len());
         Some((self.tokens_got.min(total), total))
     }
 
-    pub fn is_dead(&self, now: u64) -> bool {
+    pub(crate) fn is_dead(&self, now: u64) -> bool {
         now < self.dead_until
     }
 
-    pub fn life(&self, now: u64) -> Life {
+    pub(crate) fn life(&self, now: u64) -> Life {
         if self.is_dead(now) {
-            if self.death_final {
+            if self.dying.is_final {
                 Life::Out
             } else {
                 Life::Down
             }
-        } else if self.cursed && self.mode == Mode::Stage {
+        } else if self.dying.cursed && self.mode == Mode::Stage {
             Life::OneLeft
         } else {
             Life::Alive
         }
     }
 
-    pub fn feed(&mut self, raw: &str) -> Option<u64> {
+    pub(crate) fn feed(&mut self, raw: &str) -> Option<u64> {
         self.feed_kept(raw).map(|(ts, _)| ts)
     }
 
-    pub fn feed_kept(&mut self, raw: &str) -> Option<(u64, Option<usize>)> {
+    pub(crate) fn feed_kept(&mut self, raw: &str) -> Option<(u64, Option<usize>)> {
         let line = split_line(raw)?;
         let kept = self.feed_msg(line.ts, line.msg);
         Some((line.ts, kept.then(|| raw.len() - line.msg.len())))
     }
 
-    pub fn feed_msg(&mut self, ts: u64, msg: &str) -> bool {
+    pub(crate) fn feed_msg(&mut self, ts: u64, msg: &str) -> bool {
         self.last_ts = self.last_ts.max(ts);
         self.expire_pending(ts);
         self.poll_token_alert(ts);
@@ -255,11 +271,11 @@ impl GameState {
         kept
     }
 
-    pub fn seen(&mut self, ts: u64) {
+    pub(crate) fn seen(&mut self, ts: u64) {
         self.last_ts = self.last_ts.max(ts);
     }
 
-    pub fn last_kill_total(&self) -> Option<(String, u64, u64)> {
+    pub(crate) fn last_kill_total(&self) -> Option<(String, u64, u64)> {
         let k = self.last_kill.as_ref()?;
         let run = self.live_run()?;
         let idx = run
@@ -274,7 +290,7 @@ impl GameState {
         Some((base_name(&k.boss).to_string(), strike, other))
     }
 
-    pub fn win(&self) -> u64 {
+    pub(crate) fn win(&self) -> u64 {
         if self.window == 0 {
             DEFAULT_WINDOW
         } else {
@@ -300,24 +316,24 @@ impl GameState {
         deque.iter().map(|h| h.1).sum::<u64>() / span
     }
 
-    pub fn rolling_dps(&mut self, now: u64) -> u64 {
+    pub(crate) fn rolling_dps(&mut self, now: u64) -> u64 {
         let (window, since) = (self.win(), self.activity_start());
         Self::windowed(&mut self.hits, now, window, since)
     }
 
-    pub fn fight_dps(&self, now: u64) -> u64 {
+    pub(crate) fn fight_dps(&self, now: u64) -> u64 {
         if self.boss.is_none() {
             return 0;
         }
         per_sec(self.fight_dmg, self.fight_start, now)
     }
 
-    pub fn rolling_taken(&mut self, now: u64) -> u64 {
+    pub(crate) fn rolling_taken(&mut self, now: u64) -> u64 {
         let (window, since) = (self.win(), self.activity_start());
         Self::windowed(&mut self.taken_hits, now, window, since)
     }
 
-    pub fn fight_taken_rate(&self, now: u64) -> u64 {
+    pub(crate) fn fight_taken_rate(&self, now: u64) -> u64 {
         if self.boss.is_none() {
             return 0;
         }

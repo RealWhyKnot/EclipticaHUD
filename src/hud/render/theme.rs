@@ -15,20 +15,20 @@ pub(super) const fn rgb(r: u32, g: u32, b: u32) -> u32 {
     r | (g << 8) | (b << 16)
 }
 
-pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+pub(super) fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-pub fn ease_out_cubic(t: f32) -> f32 {
+pub(crate) fn ease_out_cubic(t: f32) -> f32 {
     let u = 1.0 - t.clamp(0.0, 1.0);
     1.0 - u * u * u
 }
 
 pub(super) fn mix(a: u32, b: u32, t: f32) -> u32 {
     let ch = |shift: u32| {
-        let ca = ((a >> shift) & 0xff) as f32;
-        let cb = ((b >> shift) & 0xff) as f32;
-        (lerp(ca, cb, t.clamp(0.0, 1.0)) as u32) << shift
+        let ca = crate::num::to_f32((a >> shift) & 0xff);
+        let cb = crate::num::to_f32((b >> shift) & 0xff);
+        crate::num::to_u32(lerp(ca, cb, t.clamp(0.0, 1.0))) << shift
     };
     ch(0) | ch(8) | ch(16)
 }

@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    GetMonitorInfoW, GetWindowRect, HWND, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
+    MONITOR_FROM_FLAGS, MONITORINFO, MonitorFromRect, RECT, SPI_GETWORKAREA, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, SystemParametersInfoW, data_file, write_data,
+};
 
 pub(super) fn parse_pos(text: &str) -> Option<(i32, i32, bool)> {
     let mut it = text.split_whitespace();
@@ -17,14 +21,15 @@ pub(super) fn monitor_work(r: &RECT) -> Option<RECT> {
 }
 
 fn monitor_info(r: &RECT, flag: MONITOR_FROM_FLAGS) -> Option<RECT> {
+    // SAFETY: `r` is a live RECT, and `info` has its size set before the call fills it.
     unsafe {
         let mon = MonitorFromRect(r, flag);
         if mon.is_null() {
             return None;
         }
         let mut info: MONITORINFO = std::mem::zeroed();
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        (GetMonitorInfoW(mon, &mut info) != 0).then_some(info.rcWork)
+        info.cbSize = crate::num::to_u32(std::mem::size_of::<MONITORINFO>());
+        (GetMonitorInfoW(mon, &raw mut info) != 0).then_some(info.rcWork)
     }
 }
 
@@ -35,15 +40,15 @@ pub(super) fn fit_spot(work: Option<RECT>, x: i32, y: i32, w: i32, h: i32) -> Op
     Some((x, y))
 }
 
-pub(super) fn saved_pos(name: &str, w: i32, h: i32) -> Option<(i32, i32)> {
+pub(super) fn saved_pos(name: &str, width: i32, height: i32) -> Option<(i32, i32)> {
     let (x, y, _) = load_pos(name)?;
-    let r = RECT {
+    let rect = RECT {
         left: x,
         top: y,
-        right: x + w,
-        bottom: y + h,
+        right: x + width,
+        bottom: y + height,
     };
-    fit_spot(monitor_work(&r), x, y, w, h)
+    fit_spot(monitor_work(&rect), x, y, width, height)
 }
 
 pub(super) fn window_pos(hwnd: HWND) -> Option<(i32, i32)> {
@@ -53,7 +58,8 @@ pub(super) fn window_pos(hwnd: HWND) -> Option<(i32, i32)> {
         right: 0,
         bottom: 0,
     };
-    (unsafe { GetWindowRect(hwnd, &mut r) } != 0).then_some((r.left, r.top))
+    // SAFETY: `r` is a live RECT, and the call fails cleanly on a stale handle.
+    (unsafe { GetWindowRect(hwnd, &raw mut r) } != 0).then_some((r.left, r.top))
 }
 
 pub(super) fn save_pos(hwnd: HWND) {
@@ -81,11 +87,12 @@ pub(super) fn work_area() -> RECT {
         right: 1920,
         bottom: 1080,
     };
+    // SAFETY: `work` is a live RECT, which is what SPI_GETWORKAREA writes.
     unsafe {
         SystemParametersInfoW(
             SPI_GETWORKAREA,
             0,
-            &mut work as *mut RECT as *mut core::ffi::c_void,
+            (&raw mut work).cast::<core::ffi::c_void>(),
             0,
         );
     }
@@ -115,6 +122,7 @@ pub(super) fn keep_on_screen(hwnd: HWND) {
         r.bottom - r.top,
     );
     if let Some((x, y)) = spot.filter(|&p| p != (r.left, r.top)) {
+        // SAFETY: the call takes no pointers and fails cleanly on a stale handle.
         unsafe {
             SetWindowPos(
                 hwnd,
@@ -138,7 +146,8 @@ pub(super) fn default_log_pos(main: HWND, w: i32, h: i32) -> (i32, i32) {
         right: 0,
         bottom: 0,
     };
-    unsafe { GetWindowRect(main, &mut mr) };
+    // SAFETY: `mr` is a live RECT, and the call fails cleanly on a stale handle.
+    unsafe { GetWindowRect(main, &raw mut mr) };
     let x = if mx - w - 12 >= work.left {
         mx - w - 12
     } else {
@@ -154,7 +163,8 @@ fn rect_of(hwnd: HWND) -> Option<RECT> {
         right: 0,
         bottom: 0,
     };
-    (unsafe { GetWindowRect(hwnd, &mut r) } != 0).then_some(r)
+    // SAFETY: `r` is a live RECT, and the call fails cleanly on a stale handle.
+    (unsafe { GetWindowRect(hwnd, &raw mut r) } != 0).then_some(r)
 }
 
 pub(super) fn default_party_pos(main: HWND, log: Option<HWND>, w: i32, h: i32) -> (i32, i32) {

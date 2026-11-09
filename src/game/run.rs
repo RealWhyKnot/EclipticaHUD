@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
-pub struct TargetEntry {
+pub(crate) struct TargetEntry {
     pub ts: u64,
     pub seq: u64,
     pub player: String,
@@ -9,7 +9,7 @@ pub struct TargetEntry {
 }
 
 #[derive(Debug, Clone)]
-pub struct TakenEntry {
+pub(crate) struct TakenEntry {
     pub ts: u64,
     pub seq: u64,
     pub amount: u64,
@@ -17,7 +17,7 @@ pub struct TakenEntry {
 }
 
 #[derive(Debug, Clone)]
-pub struct KillSummary {
+pub(crate) struct KillSummary {
     pub ts: u64,
     pub boss: String,
     pub strike: u64,
@@ -25,7 +25,7 @@ pub struct KillSummary {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Tally {
+pub(crate) struct Tally {
     pub who: String,
     pub attack: String,
     pub total: u64,
@@ -47,11 +47,11 @@ fn add_tally(list: &mut Vec<Tally>, who: &str, attack: &str, total: u64, hits: u
     }
 }
 
-pub fn tally(list: &mut Vec<Tally>, who: &str, attack: &str, amount: u64) {
+pub(crate) fn tally(list: &mut Vec<Tally>, who: &str, attack: &str, amount: u64) {
     add_tally(list, who, attack, amount, 1);
 }
 
-pub fn merge_tallies<'a>(groups: impl Iterator<Item = &'a [Tally]>) -> Vec<Tally> {
+pub(crate) fn merge_tallies<'a>(groups: impl Iterator<Item = &'a [Tally]>) -> Vec<Tally> {
     let mut out = Vec::new();
     for t in groups.flatten() {
         add_tally(&mut out, &t.who, &t.attack, t.total, t.hits);
@@ -60,7 +60,7 @@ pub fn merge_tallies<'a>(groups: impl Iterator<Item = &'a [Tally]>) -> Vec<Tally
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct BossFight {
+pub(crate) struct BossFight {
     pub name: String,
     pub start_ts: u64,
     pub end_ts: Option<u64>,
@@ -80,34 +80,34 @@ pub struct BossFight {
 const SERIES_CAP: usize = 7200;
 
 impl BossFight {
-    pub fn secs(&self, now: u64) -> u64 {
+    pub(crate) fn secs(&self, now: u64) -> u64 {
         self.end_ts.unwrap_or(now).saturating_sub(self.start_ts)
     }
 
-    pub fn add_dmg(&mut self, ts: u64, n: u64) {
+    pub(crate) fn add_dmg(&mut self, ts: u64, n: u64) {
         add_at(&mut self.series, ts.saturating_sub(self.start_ts), n);
     }
 
-    pub fn add_taken(&mut self, ts: u64, n: u64) {
+    pub(crate) fn add_taken(&mut self, ts: u64, n: u64) {
         add_at(&mut self.taken_series, ts.saturating_sub(self.start_ts), n);
     }
 }
 
 fn add_at(series: &mut Vec<u32>, i: u64, n: u64) {
-    let i = i as usize;
+    let i = crate::num::to_usize(i);
     if i >= SERIES_CAP {
         return;
     }
     if series.len() <= i {
         series.resize(i + 1, 0);
     }
-    series[i] = series[i].saturating_add(n.min(u32::MAX as u64) as u32);
+    series[i] = series[i].saturating_add(crate::num::to_u32(n.min(u64::from(u32::MAX))));
 }
 
-pub type StageStats = BossFight;
+pub(crate) type StageStats = BossFight;
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Split {
+pub(crate) struct Split {
     pub stage: String,
     pub secs: u64,
     pub dmg: u64,
@@ -117,7 +117,7 @@ pub struct Split {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RunEnd {
+pub(crate) enum RunEnd {
     Won,
     Lost,
     Lobby,
@@ -125,7 +125,7 @@ pub enum RunEnd {
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct Run {
+pub(crate) struct Run {
     pub start_ts: u64,
     pub end_ts: Option<u64>,
     pub stage: String,
@@ -143,36 +143,37 @@ pub struct Run {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Borrowed {
+pub(crate) struct Borrowed {
     pub start_ts: Option<u64>,
     pub skipped: Option<u32>,
 }
 
 impl Run {
-    pub fn stage_count(&self, open: bool) -> Option<u32> {
-        let base = match self.from_start {
-            true => 0,
-            false => self.borrowed?.skipped?,
+    pub(crate) fn stage_count(&self, open: bool) -> Option<u32> {
+        let base = if self.from_start {
+            0
+        } else {
+            self.borrowed?.skipped?
         };
-        Some(base + self.stages.len() as u32 + u32::from(open)).filter(|n| *n > 0)
+        Some(base + crate::num::to_u32(self.stages.len()) + u32::from(open)).filter(|n| *n > 0)
     }
 
-    pub fn dmg(&self) -> u64 {
+    pub(crate) fn dmg(&self) -> u64 {
         self.fights.iter().map(|f| f.dmg).sum::<u64>()
             + self.stages.iter().map(|s| s.dmg).sum::<u64>()
     }
 
-    pub fn taken(&self) -> u64 {
+    pub(crate) fn taken(&self) -> u64 {
         self.fights.iter().map(|f| f.taken).sum::<u64>()
             + self.stages.iter().map(|s| s.taken).sum::<u64>()
     }
 
-    pub fn hit_count(&self) -> u32 {
+    pub(crate) fn hit_count(&self) -> u32 {
         self.fights.iter().map(|f| f.hits).sum::<u32>()
             + self.stages.iter().map(|s| s.hits).sum::<u32>()
     }
 
-    pub fn max_hit(&self) -> u64 {
+    pub(crate) fn max_hit(&self) -> u64 {
         self.fights
             .iter()
             .map(|f| f.max_hit)
@@ -181,11 +182,11 @@ impl Run {
             .unwrap_or(0)
     }
 
-    pub fn kills(&self) -> usize {
+    pub(crate) fn kills(&self) -> usize {
         self.fights.iter().filter(|f| f.kill.is_some()).count()
     }
 
-    pub fn attacks(&self) -> Vec<Tally> {
+    pub(crate) fn attacks(&self) -> Vec<Tally> {
         merge_tallies(
             self.fights
                 .iter()
@@ -194,7 +195,7 @@ impl Run {
         )
     }
 
-    pub fn active_secs(&self, now: u64) -> u64 {
+    pub(crate) fn active_secs(&self, now: u64) -> u64 {
         self.fights
             .iter()
             .chain(&self.stages)
@@ -203,11 +204,11 @@ impl Run {
             .sum()
     }
 
-    pub fn group(&self, i: usize) -> Option<FightGroup<'_>> {
+    pub(crate) fn group(&self, i: usize) -> Option<FightGroup<'_>> {
         FightGroup::of(&self.fights[self.groups().get(i)?.clone()], None)
     }
 
-    pub fn pages(&self) -> Vec<Page> {
+    pub(crate) fn pages(&self) -> Vec<Page> {
         let mut out: Vec<(u64, Page)> = (0..self.stages.len())
             .filter(|&i| {
                 let s = &self.stages[i];
@@ -224,7 +225,7 @@ impl Run {
         out.into_iter().map(|(_, p)| p).collect()
     }
 
-    pub fn page(&self, i: usize) -> Option<FightGroup<'_>> {
+    pub(crate) fn page(&self, i: usize) -> Option<FightGroup<'_>> {
         match self.pages().into_iter().nth(i)? {
             Page::Boss(g) => FightGroup::of(&self.fights[g], None),
             Page::Stage(j) => {
@@ -239,21 +240,23 @@ impl Run {
         }
     }
 
-    pub fn stage_of(&self, p: &Page) -> u32 {
+    pub(crate) fn stage_of(&self, p: &Page) -> u32 {
         match p {
-            Page::Stage(j) => *j as u32 + 1,
+            Page::Stage(j) => crate::num::to_u32(*j) + 1,
             Page::Boss(g) => {
                 let t = self.fights[g.start].start_ts;
-                self.stages
-                    .iter()
-                    .filter(|s| s.start_ts <= t)
-                    .count()
-                    .max(1) as u32
+                crate::num::to_u32(
+                    self.stages
+                        .iter()
+                        .filter(|s| s.start_ts <= t)
+                        .count()
+                        .max(1),
+                )
             }
         }
     }
 
-    pub fn splits(&self, now: u64, open: Option<&StageStats>) -> Vec<Split> {
+    pub(crate) fn splits(&self, now: u64, open: Option<&StageStats>) -> Vec<Split> {
         let now = self.end_ts.unwrap_or(now);
         let stages: Vec<&StageStats> = self.stages.iter().chain(open).collect();
         let mut out: Vec<Split> = stages
@@ -280,7 +283,7 @@ impl Run {
         out
     }
 
-    pub fn groups(&self) -> Vec<std::ops::Range<usize>> {
+    pub(crate) fn groups(&self) -> Vec<std::ops::Range<usize>> {
         let mut out: Vec<std::ops::Range<usize>> = Vec::new();
         for (i, f) in self.fights.iter().enumerate() {
             let chained = i > 0 && continues(&self.fights[i - 1], &f.name);
@@ -293,18 +296,18 @@ impl Run {
     }
 }
 
-pub struct Graph {
+pub(crate) struct Graph {
     pub cols: Vec<u64>,
     pub marks: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Page {
+pub(crate) enum Page {
     Stage(usize),
     Boss(std::ops::Range<usize>),
 }
 
-pub struct FightGroup<'a> {
+pub(crate) struct FightGroup<'a> {
     pub fights: &'a [BossFight],
     pub name: &'a str,
     pub start: u64,
@@ -343,47 +346,47 @@ impl<'a> FightGroup<'a> {
         })
     }
 
-    pub fn is_stage(&self) -> bool {
+    pub(crate) fn is_stage(&self) -> bool {
         self.cleared.is_some()
     }
 
-    pub fn duration(&self, now: u64) -> u64 {
+    pub(crate) fn duration(&self, now: u64) -> u64 {
         self.last.end_ts.unwrap_or(now).saturating_sub(self.start)
     }
 
-    pub fn dps(&self, now: u64) -> u64 {
+    pub(crate) fn dps(&self, now: u64) -> u64 {
         self.dmg / self.duration(now).max(1)
     }
 
-    pub fn graph(&self, now: u64, max_cols: usize) -> Graph {
+    pub(crate) fn graph(&self, now: u64, max_cols: usize) -> Graph {
         self.graph_of(now, max_cols, |f| &f.series)
     }
 
-    pub fn taken_graph(&self, now: u64, max_cols: usize) -> Graph {
+    pub(crate) fn taken_graph(&self, now: u64, max_cols: usize) -> Graph {
         self.graph_of(now, max_cols, |f| &f.taken_series)
     }
 
     fn graph_of(&self, now: u64, max_cols: usize, pick: fn(&BossFight) -> &[u32]) -> Graph {
-        let secs = (self.duration(now) as usize + 1).min(SERIES_CAP);
+        let secs = (crate::num::to_usize(self.duration(now)) + 1).min(SERIES_CAP);
         let per = secs.div_ceil(max_cols.max(1));
         let n = secs.div_ceil(per);
-        let col = |t: u64| (t.saturating_sub(self.start) as usize / per).min(n - 1);
+        let col = |t: u64| (crate::num::to_usize(t.saturating_sub(self.start)) / per).min(n - 1);
         let mut sum = vec![0u64; n];
         for f in self.fights {
             for (i, &d) in pick(f).iter().enumerate() {
-                sum[col(f.start_ts + i as u64)] += d as u64;
+                sum[col(f.start_ts + crate::num::to_u64(i))] += u64::from(d);
             }
         }
         let cols = sum
             .iter()
             .enumerate()
-            .map(|(c, &s)| s / per.min(secs - c * per) as u64)
+            .map(|(c, &s)| s / crate::num::to_u64(per.min(secs - c * per)))
             .collect();
         let marks = self.fights[1..].iter().map(|f| col(f.start_ts)).collect();
         Graph { cols, marks }
     }
 
-    pub fn result(&self) -> &'static str {
+    pub(crate) fn result(&self) -> &'static str {
         match self.cleared {
             Some(true) => return "cleared",
             Some(false) => return "not cleared",
@@ -398,15 +401,15 @@ impl<'a> FightGroup<'a> {
     }
 }
 
-pub fn final_phase(name: &str) -> bool {
+pub(crate) fn final_phase(name: &str) -> bool {
     matches!(base_name(name), "JimBringer" | "Gilgamesh") && phase_num(name) == 3
 }
 
-pub fn continues(prev: &BossFight, name: &str) -> bool {
+pub(crate) fn continues(prev: &BossFight, name: &str) -> bool {
     base_name(&prev.name) == base_name(name) && phase_num(name) > phase_num(&prev.name)
 }
 
-pub fn base_name(name: &str) -> &str {
+pub(crate) fn base_name(name: &str) -> &str {
     let Some(pos) = name.rfind("Phase") else {
         return name;
     };
@@ -418,11 +421,13 @@ pub fn base_name(name: &str) -> &str {
     }
 }
 
-pub fn phase_num(name: &str) -> u32 {
+pub(crate) fn phase_num(name: &str) -> u32 {
     if base_name(name) == name {
         return 1;
     }
-    let pos = name.rfind("Phase").unwrap();
+    let Some(pos) = name.rfind("Phase") else {
+        return 1;
+    };
     name[pos + 5..].parse().unwrap_or(1)
 }
 
@@ -473,7 +478,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(run.groups(), vec![0..2, 2..3, 3..4, 4..5]);
-        assert!(Run::default().groups().is_empty());
+        assert_eq!(Run::default().groups().len(), 0);
     }
 
     #[test]
@@ -525,7 +530,7 @@ mod tests {
                 row("Caves", 20, 70, 0),
             ]
         );
-        assert!(Run::default().splits(0, None).is_empty());
+        assert_eq!(Run::default().splits(0, None).len(), 0);
     }
 
     fn timed(name: &str, start_ts: u64, end_ts: Option<u64>) -> BossFight {
@@ -555,7 +560,7 @@ mod tests {
         f.add_dmg(103, 9);
         f.add_dmg(99, 1);
         assert_eq!(f.series, vec![13, 0, 0, 9]);
-        f.add_dmg(100 + SERIES_CAP as u64, 4);
+        f.add_dmg(100 + crate::num::to_u64(SERIES_CAP), 4);
         assert_eq!(f.series.len(), 4);
         f.add_dmg(101, u64::MAX);
         assert_eq!(f.series[1], u32::MAX);
@@ -592,7 +597,7 @@ mod tests {
         let g = run.group(0).unwrap().graph(0, 77);
         assert!(g.cols.len() <= 77);
         assert!(g.cols.iter().all(|&c| c == 100));
-        assert!(g.marks.is_empty());
+        assert_eq!(g.marks.len(), 0);
     }
 
     #[test]

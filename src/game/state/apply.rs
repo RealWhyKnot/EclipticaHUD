@@ -2,18 +2,17 @@ use super::{GameState, Mode, TOKEN_ALERT_SECS};
 use crate::game::event::Event;
 use crate::game::names::player_summon;
 use crate::game::run::{
-    base_name, continues, final_phase, phase_num, tally, BossFight, KillSummary, RunEnd,
-    StageStats, TakenEntry, TargetEntry,
+    BossFight, KillSummary, RunEnd, StageStats, TakenEntry, TargetEntry, base_name, continues,
+    final_phase, phase_num, tally,
 };
 use crate::game::source::describe_source;
 
-// const DEATH_HOLD: u64 = 2;
 const LOG_CAP: usize = 500;
-pub const ROSTER_CAP: usize = 128;
+pub(super) const ROSTER_CAP: usize = 128;
 const NAME_LAG: u64 = 1;
 
 impl GameState {
-    pub fn apply(&mut self, ts: u64, ev: Event) {
+    pub(crate) fn apply(&mut self, ts: u64, ev: Event) {
         if matches!(ev, Event::WorldLine(_)) {
             return;
         }
@@ -21,7 +20,7 @@ impl GameState {
         self.seq += 1;
         match ev {
             Event::BossFight { name, .. } => self.boss_fight(ts, name),
-            Event::BossDead { name } => self.boss_dead(ts, name),
+            Event::BossDead { name } => self.boss_dead(ts, &name),
             Event::StrikeTotal(n) => {
                 if let Some(k) = self.pending_kill.as_mut() {
                     k.strike = n;
@@ -57,7 +56,7 @@ impl GameState {
             Event::SessionSave(_) => {
                 if self.mode == Mode::Stage
                     && !self.level_tokens.is_empty()
-                    && !self.stage_boss_seen
+                    && !self.seen.stage_boss
                 {
                     self.tokens_got += 1;
                     self.last_save = Some(ts);
@@ -82,12 +81,8 @@ impl GameState {
             }
             Event::EnemySpawn { slot, kind } => self.enemy_spawn(ts, slot, kind),
             Event::EnemyRetire(slot) => self.enemy_retire(ts, slot),
-            Event::EnemyName(name) => self.enemy_name(ts, name),
-            // Death logging is gone: the game stopped writing its death line reliably (a downed
-            // player can go without it entirely), and nothing else in the log marks a death.
-            // Event::PlayerDead => self.player_dead(ts),
-            Event::PlayerDead => {}
-            Event::WorldLine(_) => {}
+            Event::EnemyName(name) => self.enemy_name(ts, &name),
+            Event::PlayerDead | Event::WorldLine(_) => {}
         }
     }
 
@@ -101,7 +96,7 @@ impl GameState {
             .last()
             .filter(|r| r.end_ts.is_none())
             .and_then(|r| r.fights.last());
-        let echo = self.stage_boss_seen
+        let echo = self.seen.stage_boss
             && last.is_some_and(|f| {
                 base_name(&f.name) == base_name(&name) && phase_num(&name) <= phase_num(&f.name)
             });
@@ -112,14 +107,14 @@ impl GameState {
         let stage_deaths = self.stage_stats.deaths;
         self.close_stage(self.last_clear.unwrap_or(ts));
         self.boss = Some(name.clone());
-        if !self.stage_boss_seen {
-            self.stage_boss_seen = true;
+        if !self.seen.stage_boss {
+            self.seen.stage_boss = true;
             if self.last_save.is_some() {
                 self.tokens_got = self.tokens_got.saturating_sub(1);
             }
         }
         if !transition {
-            self.cursed = stage_deaths >= 2;
+            self.dying.cursed = stage_deaths >= 2;
             self.fight_start = ts;
             self.fight_dmg = 0;
             self.fight_taken = 0;
@@ -148,17 +143,17 @@ impl GameState {
         });
     }
 
-    fn boss_dead(&mut self, ts: u64, name: String) {
+    fn boss_dead(&mut self, ts: u64, name: &str) {
         if let Some(k) = self.pending_kill.take() {
             self.record_kill(k);
         }
         self.pending_kill = Some(KillSummary {
             ts,
-            boss: name.clone(),
+            boss: name.to_string(),
             strike: 0,
             non_strike: 0,
         });
-        if self.boss.as_deref() == Some(&name) {
+        if self.boss.as_deref() == Some(name) {
             self.boss = None;
             self.target = None;
             if let Some(f) = self.open_fight().filter(|f| f.name == name) {
@@ -249,15 +244,15 @@ impl GameState {
         let fresh = self.stage_stats.start_ts == 0 || self.stage != name || self.boss.is_some();
         if fresh {
             self.close_stage(ts);
-            self.stage_boss_seen = false;
-            self.pool_known = std::mem::take(&mut self.pool_reset_seen);
+            self.seen.stage_boss = false;
+            self.pool_known = std::mem::take(&mut self.seen.pool_reset);
             self.stage_stats = StageStats {
                 name: name.clone(),
                 start_ts: ts,
                 ..Default::default()
             };
         }
-        self.stage = name.clone();
+        self.stage.clone_from(&name);
         self.progress = progress;
         if !class.is_empty() {
             self.class = class;
@@ -283,34 +278,6 @@ impl GameState {
         }
     }
 
-    // Death logging is gone, see Event::PlayerDead in apply.
-    // fn player_dead(&mut self, ts: u64) {
-    //     let new = self
-    //         .last_death
-    //         .is_none_or(|_| self.alive_since.is_some_and(|a| a < ts));
-    //     self.last_death = Some(ts);
-    //     self.alive_since = None;
-    //     if new {
-    //         self.death_final = self.cursed;
-    //         self.cursed = true;
-    //         self.deaths_total += 1;
-    //         if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
-    //             r.deaths += 1;
-    //         }
-    //         if self.pre_boss() {
-    //             self.stage_stats.deaths += 1;
-    //         }
-    //         if let Some(f) = self.open_fight() {
-    //             f.deaths += 1;
-    //         }
-    //         self.deaths_log.push_back((ts, self.seq));
-    //         if self.deaths_log.len() > LOG_CAP {
-    //             self.deaths_log.pop_front();
-    //         }
-    //     }
-    //     self.dead_until = ts + DEATH_HOLD;
-    // }
-
     fn record_kill(&mut self, k: KillSummary) {
         let Some(f) = self
             .runs
@@ -334,7 +301,7 @@ impl GameState {
         let end = self.clear_ts.take().unwrap_or(ts);
         self.last_clear = None;
         self.alive.clear();
-        self.enemy_seen = false;
+        self.seen.enemy = false;
         self.drop_pending();
         if self.stage_stats.start_ts == 0 {
             return;
@@ -347,7 +314,7 @@ impl GameState {
     }
 
     fn end_run(&mut self, ts: u64, how: RunEnd) {
-        let in_fight = self.mode == Mode::Stage && self.stage_boss_seen;
+        let in_fight = self.mode == Mode::Stage && self.seen.stage_boss;
         self.close_stage(ts);
         if let Some(r) = self.runs.last_mut().filter(|r| r.end_ts.is_none()) {
             let mut end = how;
@@ -374,8 +341,8 @@ impl GameState {
         self.target = None;
         self.pending_kill = None;
         self.dead_until = 0;
-        self.cursed = false;
-        self.death_final = false;
+        self.dying.cursed = false;
+        self.dying.is_final = false;
         self.last_death = None;
         self.alive_since = None;
         self.fight_start = 0;
@@ -420,13 +387,13 @@ impl GameState {
     fn leave_world(&mut self, ts: u64) {
         self.clear_roster();
         self.end_run(ts, RunEnd::Left);
-        self.pool_reset_seen = false;
+        self.seen.pool_reset = false;
         self.mode = Mode::Idle;
         self.location = None;
         self.world = None;
     }
 
-    pub fn log_rotated(&mut self) {
+    pub(crate) fn log_rotated(&mut self) {
         self.leave_world(self.last_ts);
         self.changed = true;
     }
@@ -441,7 +408,7 @@ impl GameState {
             return;
         }
         self.alive.insert(slot);
-        self.enemy_seen = true;
+        self.seen.enemy = true;
         if let Some(c) = self.clear_ts.take() {
             self.held_clear = Some(c);
         }
@@ -465,16 +432,16 @@ impl GameState {
         self.held_clear = None;
     }
 
-    fn enemy_name(&mut self, ts: u64, name: String) {
+    fn enemy_name(&mut self, ts: u64, name: &str) {
         self.expire_pending(ts);
         let Some((slot, kind, _)) = self.pending_spawns.pop_front() else {
             return;
         };
-        if player_summon(&name) {
+        if player_summon(name) {
             self.summon_kinds.insert(kind);
             if self.alive.remove(&slot) && self.alive.is_empty() {
                 self.clear_ts = self.held_clear;
-                self.enemy_seen &= self.last_clear.is_some();
+                self.seen.enemy &= self.last_clear.is_some();
             }
         }
         if self.pending_spawns.is_empty() {
@@ -485,7 +452,7 @@ impl GameState {
     fn enemy_retire(&mut self, ts: u64, slot: u32) {
         if !self.pre_boss() {
             if matches!(self.mode, Mode::Idle | Mode::Lobby | Mode::Intermission) {
-                self.pool_reset_seen = true;
+                self.seen.pool_reset = true;
             }
             return;
         }
@@ -496,7 +463,7 @@ impl GameState {
         }
     }
 
-    pub fn poll_token_alert(&mut self, now: u64) {
+    pub(crate) fn poll_token_alert(&mut self, now: u64) {
         let Some(at) = self.token_clear else {
             return;
         };
@@ -513,6 +480,6 @@ impl GameState {
     fn reset_stage_tokens(&mut self) {
         self.tokens_got = 0;
         self.last_save = None;
-        self.stage_boss_seen = false;
+        self.seen.stage_boss = false;
     }
 }

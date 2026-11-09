@@ -1,4 +1,5 @@
-pub mod app;
-pub mod render;
-pub mod timeline;
-pub mod win32;
+pub(crate) mod app;
+pub(crate) mod flags;
+pub(crate) mod render;
+pub(crate) mod timeline;
+pub(crate) mod win32;

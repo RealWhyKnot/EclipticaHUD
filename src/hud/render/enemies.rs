@@ -1,11 +1,11 @@
-use super::fmt::{fmt_count, fmt_dur};
-use super::layout::*;
-use super::theme::*;
 use super::Renderer;
+use super::fmt::{fmt_count, fmt_dur};
+use super::layout::{M, W};
+use super::theme::{AMBER, DIM, F_BOSS, F_LABEL, F_TINY, GOOD, TEXT};
 use crate::game::state::GameState;
-use windows_sys::Win32::Graphics::Gdi::*;
+use windows_sys::Win32::Graphics::Gdi::{DT_LEFT, DT_RIGHT, DT_VCENTER};
 
-pub const ENEMY_CAP: usize = 999;
+pub(super) const ENEMY_CAP: usize = 999;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct Shown {
@@ -89,7 +89,10 @@ pub(super) fn clearing_slots(c: &ClearingIn) -> Vec<Slot> {
         slot(128, 40, F_BOSS, AMBER, DT_LEFT, fmt_dur(c.secs)),
     ];
     if let Some((got, total)) = c.tokens {
-        let t = format!("{got}/{}", fmt_count(total as usize, "token", "tokens"));
+        let t = format!(
+            "{got}/{}",
+            fmt_count(crate::num::to_usize(total), "token", "tokens")
+        );
         out.push(slot(128, 22, F_TINY, DIM, right, t));
     }
     if let Some(e) = c.enemies {
@@ -101,7 +104,7 @@ pub(super) fn clearing_slots(c: &ClearingIn) -> Vec<Slot> {
 impl Renderer {
     pub(super) fn draw_clearing(&self, c: &ClearingIn) {
         for s in clearing_slots(c) {
-            self.text_rect(s.x, s.y, s.w, s.h, s.font, s.color, s.flags, &s.text);
+            self.text_rect((s.x, s.y, s.w, s.h), s.font, s.color, s.flags, &s.text);
         }
     }
 }

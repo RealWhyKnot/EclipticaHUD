@@ -28,7 +28,7 @@ fn death_clusters_count_once() {
     assert_eq!(gs.runs[0].deaths, 2);
     assert_eq!(gs.deaths_log.len(), 2);
     assert!(gs.deaths_log[0].1 < gs.deaths_log[1].1);
-    assert!(gs.runs[0].fights.last().filter(|f| f.lost).is_none());
+    assert!(gs.runs[0].fights.last().as_ref().is_none_or(|f| !f.lost));
     feed_at(&mut gs, "08:25:57", "ECLIPTICA - now in lobby");
     assert_eq!(gs.runs[0].end, Some(RunEnd::Lost));
     assert_eq!(

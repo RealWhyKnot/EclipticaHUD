@@ -88,10 +88,10 @@ fn roster_clears_on_left_room_and_new_location() {
     feed_at(&mut gs, "08:00:02", W1);
     assert_eq!(gs.roster.len(), 1);
     feed_at(&mut gs, "08:00:03", W2);
-    assert!(gs.roster.is_empty());
+    assert_eq!(gs.roster.len(), 0);
     feed_at(&mut gs, "08:00:04", "[Behaviour] OnPlayerJoined B (usr_2)");
     feed_at(&mut gs, "08:00:05", "[Behaviour] OnLeftRoom");
-    assert!(gs.roster.is_empty());
+    assert_eq!(gs.roster.len(), 0);
     assert_eq!(gs.location, None);
     feed_at(&mut gs, "08:00:05", "[Behaviour] OnPlayerLeft B (usr_2)");
     feed_at(&mut gs, "08:00:06", ENTER);
@@ -99,10 +99,10 @@ fn roster_clears_on_left_room_and_new_location() {
     feed_at(&mut gs, "08:00:07", "[Behaviour] OnPlayerJoined C (usr_3)");
     assert_eq!(names(&gs), [("usr_3", "C")]);
     feed_at(&mut gs, "08:00:08", "[Behaviour] Entering Room: Sky Dream");
-    assert!(gs.roster.is_empty());
+    assert_eq!(gs.roster.len(), 0);
     feed_at(&mut gs, "08:00:09", "[Behaviour] OnPlayerJoined D (usr_4)");
     gs.log_rotated();
-    assert!(gs.roster.is_empty());
+    assert_eq!(gs.roster.len(), 0);
 }
 
 #[test]

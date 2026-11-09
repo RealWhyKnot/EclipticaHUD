@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, PartialEq)]
-pub enum Event {
+pub(crate) enum Event {
     BossFight {
         name: String,
         phase: String,
@@ -84,7 +84,7 @@ const WORLD_PREFIXES: &[&str] = &[
 ];
 
 impl Event {
-    pub fn label(&self) -> &'static str {
+    pub(crate) fn label(&self) -> &'static str {
         match self {
             Event::BossFight { .. } => "boss_fight",
             Event::BossDead { .. } => "boss_dead",
@@ -113,12 +113,12 @@ impl Event {
     }
 }
 
-pub struct Line<'a> {
+pub(crate) struct Line<'a> {
     pub ts: u64,
     pub msg: &'a str,
 }
 
-pub fn split_line(raw: &str) -> Option<Line<'_>> {
+pub(crate) fn split_line(raw: &str) -> Option<Line<'_>> {
     let b = raw.as_bytes();
     if b.len() < 34 || b[4] != b'.' || b[7] != b'.' || b[10] != b' ' {
         return None;
@@ -148,7 +148,7 @@ fn parse_ts(s: &str) -> Option<u64> {
     Some(era_days * 86400 + h * 3600 + mi * 60 + sec)
 }
 
-pub fn parse_msg(msg: &str) -> Option<Event> {
+pub(crate) fn parse_msg(msg: &str) -> Option<Event> {
     parse_known(msg).or_else(|| {
         let msg = msg.trim_end();
         WORLD_PREFIXES
@@ -159,6 +159,13 @@ pub fn parse_msg(msg: &str) -> Option<Event> {
 }
 
 fn parse_known(msg: &str) -> Option<Event> {
+    parse_damage(msg)
+        .or_else(|| parse_mode(msg))
+        .or_else(|| parse_room(msg))
+        .or_else(|| parse_spawn(msg))
+}
+
+fn parse_damage(msg: &str) -> Option<Event> {
     if let Some(rest) = msg.strip_prefix("ownership of ") {
         let (object, player) = rest.split_once(" transferred to ")?;
         let player = player.trim_end();
@@ -189,6 +196,10 @@ fn parse_known(msg: &str) -> Option<Event> {
             source: source.trim().to_string(),
         });
     }
+    None
+}
+
+fn parse_mode(msg: &str) -> Option<Event> {
     if let Some(rest) = msg.strip_prefix("ECLIPTICA - now ") {
         if let Some(rest) = rest.strip_prefix("fighting boss: ") {
             let (name, rest) = rest.split_once("(Clone)")?;
@@ -224,6 +235,10 @@ fn parse_known(msg: &str) -> Option<Event> {
             name: name.to_string(),
         });
     }
+    None
+}
+
+fn parse_room(msg: &str) -> Option<Event> {
     if let Some(rest) = msg.strip_prefix("[Behaviour] Entering Room: ") {
         return Some(Event::RoomEnter(rest.trim_end().to_string()));
     }
@@ -253,6 +268,10 @@ fn parse_known(msg: &str) -> Option<Event> {
     if msg.trim_end() == "Local controller dead, switching off." {
         return Some(Event::PlayerDead);
     }
+    None
+}
+
+fn parse_spawn(msg: &str) -> Option<Event> {
     if let Some(rest) = msg.strip_prefix("spawn token, ") {
         let (b, n) = rest.split_once(", ")?;
         let rune = match b {
@@ -302,7 +321,7 @@ fn name_and_usr(rest: &str) -> Option<(String, String)> {
     Some((name.to_string(), format!("usr_{id}")))
 }
 
-pub fn fmt_clock(ts: u64) -> String {
+pub(crate) fn fmt_clock(ts: u64) -> String {
     format!("{:02}:{:02}:{:02}", ts / 3600 % 24, ts / 60 % 60, ts % 60)
 }
 
@@ -310,9 +329,9 @@ fn month_start(y: u64, mo: u64) -> u64 {
     365 * y + y / 4 - y / 100 + y / 400 + (153 * (mo + 1)) / 5
 }
 
-pub fn civil(ts: u64) -> (u64, u64, u64) {
+pub(crate) fn civil(ts: u64) -> (u64, u64, u64) {
     let days = ts / 86400;
-    let mut y = days * 400 / 146097;
+    let mut y = days * 400 / 146_097;
     while month_start(y + 1, 3) <= days {
         y += 1;
     }
@@ -331,12 +350,12 @@ pub fn civil(ts: u64) -> (u64, u64, u64) {
     }
 }
 
-pub fn fmt_date(ts: u64) -> String {
+pub(crate) fn fmt_date(ts: u64) -> String {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
     let (y, mo, d) = civil(ts);
-    format!("{} {d} {y}", MONTHS[(mo as usize - 1).min(11)])
+    format!("{} {d} {y}", MONTHS[(crate::num::to_usize(mo) - 1).min(11)])
 }
 
 #[cfg(test)]
@@ -573,18 +592,18 @@ mod tests {
         assert_eq!(parse_known("User Authenticated: WhyKnot (usr_a b)"), None);
     }
 
-    fn joined(name: &str, usr: &str) -> Option<Event> {
-        Some(Event::PlayerJoined {
+    fn joined(name: &str, usr: &str) -> Event {
+        Event::PlayerJoined {
             name: name.into(),
             usr: usr.into(),
-        })
+        }
     }
 
-    fn left(name: &str, usr: &str) -> Option<Event> {
-        Some(Event::PlayerLeft {
+    fn left(name: &str, usr: &str) -> Event {
+        Event::PlayerLeft {
             name: name.into(),
             usr: usr.into(),
-        })
+        }
     }
 
     #[test]
@@ -595,7 +614,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             parse_msg(l.msg),
-            joined("WhyKnot", "usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1")
+            Some(joined(
+                "WhyKnot",
+                "usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1"
+            ))
         );
         let l = split_line(
             "2026.10.22 13:48:37 Debug      -  [Behaviour] OnPlayerLeft WhyKnot (usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)",
@@ -603,23 +625,23 @@ mod tests {
         .unwrap();
         assert_eq!(
             parse_msg(l.msg),
-            left("WhyKnot", "usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1")
+            Some(left("WhyKnot", "usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1"))
         );
         assert_eq!(
             parse_msg("[Behaviour] OnPlayerJoined Be\u{430}r (Hands) (usr_97dd)"),
-            joined("Be\u{430}r (Hands)", "usr_97dd")
+            Some(joined("Be\u{430}r (Hands)", "usr_97dd"))
         );
         assert_eq!(
             parse_msg("[Behaviour] OnPlayerJoined  two  spaces  (x) (usr_1)"),
-            joined("two  spaces  (x)", "usr_1")
+            Some(joined("two  spaces  (x)", "usr_1"))
         );
         assert_eq!(
             parse_msg("[Behaviour] OnPlayerLeft (usr_fake) (usr_2)"),
-            left("(usr_fake)", "usr_2")
+            Some(left("(usr_fake)", "usr_2"))
         );
         assert_eq!(
             parse_msg("[Behaviour] OnPlayerJoined \u{6c17}\u{307e}\u{3050}\u{308c} (usr_3)"),
-            joined("\u{6c17}\u{307e}\u{3050}\u{308c}", "usr_3")
+            Some(joined("\u{6c17}\u{307e}\u{3050}\u{308c}", "usr_3"))
         );
     }
 
@@ -668,7 +690,7 @@ mod tests {
             parse_msg("ECLIPTICA - now in stage: Stage_ProtoColony on phase: 0.1220348 as class: "),
             Some(Event::Stage {
                 name: "ProtoColony".into(),
-                progress: 0.1220348,
+                progress: 0.122_034_8,
                 class: String::new(),
             })
         );

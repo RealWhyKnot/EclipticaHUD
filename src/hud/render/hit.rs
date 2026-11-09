@@ -1,5 +1,15 @@
-use super::layout::*;
 use super::Renderer;
+use super::layout::{
+    ALPHA_DOWN_HIT, ALPHA_UP_HIT, BOARD_DELETE_HIT, BOARD_HIT, BODY_DY, CLOSE_BTN, CLOSE_HIT,
+    DISCORD_DOT, DISCORD_HIT, FIGHT_NEXT_HIT, FIGHT_PREV_HIT, GRAPH_DY, LOG_BTN, LOG_CLOSE_BTN,
+    LOG_CLOSE_HIT, LOG_COUNT, LOG_HIT, LOG_TAB_H, LOG_TAB_Y, LOG_TABS, LOG_TITLE, LOG_TRACK,
+    LOGICAL_H, LOGICAL_W, MUTE_HIT, PARTY_BTN, PARTY_CARD2, PARTY_CLOSE_BTN, PARTY_CLOSE_HIT,
+    PARTY_HIT, PARTY_NEWER, PARTY_OLDER, PARTY_TOGGLE, PIN_BTN, PIN_HIT, RUN_NEXT_HIT,
+    RUN_PREV_HIT, SCALE_DOWN_HIT, SCALE_UP_HIT, SETTINGS_BTN, SETTINGS_CARD, SETTINGS_HIT,
+    SOUND_HIT, SPLITS_CARD, STAGES_BTN, TAKEN_CARD_Y, UPDATE_HIT, UPDATE_LATER_HIT, UPDATE_NOW_HIT,
+    UPDATE_SKIP_HIT, USAGE_HIT, USAGE_NO_HIT, USAGE_YES_HIT, WINDOW_DOWN_HIT, WINDOW_UP_HIT,
+};
+use crate::hud::flags::{Flag, Flags};
 use crate::hud::timeline::Filter;
 
 const UPDATE_RECT: (i32, i32, i32, i32) =
@@ -7,7 +17,7 @@ const UPDATE_RECT: (i32, i32, i32, i32) =
 const TIP_DELAY_MS: u128 = 450;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Hit {
+pub(crate) enum Hit {
     Pin,
     Settings,
     ScaleDown,
@@ -41,7 +51,7 @@ pub enum Hit {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Info {
+pub(crate) enum Info {
     Status,
     Progress,
     RunRow,
@@ -67,7 +77,7 @@ pub enum Info {
 const B: i32 = BODY_DY;
 const T: i32 = TAKEN_CARD_Y + GRAPH_DY + BODY_DY;
 
-pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
+pub(super) const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
     (Info::Status, (14, 26 + B, 332, 20)),
     (Info::Progress, (14, 46 + B, 332, 8)),
     (Info::RunRow, (44, 54 + B, 272, 24)),
@@ -105,17 +115,17 @@ pub const INFO_REGIONS: [(Info, (i32, i32, i32, i32)); 26] = [
 ];
 
 impl Info {
-    pub fn under_settings(self) -> bool {
+    pub(crate) fn under_settings(self) -> bool {
         let (_, y, _, h) = self.rect();
         let (_, cy, _, ch) = SETTINGS_CARD;
         y + h > cy + BODY_DY && y < cy + ch + BODY_DY
     }
 
-    pub fn live_only(self) -> bool {
+    pub(crate) fn live_only(self) -> bool {
         matches!(self, Info::LastHit | Info::Target | Info::TakenMore(2))
     }
 
-    pub fn history_only(self) -> bool {
+    pub(crate) fn history_only(self) -> bool {
         matches!(self, Info::Result | Info::Pages | Info::Deaths)
     }
 
@@ -154,7 +164,6 @@ impl Info {
                 "Your damage this fight or stage; between bosses, kills out of fights"
             }
             (Info::Dealt(2), false) => "How long the fight lasted",
-            (Info::Dealt(_), _) => "",
             (Info::DealtGraph, _) => {
                 "Your damage per second across the fight; lines mark new phases"
             }
@@ -171,19 +180,19 @@ impl Info {
             (Info::Taken(2), true) => {
                 "Damage you took this fight or stage; between bosses, run deaths"
             }
-            (Info::Taken(2), false) => "How many times you were hit",
-            (Info::Taken(_), _) => "",
+            (Info::Taken(2), false) | (Info::TakenMore(0), true) => "How many times you were hit",
             (Info::TakenGraph, _) => {
                 "Damage you took per second across the fight; lines mark new phases"
             }
             (Info::LastHit, _) => "Newest hit on you, who it came from and how long ago",
             (Info::Deaths, _) => "How many times you died in this fight or run",
-            (Info::TakenMore(0), true) => "How many times you were hit",
-            (Info::TakenMore(0), false) => "The largest single hit on you",
-            (Info::TakenMore(1), true) => "The largest single hit on you",
-            (Info::TakenMore(1), false) => "Damage taken divided by the number of hits",
-            (Info::TakenMore(2), _) => "Damage taken divided by the number of hits",
-            (Info::TakenMore(_), _) => "",
+            (Info::TakenMore(0), false) | (Info::TakenMore(1), true) => {
+                "The largest single hit on you"
+            }
+            (Info::TakenMore(1), false) | (Info::TakenMore(2), _) => {
+                "Damage taken divided by the number of hits"
+            }
+            (Info::Dealt(_) | Info::Taken(_) | Info::TakenMore(_), _) => "",
             (Info::TopAttacks, true) => {
                 "The attacks that hurt most and how often each hit; run deaths at right"
             }
@@ -201,33 +210,26 @@ impl Info {
     }
 }
 
-pub const DELETE_ARMED: u8 = 1;
-pub const DELETE_BUSY: u8 = 2;
+pub(crate) const DELETE_ARMED: u8 = 1;
+pub(crate) const DELETE_BUSY: u8 = 2;
 
 #[derive(Clone, Copy)]
-pub struct TipCtx {
-    pub live: bool,
-    pub topmost: bool,
-    pub sound_on: bool,
-    pub log_open: bool,
-    pub discord_on: bool,
-    pub usage_on: bool,
-    pub usage_failing: bool,
-    pub board_on: bool,
+pub(crate) struct TipCtx {
+    pub flags: Flags,
     pub board_status: u8,
     pub board_delete: u8,
-    pub party_open: bool,
-    pub stages: bool,
 }
 
 impl Hit {
-    pub fn clickable(self) -> bool {
+    pub(crate) fn clickable(self) -> bool {
         !matches!(self, Hit::Info(_) | Hit::Splits)
     }
 
-    pub fn tip(self, c: TipCtx) -> &'static str {
+    pub(crate) fn tip(self, c: TipCtx) -> &'static str {
         match self {
-            Hit::Pin if c.topmost => "Kept above other windows; click to let them cover it",
+            Hit::Pin if c.flags.has(Flag::Topmost) => {
+                "Kept above other windows; click to let them cover it"
+            }
             Hit::Pin => "Other windows can cover the HUD; click to keep it on top",
             Hit::Settings => "Size, opacity, stat window, aggro sound, Discord and data sharing",
             Hit::ScaleDown => "Make the HUD smaller",
@@ -236,26 +238,28 @@ impl Hit {
             Hit::AlphaUp => "Make the HUD less see-through",
             Hit::WindowDown => "Average the live DPS and damage taken over fewer seconds",
             Hit::WindowUp => "Average the live DPS and damage taken over more seconds",
-            Hit::Party if c.party_open => "Close the shared damage window",
+            Hit::Party if c.flags.has(Flag::PartyOpen) => "Close the shared damage window",
             Hit::Party => "Open the shared damage window",
-            Hit::Discord if c.discord_on => {
+            Hit::Discord if c.flags.has(Flag::Discord) => {
                 "Showing this run as your Discord status; click to stop"
             }
             Hit::Discord => "Show your run as your Discord status, with a join link",
-            Hit::Usage if c.usage_failing => {
+            Hit::Usage if c.flags.has(Flag::UsageFailing) => {
                 "Can't send fight data right now; the HUD tries again every 10 minutes"
             }
-            Hit::Usage if c.usage_on => {
+            Hit::Usage if c.flags.has(Flag::Usage) => {
                 "Sending boss and damage data with player names removed; click to stop"
             }
             Hit::Usage => "Send boss and damage data to improve the HUD; player names are removed",
-            Hit::Board if c.board_on && c.board_status == crate::board::TAKEN => {
+            Hit::Board if c.flags.has(Flag::Board) && c.board_status == crate::board::TAKEN => {
                 "Another PC already put this VRChat name on the leaderboard"
             }
-            Hit::Board if c.board_on && c.board_status == crate::board::FAILING => {
+            Hit::Board if c.flags.has(Flag::Board) && c.board_status == crate::board::FAILING => {
                 "Can't reach the leaderboard right now; the HUD will try again"
             }
-            Hit::Board if c.board_on => "Sending your boss kills to the leaderboard; click to stop",
+            Hit::Board if c.flags.has(Flag::Board) => {
+                "Sending your boss kills to the leaderboard; click to stop"
+            }
             Hit::Board => "Put your boss kills on ecliptica.whyknot.dev under your VRChat name",
             Hit::BoardDelete if c.board_delete == DELETE_ARMED => {
                 "Click again to delete your kills from the leaderboard"
@@ -264,7 +268,7 @@ impl Hit {
                 "Deleting your kills from the leaderboard"
             }
             Hit::BoardDelete => "Remove all your kills from ecliptica.whyknot.dev",
-            Hit::Log if c.log_open => "Close the event log window",
+            Hit::Log if c.flags.has(Flag::LogOpen) => "Close the event log window",
             Hit::Log => "Open the event log window",
             Hit::Close => "Close the HUD (Esc)",
             Hit::Update => "Show the update",
@@ -273,7 +277,7 @@ impl Hit {
             Hit::UpdateSkip => "Don't offer this version again",
             Hit::UsageYes => "Start sending fight data; settings can turn it off",
             Hit::UsageNo => "Don't send anything; settings can turn it on later",
-            Hit::Mute | Hit::Sound if c.sound_on => {
+            Hit::Mute | Hit::Sound if c.flags.has(Flag::Sound) => {
                 "Mute the sound that plays when the boss targets you"
             }
             Hit::Mute | Hit::Sound => "Unmute the sound that plays when the boss targets you",
@@ -281,10 +285,10 @@ impl Hit {
             Hit::RunNext => "Show the next run, or the live run after the newest",
             Hit::FightPrev => "Show the previous stage or boss fight of this run",
             Hit::FightNext => "Show the next stage or boss fight of this run",
-            Hit::Stages if c.stages => "Back to the damage cards for this page",
+            Hit::Stages if c.flags.has(Flag::Stages) => "Back to the damage cards for this page",
             Hit::Stages => "Show time, damage and deaths for each stage of this run",
             Hit::Splits => "Each stage counted with its boss fight. The lit row is this page",
-            Hit::Info(i) => i.tip(c.live),
+            Hit::Info(i) => i.tip(c.flags.has(Flag::Live)),
         }
     }
 
@@ -328,12 +332,12 @@ fn body((x, y, w, h): (i32, i32, i32, i32)) -> (i32, i32, i32, i32) {
     (x, y + BODY_DY, w, h)
 }
 
-pub fn tip_ready(since: Option<std::time::Instant>) -> bool {
+pub(crate) fn tip_ready(since: Option<std::time::Instant>) -> bool {
     since.is_some_and(|t| t.elapsed().as_millis() >= TIP_DELAY_MS)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LogHit {
+pub(crate) enum LogHit {
     Close,
     Tab(Filter),
     Thumb,
@@ -343,11 +347,11 @@ pub enum LogHit {
 }
 
 impl LogHit {
-    pub fn clickable(self) -> bool {
+    pub(crate) fn clickable(self) -> bool {
         !matches!(self, LogHit::Title | LogHit::Count)
     }
 
-    pub fn tip(self) -> &'static str {
+    pub(crate) fn tip(self) -> &'static str {
         match self {
             LogHit::Title => "Every hit you took and every aggro switch, newest first",
             LogHit::Count => "Events in this filter; a grey line marks where a boss fight starts",
@@ -380,7 +384,7 @@ impl LogHit {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PartyHit {
+pub(crate) enum PartyHit {
     Close,
     Toggle,
     Older,
@@ -394,14 +398,14 @@ const PARTY_STATUS: (i32, i32, i32, i32) = (180, 44, 166, 24);
 const PARTY_RANK_AREA: (i32, i32, i32, i32) = (14, 68, 332, 48);
 
 impl PartyHit {
-    pub fn clickable(self) -> bool {
+    pub(crate) fn clickable(self) -> bool {
         matches!(
             self,
             PartyHit::Close | PartyHit::Toggle | PartyHit::Older | PartyHit::Newer
         )
     }
 
-    pub fn tip(self, on: bool) -> &'static str {
+    pub(crate) fn tip(self, on: bool) -> &'static str {
         match self {
             PartyHit::Close => "Close this window (Esc)",
             PartyHit::Toggle if on => "Stop sharing your boss damage",
@@ -429,17 +433,23 @@ impl PartyHit {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Pointer {
+    Mouse,
+    Laser,
+}
+
 impl Renderer {
     fn in_rect(&self, r: (i32, i32, i32, i32), x: i32, y: i32) -> bool {
         x >= self.px(r.0) && x < self.px(r.0 + r.2) && y >= self.px(r.1) && y < self.px(r.1 + r.3)
     }
 
     #[cfg(test)]
-    pub fn hit_test(&self, x: i32, y: i32) -> Option<Hit> {
+    pub(crate) fn hit_test(&self, x: i32, y: i32) -> Option<Hit> {
         self.hit_test_where(x, y, |_| true)
     }
 
-    pub fn hit_test_where(&self, x: i32, y: i32, ok: impl Fn(Hit) -> bool) -> Option<Hit> {
+    pub(crate) fn hit_test_where(&self, x: i32, y: i32, ok: impl Fn(Hit) -> bool) -> Option<Hit> {
         if y < self.px(CLOSE_HIT.1 + CLOSE_HIT.3) {
             if x >= self.px(CLOSE_HIT.0) && ok(Hit::Close) {
                 return Some(Hit::Close);
@@ -495,7 +505,7 @@ impl Renderer {
             .map(|(_, h)| h)
     }
 
-    pub fn log_hit_test(&self, x: i32, y: i32, thumb: Option<(i32, i32)>) -> Option<LogHit> {
+    pub(crate) fn log_hit_test(&self, x: i32, y: i32, thumb: Option<(i32, i32)>) -> Option<LogHit> {
         if y < self.px(LOG_CLOSE_HIT.1 + LOG_CLOSE_HIT.3) && x >= self.px(LOG_CLOSE_HIT.0) {
             return Some(LogHit::Close);
         }
@@ -510,18 +520,25 @@ impl Renderer {
             }
         }
         let (tx, ty, tw, th) = LOG_TRACK;
-        if let Some((oy, oh)) = thumb {
-            if self.in_rect((tx - 6, ty, tw + 12, th), x, y) {
-                if self.in_rect((tx - 6, ty + oy, tw + 12, oh), x, y) {
-                    return Some(LogHit::Thumb);
-                }
-                return Some(LogHit::Track);
+        if let Some((oy, oh)) = thumb
+            && self.in_rect((tx - 6, ty, tw + 12, th), x, y)
+        {
+            if self.in_rect((tx - 6, ty + oy, tw + 12, oh), x, y) {
+                return Some(LogHit::Thumb);
             }
+            return Some(LogHit::Track);
         }
         None
     }
 
-    pub fn party_hit_test(&self, x: i32, y: i32, vr: bool, pager: bool) -> Option<PartyHit> {
+    pub(crate) fn party_hit_test(
+        &self,
+        x: i32,
+        y: i32,
+        pointer: Pointer,
+        pager: bool,
+    ) -> Option<PartyHit> {
+        let vr = pointer == Pointer::Laser;
         let (cx, cy, cw, ch) = PARTY_CLOSE_HIT;
         if !vr && self.in_rect((cx, cy, cw, ch), x, y) {
             return Some(PartyHit::Close);

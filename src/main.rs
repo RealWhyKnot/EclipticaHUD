@@ -1,10 +1,12 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod board;
+mod console;
 mod discord;
 mod game;
 mod history;
 mod hud;
+mod num;
 mod process;
 mod relay;
 mod scan;
@@ -24,7 +26,13 @@ fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("--scan") => scan::scan(args.next()),
-        Some("--discord-join") => discord::join_listener(),
-        _ => hud::win32::run(),
+        Some("--discord-join") => {
+            discord::log_init();
+            discord::join_listener();
+        }
+        _ => {
+            discord::log_init();
+            hud::win32::run();
+        }
     }
 }

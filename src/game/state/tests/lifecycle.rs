@@ -26,7 +26,7 @@ fn run_lifecycle() {
     feed_at(&mut gs, "08:20:49", "ECLIPTICA - now in lobby");
     let run = &gs.runs[0];
     assert_eq!(run.end, Some(RunEnd::Lobby));
-    assert!(run.fights.last().filter(|f| f.lost).is_none());
+    assert!(run.fights.last().as_ref().is_none_or(|f| !f.lost));
     assert_eq!(run.stage, "Hall of Beginnings");
     assert_eq!(run.class, "Spellhammer");
     assert_eq!(run.fights.len(), 1);
@@ -98,10 +98,11 @@ fn location_follows_room_lines() {
         "03:59:35",
         "[Behaviour] Joining wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)",
     );
-    assert!(gs
-        .location
-        .as_deref()
-        .is_some_and(|l| l.ends_with("~region(use)")));
+    assert!(
+        gs.location
+            .as_deref()
+            .is_some_and(|l| l.ends_with("~region(use)"))
+    );
     feed_at(&mut gs, "04:40:00", "[Behaviour] OnLeftRoom");
     assert_eq!(gs.location, None);
 }
@@ -133,12 +134,12 @@ fn end_run_clears_live_state() {
     assert_eq!(gs.fight_taken, 0);
     assert_eq!(gs.fight_hits, 0);
     assert_eq!(gs.fight_max_hit, 0);
-    assert!(gs.fight_attacks.is_empty());
+    assert_eq!(gs.fight_attacks.len(), 0);
     assert!(gs.taken.is_empty() && gs.history.is_empty() && gs.deaths_log.is_empty());
     assert!(gs.stage.is_empty() && gs.class.is_empty());
     assert_eq!(gs.progress, 0.0);
     assert!(gs.stage_no.is_none());
-    assert!(gs.level_tokens.is_empty());
+    assert_eq!(gs.level_tokens.len(), 0);
     assert_eq!(gs.tokens_got, 0);
     assert!(!gs.is_dead(gs.last_ts));
     assert_eq!(gs.rolling_dps(gs.last_ts), 0);

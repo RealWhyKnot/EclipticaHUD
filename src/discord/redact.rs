@@ -106,6 +106,7 @@ pub(super) fn log_line(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::log::take_logged;
     use super::super::*;
     use super::*;
 
@@ -117,12 +118,12 @@ mod tests {
         let lower = s.to_ascii_lowercase();
         let b = lower.as_bytes();
         for (i, _) in lower.match_indices("usr_") {
-            if b.get(i + 4).is_some_and(|c| c.is_ascii_alphanumeric()) {
+            if b.get(i + 4).is_some_and(u8::is_ascii_alphanumeric) {
                 return Some(format!("user id at {i}"));
             }
         }
         for (i, _) in lower.match_indices("instanceid=") {
-            if b.get(i + 11).is_some_and(|c| c.is_ascii_alphanumeric()) {
+            if b.get(i + 11).is_some_and(u8::is_ascii_alphanumeric) {
                 return Some(format!("instance id at {i}"));
             }
         }
@@ -285,11 +286,9 @@ mod tests {
     fn diag_never_writes_a_location() {
         take_logged();
         let reply = reply_for(LOC);
-        diag(&format!("reply {reply}"));
-        diag(&format!("connection lost: {LOC}"));
-        diag(&format!(
-            "handshake on discord-ipc-0 failed: {{\"secret\":\"{LOC}\"}}"
-        ));
+        info!("reply {reply}");
+        info!("connection lost: {LOC}");
+        info!("handshake on discord-ipc-0 failed: {{\"secret\":\"{LOC}\"}}");
         launch_vrchat(LOC);
         let logged = take_logged();
         assert_eq!(logged.len(), 4);

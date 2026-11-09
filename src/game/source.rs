@@ -1,9 +1,10 @@
-pub fn split_source(source: &str) -> (&str, &str) {
+use std::fmt::Write as _;
+pub(crate) fn split_source(source: &str) -> (&str, &str) {
     let s = source.trim();
-    if let Some(rest) = s.strip_prefix('(') {
-        if let Some(pos) = rest.rfind(')') {
-            return (rest[..pos].trim(), rest[pos + 1..].trim());
-        }
+    if let Some(rest) = s.strip_prefix('(')
+        && let Some(pos) = rest.rfind(')')
+    {
+        return (rest[..pos].trim(), rest[pos + 1..].trim());
     }
     ("", s)
 }
@@ -40,17 +41,17 @@ fn words(s: &str) -> String {
     out.trim().to_string()
 }
 
-pub fn pretty_attack(attack: &str) -> String {
+pub(crate) fn pretty_attack(attack: &str) -> String {
     let mut s = attack.trim();
     let mut suffix = "";
-    if let Some(open) = s.rfind(" (") {
-        if s.ends_with(')') {
-            let inner = &s[open + 2..s.len() - 1];
-            if !inner.bytes().all(|b| b.is_ascii_digit()) {
-                suffix = inner;
-            }
-            s = &s[..open];
+    if let Some(open) = s.rfind(" (")
+        && s.ends_with(')')
+    {
+        let inner = &s[open + 2..s.len() - 1];
+        if !inner.bytes().all(|b| b.is_ascii_digit()) {
+            suffix = inner;
         }
+        s = &s[..open];
     }
     let s = s.strip_prefix("attack_").unwrap_or(s);
     let s = s.strip_suffix("_VFX").unwrap_or(s);
@@ -64,7 +65,7 @@ pub fn pretty_attack(attack: &str) -> String {
     }
     let mut out = words(s);
     if !suffix.is_empty() {
-        out.push_str(&format!(" ({})", suffix.to_lowercase()));
+        let _ = write!(out, " ({})", suffix.to_lowercase());
     }
     out
 }
@@ -84,7 +85,7 @@ fn attacker_name(who: &str) -> String {
     who.to_string()
 }
 
-pub fn describe_source(source: &str) -> (String, String) {
+pub(crate) fn describe_source(source: &str) -> (String, String) {
     let (who, attack) = split_source(source);
     if !who.is_empty() {
         return (attacker_name(who), pretty_attack(attack));
@@ -95,7 +96,7 @@ pub fn describe_source(source: &str) -> (String, String) {
     ("unknown".to_string(), "no source".to_string())
 }
 
-pub fn generic_attacker(who: &str) -> bool {
+pub(crate) fn generic_attacker(who: &str) -> bool {
     matches!(who, "enemy" | "unknown")
 }
 

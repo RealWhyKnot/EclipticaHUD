@@ -1,11 +1,12 @@
 use super::App;
 use crate::game::run::{Page, Run, Split};
+use crate::hud::flags::Flag;
 use crate::hud::render::{Env, SPLIT_ROWS};
 
 const SPLIT_STEP: i32 = 3;
 
 impl App {
-    pub fn pages(&self) -> usize {
+    pub(crate) fn pages(&self) -> usize {
         self.gs.runs.len() + usize::from(self.gs.live_run().is_none())
     }
 
@@ -13,12 +14,12 @@ impl App {
         self.pages() - 1
     }
 
-    pub fn viewed_page(&self) -> usize {
+    pub(crate) fn viewed_page(&self) -> usize {
         self.sel_run
             .map_or(self.live_page(), |i| i.min(self.live_page()))
     }
 
-    pub fn viewed_run(&self) -> Option<(usize, &Run)> {
+    pub(crate) fn viewed_run(&self) -> Option<(usize, &Run)> {
         let p = self.viewed_page();
         self.gs.runs.get(p).map(|r| (p, r))
     }
@@ -30,7 +31,7 @@ impl App {
         self.viewed_run()
     }
 
-    pub fn group_pages(&self) -> usize {
+    pub(crate) fn group_pages(&self) -> usize {
         let n = self.viewed_run().map_or(0, |(_, r)| r.pages().len());
         n + usize::from(self.sel_run.is_none() && self.gs.boss.is_none())
     }
@@ -46,7 +47,7 @@ impl App {
         }
     }
 
-    pub fn viewed_group(&self) -> Option<(usize, Page)> {
+    pub(crate) fn viewed_group(&self) -> Option<(usize, Page)> {
         let (_, run) = self.viewed_run()?;
         let pages = run.pages();
         let last = pages.len().checked_sub(1)?;
@@ -57,11 +58,11 @@ impl App {
         Some((i, pages[i].clone()))
     }
 
-    pub fn is_live(&self) -> bool {
+    pub(crate) fn is_live(&self) -> bool {
         self.sel_run.is_none() && self.sel_group.is_none()
     }
 
-    pub fn run_prev(&mut self) -> bool {
+    pub(crate) fn run_prev(&mut self) -> bool {
         let p = self.viewed_page();
         if p == 0 {
             return false;
@@ -74,7 +75,7 @@ impl App {
         true
     }
 
-    pub fn run_next(&mut self) -> bool {
+    pub(crate) fn run_next(&mut self) -> bool {
         match self.sel_run {
             Some(i) => {
                 self.sel_run = (i + 1 < self.live_page()).then_some(i + 1);
@@ -88,7 +89,7 @@ impl App {
         }
     }
 
-    pub fn group_prev(&mut self) -> bool {
+    pub(crate) fn group_prev(&mut self) -> bool {
         match self.cur_group() {
             Some(i) if i > 0 => {
                 self.sel_group = Some(i - 1);
@@ -99,7 +100,7 @@ impl App {
         }
     }
 
-    pub fn group_next(&mut self) -> bool {
+    pub(crate) fn group_next(&mut self) -> bool {
         match self.sel_group {
             Some(i) => {
                 let live = self.live_group_index().unwrap_or(0);
@@ -111,7 +112,7 @@ impl App {
         }
     }
 
-    pub fn splits(&self) -> Vec<Split> {
+    pub(crate) fn splits(&self) -> Vec<Split> {
         match self.shown_run() {
             Some((i, _)) => self.gs.run_splits(i, self.now()),
             None => Vec::new(),
@@ -124,15 +125,15 @@ impl App {
         }
         let (_, run) = self.shown_run()?;
         let (_, page) = self.viewed_group()?;
-        Some(run.stage_of(&page) as usize - 1)
+        Some(crate::num::to_usize(run.stage_of(&page)) - 1)
     }
 
-    pub fn stages_ok(&self) -> bool {
+    pub(crate) fn stages_ok(&self) -> bool {
         (self.is_live() || self.viewed_group().is_some()) && !self.splits().is_empty()
     }
 
-    pub fn stages_shown(&self) -> bool {
-        self.stages_on && self.stages_ok()
+    pub(crate) fn stages_shown(&self) -> bool {
+        self.flags.has(Flag::Stages) && self.stages_ok()
     }
 
     fn split_max(&self) -> usize {
@@ -158,12 +159,12 @@ impl App {
         self.split_top = self.split_top.min(self.split_max());
     }
 
-    pub fn split_wheel(&mut self, delta: i32) -> bool {
+    pub(crate) fn split_wheel(&mut self, delta: i32) -> bool {
         self.split_wheel_acc += delta;
         let steps = self.split_wheel_acc / super::logwin::WHEEL_DELTA;
         self.split_wheel_acc -= steps * super::logwin::WHEEL_DELTA;
-        let top = self.split_top as i32 - steps * SPLIT_STEP;
-        let top = top.clamp(0, self.split_max() as i32) as usize;
+        let top = crate::num::to_i32(self.split_top) - steps * SPLIT_STEP;
+        let top = crate::num::to_usize(top.clamp(0, crate::num::to_i32(self.split_max())));
         let moved = top != self.split_top;
         self.split_top = top;
         moved

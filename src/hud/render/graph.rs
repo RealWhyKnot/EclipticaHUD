@@ -1,36 +1,36 @@
-use super::theme::*;
 use super::Renderer;
+use super::theme::{BG, CARD, DIM, mix};
 use crate::game::run::Graph;
 
-pub const GRAPH_COLS: usize = 77;
+pub(super) const GRAPH_COLS: usize = 77;
 
 impl Renderer {
     pub(super) fn graph_well(&self, x: i32, y: i32, w: i32, h: i32) {
         self.rround(x - 2, y - 2, w + 4, h + 4, 4, mix(CARD, BG, 0.55));
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn graph(&self, x: i32, y: i32, w: i32, h: i32, g: &Graph, color: u32) {
-        self.graph_well(x, y, w, h);
-        let n = g.cols.len();
-        let peak = g.cols.iter().copied().max().unwrap_or(0);
-        if n == 0 || peak == 0 {
+    pub(super) fn graph(&self, x: i32, y: i32, width: i32, height: i32, graph: &Graph, color: u32) {
+        self.graph_well(x, y, width, height);
+        let count = graph.cols.len();
+        let peak = graph.cols.iter().copied().max().unwrap_or(0);
+        if count == 0 || peak == 0 {
             return;
         }
         let body = mix(CARD, color, 0.45);
-        for (i, &v) in g.cols.iter().enumerate() {
-            let x0 = x + i as i32 * w / n as i32;
-            let x1 = x + (i as i32 + 1) * w / n as i32;
+        for (index, &value) in graph.cols.iter().enumerate() {
+            let x0 = x + crate::num::to_i32(index) * width / crate::num::to_i32(count);
+            let x1 = x + (crate::num::to_i32(index) + 1) * width / crate::num::to_i32(count);
             let cw = if x1 - x0 >= 3 { x1 - x0 - 1 } else { x1 - x0 };
-            let ch = ((v * h as u64).div_ceil(peak) as i32).min(h);
+            let ch =
+                crate::num::to_i32((value * crate::num::to_u64(height)).div_ceil(peak)).min(height);
             if ch > 0 {
-                self.fill(x0, y + h - ch, cw, ch, body);
-                self.fill(x0, y + h - ch, cw, 1, color);
+                self.fill(x0, y + height - ch, cw, ch, body);
+                self.fill(x0, y + height - ch, cw, 1, color);
             }
         }
-        for &m in &g.marks {
-            let mx = x + m as i32 * w / n as i32;
-            self.fill(mx, y, 1, h, mix(CARD, DIM, 0.6));
+        for &mark in &graph.marks {
+            let mx = x + crate::num::to_i32(mark) * width / crate::num::to_i32(count);
+            self.fill(mx, y, 1, height, mix(CARD, DIM, 0.6));
         }
     }
 }

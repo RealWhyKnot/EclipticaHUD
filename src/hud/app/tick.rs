@@ -1,14 +1,23 @@
-use super::anim::*;
-use super::{play, App, BLIP, TOKENS, YOU};
+use super::anim::{
+    ANIM_MS, DELETE_ARM, FADE_MS, FLASH_MS, SLIDE_MS, TAKEN_FLASH_MS, THUMB_HOLD_MS, WARN_MS,
+    approach, approach_rate, timed,
+};
+use super::{App, BLIP, TOKENS, YOU, play};
 use crate::discord;
+use crate::hud::flags::{Flag, Flags};
 use crate::hud::render::{Env, Frame, LogHit};
 use crate::update;
 use std::time::Instant;
 
-pub struct Tick {
-    pub redraw: bool,
-    pub redraw_log: bool,
-    pub redraw_party: bool,
+#[derive(Clone, Copy)]
+pub(crate) struct Redraw {
+    pub main: bool,
+    pub log: bool,
+    pub party: bool,
+}
+
+pub(crate) struct Tick {
+    pub redraw: Redraw,
     pub timer_ms: Option<u32>,
     pub quit: bool,
 }
@@ -24,8 +33,8 @@ impl App {
         }
     }
 
-    pub fn render(&mut self) {
-        if self.stages_on {
+    pub(crate) fn render(&mut self) {
+        if self.flags.has(Flag::Stages) {
             self.split_track();
         }
         let env = self.env();
@@ -34,7 +43,26 @@ impl App {
             env,
             pages: self.pages(),
             view_page: self.viewed_page(),
-            settings_open: self.settings_open,
+            flags: Flags::default()
+                .with(Flag::SettingsOpen, self.flags.has(Flag::SettingsOpen))
+                .with(
+                    Flag::LogOk,
+                    env != Env::NoVrchat && self.watch.path.is_some(),
+                )
+                .with(Flag::LogOpen, self.log.visible)
+                .with(Flag::PromptOpen, self.prompt_shown())
+                .with(Flag::Sound, self.flags.has(Flag::Sound))
+                .with(Flag::Topmost, self.flags.has(Flag::Topmost))
+                .with(Flag::Discord, self.flags.has(Flag::Discord))
+                .with(Flag::Usage, self.flags.has(Flag::Usage))
+                .with(Flag::UsageFailing, self.flags.has(Flag::UsageFailing))
+                .with(Flag::Board, self.flags.has(Flag::Board))
+                .with(Flag::UsageAsk, self.usage_prompt_shown())
+                .with(Flag::PartyOpen, self.party_win.visible)
+                .with(Flag::RunSelected, self.sel_run.is_some())
+                .with(Flag::GroupSelected, self.sel_group.is_some())
+                .with(Flag::StagesButton, self.stages_ok())
+                .with(Flag::Stages, self.stages_shown()),
             scale: self.shown_scale(),
             scale_max: self.scale_max(),
             alpha: self.alpha,
@@ -47,56 +75,45 @@ impl App {
             pressed: self.pressed,
             tip: self.tip(),
             vr: self.vr.status(),
-            log_ok: env != Env::NoVrchat && self.watch.path.is_some(),
-            log_open: self.log.visible,
+
             progress_shown: self.progress_shown,
             dps_shown: self.dps_shown,
             fight_dps_shown: self.fight_dps_shown,
             taken_shown: self.taken_shown,
             taken_rate_shown: self.taken_rate_shown,
             update: self.badge.clone(),
-            prompt: self.prompt_shown(),
-            sound_on: self.sound_on,
-            topmost: self.topmost,
+
             discord: self.link,
-            discord_on: self.discord_on,
-            usage_on: self.usage_on,
-            usage_failing: self.usage_failing,
-            board_on: self.board_on,
             board_status: self.board_status,
-            board_delete: if self.board_deleting {
+            board_delete: if self.flags.has(Flag::BoardDeleting) {
                 crate::hud::render::DELETE_BUSY
             } else if self.board_armed.is_some() {
                 crate::hud::render::DELETE_ARMED
             } else {
                 0
             },
-            ask_usage: self.usage_prompt_shown(),
-            party_open: self.party_win.visible,
+
             view_run: self.shown_run().map(|(i, _)| i),
             view_group: self.viewed_group().map(|(i, _)| i),
             group_pages: self.group_pages(),
-            run_sel: self.sel_run.is_some(),
-            group_sel: self.sel_group.is_some(),
-            stages_btn: self.stages_ok(),
-            stages: self.stages_shown(),
+
             split_top: self.split_top,
             sync: self.run_sync(std::time::Instant::now()),
         };
         self.renderer.draw_main(&self.gs, &frame);
         self.renderer.rgba(&mut self.rgba);
-        self.vr.submit(
-            &self.rgba,
-            self.renderer.width as u32,
-            self.renderer.height as u32,
-            true,
-            env == Env::InWorld,
-            self.alpha as f32 / 100.0,
-            self.scale,
-        );
+        self.vr.submit(&crate::vr::Panel {
+            rgba: &self.rgba,
+            width: self.renderer.width.cast_unsigned(),
+            height: self.renderer.height.cast_unsigned(),
+            changed: true,
+            visible: env == Env::InWorld,
+            alpha: f32::from(self.alpha) / 100.0,
+            scale: self.scale,
+        });
     }
 
-    pub fn tick(&mut self) -> Tick {
+    pub(crate) fn tick(&mut self) -> Tick {
         let rotated = self.pump_log();
         let (env, env_changed) = self.poll_env();
         let now = self.now();
@@ -120,29 +137,29 @@ impl App {
             || (env == Env::InWorld && self.gs.live_run().is_some())
             || services_changed
             || env_changed
-            || dead != self.was_dead;
-        self.was_dead = dead;
+            || dead != self.flags.has(Flag::WasDead);
+        self.flags.set(Flag::WasDead, dead);
 
         let changed = self.gs.changed;
         self.gs.changed = false;
         let (log_anim, redraw_log) = if self.log.visible {
-            self.tick_log(rotated, env_changed, changed)
+            self.tick_log(rotated || env_changed || changed)
         } else {
             (false, false)
         };
-        self.primed = true;
+        self.flags.set(Flag::Primed, true);
         if redraw {
             self.render();
         } else {
-            self.vr.submit(
-                &self.rgba,
-                self.renderer.width as u32,
-                self.renderer.height as u32,
-                false,
-                env == Env::InWorld,
-                self.alpha as f32 / 100.0,
-                self.scale,
-            );
+            self.vr.submit(&crate::vr::Panel {
+                rgba: &self.rgba,
+                width: self.renderer.width.cast_unsigned(),
+                height: self.renderer.height.cast_unsigned(),
+                changed: false,
+                visible: env == Env::InWorld,
+                alpha: f32::from(self.alpha) / 100.0,
+                scale: self.scale,
+            });
         }
         let want: u32 = if anim || log_anim || party_anim {
             ANIM_MS
@@ -152,24 +169,26 @@ impl App {
         let timer_ms = (want != self.timer_ms).then_some(want);
         self.timer_ms = want;
         Tick {
-            redraw,
-            redraw_log,
-            redraw_party,
+            redraw: Redraw {
+                main: redraw,
+                log: redraw_log,
+                party: redraw_party,
+            },
             timer_ms,
             quit: update::restart_pending() && self.can_restart(),
         }
     }
 
-    pub fn board_header(&self) -> crate::board::Header {
+    pub(crate) fn board_header(&self) -> crate::board::Header {
         let gs = &self.gs;
         crate::board::Header {
             name: gs.me.clone().unwrap_or_default(),
-            party: gs.roster.len().max(1) as u32,
+            party: crate::num::to_u32(gs.roster.len().max(1)),
             room: gs
                 .location
                 .as_deref()
                 .map_or_else(String::new, |l| crate::usage::hash(&["eboard room", l], 2)),
-            share_name: self.board_on,
+            share_name: self.flags.has(Flag::Board),
         }
     }
 
@@ -206,7 +225,8 @@ impl App {
                 .is_none_or(|t| t.elapsed().as_secs() >= VRC_CHECK_SECS)
         {
             self.vrc_checked = Some(Instant::now());
-            self.vrc_running = crate::process::running("VRChat.exe");
+            self.flags
+                .set(Flag::VrcRunning, crate::process::running("VRChat.exe"));
         }
         let env = self.env();
         let env_changed = self.last_env.is_some_and(|e| e != env);
@@ -219,16 +239,16 @@ impl App {
             self.last_target_since = self.gs.target_since;
             if self.gs.target.is_some() {
                 self.flash_at = Some(Instant::now());
-                if self.sound_on {
+                if self.flags.has(Flag::Sound) {
                     play(if self.gs.targets_me() { YOU } else { BLIP });
                 }
             }
         }
         if self.gs.token_alerts != self.token_alerts_seen {
             self.token_alerts_seen = self.gs.token_alerts;
-            if self.primed {
+            if self.flags.has(Flag::Primed) {
                 self.warn_at = Some(Instant::now());
-                if self.sound_on {
+                if self.flags.has(Flag::Sound) {
                     play(TOKENS);
                 }
             }
@@ -236,7 +256,7 @@ impl App {
         let taken_seq = self.gs.taken.back().map_or(0, |e| e.seq);
         if taken_seq != self.last_taken_seq {
             self.last_taken_seq = taken_seq;
-            if self.primed && taken_seq != 0 {
+            if self.flags.has(Flag::Primed) && taken_seq != 0 {
                 self.taken_flash_at = Some(Instant::now());
             }
         }
@@ -247,31 +267,31 @@ impl App {
         let link = discord::link();
         let link_changed = link != self.link;
         self.link = link;
-        let failing =
-            self.usage_on && crate::usage::FAILING.load(std::sync::atomic::Ordering::Relaxed);
-        let failing_changed = failing != self.usage_failing;
-        self.usage_failing = failing;
+        let failing = self.flags.has(Flag::Usage)
+            && crate::usage::FAILING.load(std::sync::atomic::Ordering::Relaxed);
+        let failing_changed = failing != self.flags.has(Flag::UsageFailing);
+        self.flags.set(Flag::UsageFailing, failing);
         let board = crate::board::STATUS.load(std::sync::atomic::Ordering::Relaxed);
         let board_changed = board != self.board_status;
         self.board_status = board;
-        let deleting = self.board_deleting
+        let deleting = self.flags.has(Flag::BoardDeleting)
             && crate::board::DELETING.load(std::sync::atomic::Ordering::Relaxed);
         let expired = self.board_armed.is_some_and(|t| t.elapsed() >= DELETE_ARM);
         if expired {
             self.board_armed = None;
         }
-        let delete_changed = expired || deleting != self.board_deleting;
-        self.board_deleting = deleting;
+        let delete_changed = expired || deleting != self.flags.has(Flag::BoardDeleting);
+        self.flags.set(Flag::BoardDeleting, deleting);
         let badge_changed = self.poll_badge();
         link_changed || failing_changed || board_changed || delete_changed || badge_changed
     }
 
-    pub fn poll_badge(&mut self) -> bool {
+    pub(crate) fn poll_badge(&mut self) -> bool {
         let badge = update::badge();
         let badge_changed = badge != self.badge;
         if badge_changed {
             if matches!(badge, update::Badge::Ready(_)) && self.badge == update::Badge::None {
-                self.prompt_open = true;
+                self.flags.set(Flag::PromptOpen, true);
             }
             self.badge = badge;
         }
@@ -284,16 +304,20 @@ impl App {
         let tip_pending = self.hover.is_some() && self.tip().is_none();
         let mut anim = approach(&mut self.progress_shown, self.gs.progress, 0.002);
         anim |= tip_pending;
-        anim |= approach(&mut self.dps_shown, rolling as f32, 0.5);
+        anim |= approach(&mut self.dps_shown, crate::num::to_f32(rolling), 0.5);
         anim |= approach(
             &mut self.fight_dps_shown,
-            self.gs.fight_dps(now) as f32,
+            crate::num::to_f32(self.gs.fight_dps(now)),
             0.5,
         );
-        anim |= approach(&mut self.taken_shown, rolling_taken as f32, 0.5);
+        anim |= approach(
+            &mut self.taken_shown,
+            crate::num::to_f32(rolling_taken),
+            0.5,
+        );
         anim |= approach(
             &mut self.taken_rate_shown,
-            self.gs.fight_taken_rate(now) as f32,
+            crate::num::to_f32(self.gs.fight_taken_rate(now)),
             0.5,
         );
         anim |= self.flash_at.is_some() && timed(self.flash_at, FLASH_MS) < 1.0;
@@ -308,11 +332,11 @@ impl App {
         anim | dead
     }
 
-    fn tick_log(&mut self, rotated: bool, env_changed: bool, changed: bool) -> (bool, bool) {
+    fn tick_log(&mut self, dirty: bool) -> (bool, bool) {
         let log_tip_pending = self.log.hover.is_some() && self.log_tip().is_none();
         let rows = self.log_rows();
         if rows != self.log.rows {
-            if rows > self.log.rows && self.primed && self.log.scroll_shown < 1.0 {
+            if rows > self.log.rows && self.flags.has(Flag::Primed) && self.log.scroll_shown < 1.0 {
                 self.log.slide_at = Some(Instant::now());
             }
             self.log.rows = rows;
@@ -332,21 +356,22 @@ impl App {
         );
         log_anim |= self.log.slide_at.is_some() && timed(self.log.slide_at, SLIDE_MS) < 1.0;
         let fade = timed(self.log.opened_at, FADE_MS);
-        self.log.alpha =
-            (crate::hud::render::ease_out_cubic(fade) * self.alpha_byte() as f32) as u8;
+        self.log.alpha = crate::num::to_u8(
+            crate::hud::render::ease_out_cubic(fade) * f32::from(self.alpha_byte()),
+        );
         log_anim |= fade < 1.0;
         log_anim |= log_tip_pending;
         let log_tip = self.log_tip();
         let log_tip_changed = log_tip != self.last_log_tip;
         self.last_log_tip = log_tip;
-        let redraw_log = changed || log_anim || rotated || log_tip_changed || env_changed;
+        let redraw_log = dirty || log_anim || log_tip_changed;
         if redraw_log {
             self.render_log();
         }
         (log_anim, redraw_log)
     }
 
-    pub fn nudge_timer(&mut self) {
+    pub(crate) fn nudge_timer(&mut self) {
         self.timer_ms = ANIM_MS;
     }
 }

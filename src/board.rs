@@ -1,7 +1,8 @@
-use crate::game::event::{parse_msg, Event};
+use crate::game::event::{Event, parse_msg};
 use crate::game::names::boss_name;
 use crate::game::run::base_name;
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -38,15 +39,15 @@ const STREAM: &[&str] = &[
     "VRCApplication: HandleApplicationQuit",
 ];
 
-pub const OK: u8 = 0;
-pub const FAILING: u8 = 1;
-pub const TAKEN: u8 = 2;
+pub(crate) const OK: u8 = 0;
+pub(crate) const FAILING: u8 = 1;
+pub(crate) const TAKEN: u8 = 2;
 
-pub static ON: AtomicBool = AtomicBool::new(false);
-pub static STATUS: AtomicU8 = AtomicU8::new(OK);
-pub static DELETING: AtomicBool = AtomicBool::new(false);
+pub(crate) static ON: AtomicBool = AtomicBool::new(false);
+pub(crate) static STATUS: AtomicU8 = AtomicU8::new(OK);
+pub(crate) static DELETING: AtomicBool = AtomicBool::new(false);
 
-pub fn streams(msg: &str) -> bool {
+pub(crate) fn streams(msg: &str) -> bool {
     STREAM.iter().any(|p| msg.starts_with(p))
 }
 
@@ -68,7 +69,7 @@ fn short(s: &str) -> String {
         .to_string()
 }
 
-pub fn label(msg: &str) -> Option<(String, String)> {
+pub(crate) fn label(msg: &str) -> Option<(String, String)> {
     let Some(Event::BossFight { name, .. }) = parse_msg(msg) else {
         return None;
     };
@@ -81,7 +82,7 @@ pub fn label(msg: &str) -> Option<(String, String)> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Header {
+pub(crate) struct Header {
     pub name: String,
     pub party: u32,
     pub room: String,
@@ -89,12 +90,12 @@ pub struct Header {
 }
 
 impl Header {
-    pub fn ok(&self) -> bool {
+    pub(crate) fn ok(&self) -> bool {
         !self.name.is_empty() && !self.name.to_ascii_lowercase().contains("usr_")
     }
 }
 
-pub fn body(
+pub(crate) fn body(
     key: &str,
     stream: &str,
     seq: u64,
@@ -113,32 +114,33 @@ pub fn body(
     }
     let labels: BTreeMap<String, String> = lines.iter().filter_map(|(_, m)| label(m)).collect();
     for (base, shown) in labels {
-        out.push_str(&format!("label {base}\t{shown}\n"));
+        let _ = writeln!(out, "label {base}\t{shown}");
     }
     for (ts, m) in lines {
-        out.push_str(&format!("{ts}\t{m}\n"));
+        let _ = writeln!(out, "{ts}\t{m}");
     }
     out
 }
 
-pub fn forget_body(key: &str) -> String {
+pub(crate) fn forget_body(key: &str) -> String {
     format!("{MAGIC}\nkey {key}\nforget\n")
 }
 
-pub fn valid_key(s: &str) -> bool {
+pub(crate) fn valid_key(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-pub fn random_hex(bytes: usize) -> String {
+pub(crate) fn random_hex(bytes: usize) -> String {
     use windows_sys::Win32::Security::Cryptography::{
-        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
     };
     let mut buf = vec![0u8; bytes];
+    // SAFETY: the buffer pointer and length describe `buf`, which outlives the call.
     let status = unsafe {
         BCryptGenRandom(
             std::ptr::null_mut(),
             buf.as_mut_ptr(),
-            buf.len() as u32,
+            crate::num::to_u32(buf.len()),
             BCRYPT_USE_SYSTEM_PREFERRED_RNG,
         )
     };
@@ -148,22 +150,22 @@ pub fn random_hex(bytes: usize) -> String {
             chunk.copy_from_slice(&r[..chunk.len()]);
         }
     }
-    buf.iter().map(|b| format!("{b:02x}")).collect()
+    crate::relay::sha256::hex(&buf)
 }
 
-pub fn new_key() -> String {
+pub(crate) fn new_key() -> String {
     random_hex(32)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Reply {
+pub(crate) enum Reply {
     Done,
     Taken,
     Refused,
     Retry,
 }
 
-pub fn reply(status: Option<u32>) -> Reply {
+pub(crate) fn reply(status: Option<u32>) -> Reply {
     match status {
         Some(200..=299) => Reply::Done,
         Some(409) => Reply::Taken,
@@ -172,7 +174,7 @@ pub fn reply(status: Option<u32>) -> Reply {
     }
 }
 
-pub struct Outbox {
+pub(crate) struct Outbox {
     stream: String,
     seq: u64,
     lines: Vec<(u64, String)>,
@@ -196,24 +198,30 @@ impl Default for Outbox {
     }
 }
 
-pub enum Job {
+pub(crate) enum Job {
     Forget,
     Send(String),
 }
 
 impl Outbox {
-    pub fn restart(&mut self) {
+    pub(crate) fn restart(&mut self) {
         self.stream = random_hex(8);
         self.seq = 0;
         self.lines.clear();
         self.queue.clear();
     }
 
-    pub fn push(&mut self, lines: impl IntoIterator<Item = (u64, String)>) {
+    pub(crate) fn push(&mut self, lines: impl IntoIterator<Item = (u64, String)>) {
         self.lines.extend(lines);
     }
 
-    pub fn flush(&mut self, key: &str, header: impl FnOnce() -> Header, now_ms: u64, at: Instant) {
+    pub(crate) fn flush(
+        &mut self,
+        key: &str,
+        header: impl FnOnce() -> Header,
+        now_ms: u64,
+        at: Instant,
+    ) {
         if self.lines.is_empty() || self.flushed.is_some_and(|t| at.duration_since(t) < EVERY) {
             return;
         }
@@ -245,12 +253,12 @@ impl Outbox {
         }
     }
 
-    pub fn forget(&mut self) {
+    pub(crate) fn forget(&mut self) {
         self.restart();
         self.forget = true;
     }
 
-    pub fn job(&self, on: bool) -> Option<Job> {
+    pub(crate) fn job(&self, on: bool) -> Option<Job> {
         if self.forget {
             return Some(Job::Forget);
         }
@@ -260,7 +268,7 @@ impl Outbox {
         self.queue.front().cloned().map(Job::Send)
     }
 
-    pub fn done(&mut self, job: &Job, r: Reply) -> (u8, Option<Duration>) {
+    pub(crate) fn done(&mut self, job: &Job, r: Reply) -> (u8, Option<Duration>) {
         if r == Reply::Retry {
             let wait = BACKOFF[self.fails.min(BACKOFF.len() - 1)];
             self.fails += 1;
@@ -284,8 +292,11 @@ static KEY: Mutex<String> = Mutex::new(String::new());
 static WAKE: Condvar = Condvar::new();
 
 fn with<T>(f: impl FnOnce(&mut Outbox) -> T) -> T {
-    let mut g = OUTBOX.lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = OUTBOX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let out = f(g.get_or_insert_with(Outbox::default));
+    drop(g);
     WAKE.notify_all();
     out
 }
@@ -293,14 +304,14 @@ fn with<T>(f: impl FnOnce(&mut Outbox) -> T) -> T {
 fn unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+        .map_or(0, |d| crate::num::to_u64(d.as_millis()))
 }
 
-pub fn fresh(utc: u64, now: u64) -> bool {
+pub(crate) fn fresh(utc: u64, now: u64) -> bool {
     utc + FRESH >= now
 }
 
-pub fn feed(kept: &[(u64, String)], header: impl FnOnce() -> Header) {
+pub(crate) fn feed(kept: &[(u64, String)], header: impl FnOnce() -> Header) {
     if !ON.load(Ordering::Relaxed) {
         return;
     }
@@ -312,37 +323,50 @@ pub fn feed(kept: &[(u64, String)], header: impl FnOnce() -> Header) {
         .map(|(ts, m)| (crate::usage::utc_unix(*ts), clean(m)))
         .filter(|(utc, _)| fresh(*utc, now))
         .collect();
-    let key = KEY.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let mut g = OUTBOX.lock().unwrap_or_else(|e| e.into_inner());
+    let key = KEY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let mut g = OUTBOX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let o = g.get_or_insert_with(Outbox::default);
     o.push(lines);
     let had = o.queue.len();
     o.flush(&key, header, now_ms, Instant::now());
-    if o.queue.len() != had {
+    let grew = o.queue.len() != had;
+    drop(g);
+    if grew {
         WAKE.notify_all();
     }
 }
 
-pub fn forget() {
+pub(crate) fn forget() {
     DELETING.store(true, Ordering::Relaxed);
     with(Outbox::forget);
 }
 
-pub fn spawn(key: String, forgot: impl Fn() + Send + 'static) {
-    *KEY.lock().unwrap_or_else(|e| e.into_inner()) = key.clone();
+pub(crate) fn spawn(key: String, forgot: impl Fn() + Send + 'static) {
+    KEY.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone_from(&key);
     let _ = std::thread::Builder::new()
         .name("board".into())
         .spawn(move || {
-            let mut g = OUTBOX.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = OUTBOX
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut until = Some(Instant::now());
             loop {
                 g = match until {
                     Some(t) => {
                         WAKE.wait_timeout(g, t.saturating_duration_since(Instant::now()))
-                            .unwrap_or_else(|e| e.into_inner())
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .0
                     }
-                    None => WAKE.wait(g).unwrap_or_else(|e| e.into_inner()),
+                    None => WAKE
+                        .wait(g)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
                 };
                 if until.is_some_and(|t| Instant::now() < t) {
                     continue;
@@ -365,7 +389,9 @@ pub fn spawn(key: String, forgot: impl Fn() + Send + 'static) {
                 };
                 drop(g);
                 let r = reply(crate::relay::post_board(text.as_bytes()));
-                g = OUTBOX.lock().unwrap_or_else(|e| e.into_inner());
+                g = OUTBOX
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let o = g.get_or_insert_with(Outbox::default);
                 let (status, retry) = o.done(&job, r);
                 let gone = matches!(job, Job::Forget) && !o.forget;
@@ -375,7 +401,9 @@ pub fn spawn(key: String, forgot: impl Fn() + Send + 'static) {
                     DELETING.store(false, Ordering::Relaxed);
                     drop(g);
                     forgot();
-                    g = OUTBOX.lock().unwrap_or_else(|e| e.into_inner());
+                    g = OUTBOX
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                 }
             }
         });

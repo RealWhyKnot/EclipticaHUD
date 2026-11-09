@@ -36,8 +36,9 @@ jobs:
       RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
           fetch-tags: true
           ref: ${{ inputs.tag || github.ref }}
@@ -75,8 +76,10 @@ jobs:
       - name: Package
         id: package
         shell: pwsh
+        env:
+          EHUD_VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          $name = "ecliptica-hud-${{ steps.tag.outputs.version }}.exe"
+          $name = "ecliptica-hud-$env:EHUD_VERSION.exe"
           $exe = "target/release/$name"
           Copy-Item target/release/ecliptica-hud.exe $exe
           $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()

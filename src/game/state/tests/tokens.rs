@@ -27,7 +27,7 @@ fn token_spawns_per_level() {
     );
     assert_eq!(gs.level_tokens, vec![(true, 35), (true, 55)]);
     feed_at(&mut gs, "08:50:00", "ECLIPTICA - now in lobby");
-    assert!(gs.level_tokens.is_empty());
+    assert_eq!(gs.level_tokens.len(), 0);
 }
 
 #[test]

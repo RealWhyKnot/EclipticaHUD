@@ -28,7 +28,7 @@ pub(super) fn approach_rate(cur: &mut f32, target: f32, eps: f32, rate: f32) -> 
 
 pub(super) fn timed(at: Option<Instant>, ms: f32) -> f32 {
     match at {
-        Some(t) => (t.elapsed().as_millis() as f32 / ms).min(1.0),
+        Some(t) => (crate::num::to_f32(t.elapsed().as_millis()) / ms).min(1.0),
         None => 1.0,
     }
 }
@@ -37,7 +37,8 @@ impl App {
     pub(super) fn dead_pulse(&self) -> f32 {
         match self.dead_since {
             Some(t) => {
-                let ph = t.elapsed().as_millis() as f32 / DEAD_PULSE_MS * std::f32::consts::TAU;
+                let ph = crate::num::to_f32(t.elapsed().as_millis()) / DEAD_PULSE_MS
+                    * std::f32::consts::TAU;
                 ph.sin() * 0.5 + 0.5
             }
             None => 0.0,

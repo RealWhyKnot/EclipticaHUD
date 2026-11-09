@@ -117,7 +117,7 @@ fn taken_aggregates_current_fight() {
     assert_eq!(gs.fight_taken, 0);
     assert_eq!(gs.fight_hits, 0);
     assert_eq!(gs.fight_max_hit, 0);
-    assert!(gs.fight_attacks.is_empty());
+    assert_eq!(gs.fight_attacks.len(), 0);
     assert_eq!(gs.fight_taken_rate(t + 6), 0);
     assert_eq!(gs.taken.len(), 6);
     let seqs: Vec<u64> = gs.taken.iter().map(|e| e.seq).collect();
@@ -149,5 +149,5 @@ fn taken_and_history_cap() {
     assert_eq!(gs.fight_hits, 600);
     gs.log_rotated();
     assert!(gs.taken.is_empty());
-    assert!(gs.fight_attacks.is_empty());
+    assert_eq!(gs.fight_attacks.len(), 0);
 }

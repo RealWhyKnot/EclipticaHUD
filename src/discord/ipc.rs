@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    APP_ID, Duration, File, Instant, Link, Read, Write, clip, esc, io, json_str, link, redact,
+    set_link,
+};
+use tracing::info;
 
 const REPLY_WAIT: Duration = Duration::from_secs(5);
 
@@ -7,7 +11,7 @@ pub(super) const DIAG_CLIP: usize = 600;
 fn frame(op: u32, body: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + body.len());
     out.extend_from_slice(&op.to_le_bytes());
-    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(&crate::num::to_u32(body.len()).to_le_bytes());
     out.extend_from_slice(body.as_bytes());
     out
 }
@@ -17,9 +21,9 @@ pub(super) fn set_activity_cmd(pid: u32, nonce: u64, activity: Option<&str>) -> 
         Some(a) => format!(
             "{{\"cmd\":\"SET_ACTIVITY\",\"args\":{{\"pid\":{pid},\"activity\":{a}}},\"nonce\":\"{nonce}\"}}"
         ),
-        None => format!(
-            "{{\"cmd\":\"SET_ACTIVITY\",\"args\":{{\"pid\":{pid}}},\"nonce\":\"{nonce}\"}}"
-        ),
+        None => {
+            format!("{{\"cmd\":\"SET_ACTIVITY\",\"args\":{{\"pid\":{pid}}},\"nonce\":\"{nonce}\"}}")
+        }
     }
 }
 
@@ -53,10 +57,10 @@ impl Conn {
             };
             match conn.handshake() {
                 Ok(()) => {
-                    diag(&format!("connected on discord-ipc-{i}"));
+                    info!("connected on discord-ipc-{i}");
                     return Some(conn);
                 }
-                Err(e) => diag(&format!("handshake on discord-ipc-{i} failed: {e}")),
+                Err(e) => info!("handshake on discord-ipc-{i} failed: {e}"),
             }
         }
         None
@@ -76,13 +80,14 @@ impl Conn {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::Pipes::PeekNamedPipe;
         let mut avail = 0u32;
+        // SAFETY: the pipe handle is open for as long as `self`, and `avail` is a live u32.
         let ok = unsafe {
             PeekNamedPipe(
-                self.pipe.as_raw_handle() as _,
+                self.pipe.as_raw_handle().cast(),
                 std::ptr::null_mut(),
                 0,
                 std::ptr::null_mut(),
-                &mut avail,
+                &raw mut avail,
                 std::ptr::null_mut(),
             )
         };
@@ -97,10 +102,12 @@ impl Conn {
         if self.available()? < 8 {
             return Ok(None);
         }
-        let mut head = [0u8; 8];
-        self.pipe.read_exact(&mut head)?;
-        let op = u32::from_le_bytes(head[..4].try_into().unwrap());
-        let len = u32::from_le_bytes(head[4..].try_into().unwrap()) as usize;
+        let mut op = [0u8; 4];
+        let mut len = [0u8; 4];
+        self.pipe.read_exact(&mut op)?;
+        self.pipe.read_exact(&mut len)?;
+        let op = u32::from_le_bytes(op);
+        let len = crate::num::to_usize(u32::from_le_bytes(len));
         if len > 64 * 1024 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -146,13 +153,13 @@ impl Conn {
                         joins.push(secret);
                     } else if evt.as_deref() == Some("ERROR") {
                         if link() != Link::Rejected {
-                            diag(&format!("discord error: {}", clip(&redact(&body))));
+                            info!("discord error: {}", clip(&redact(&body)));
                         }
                         set_link(Link::Rejected);
                     } else if json_str(&body, "cmd").as_deref() == Some("SET_ACTIVITY") {
                         let shown: String = redact(&body).chars().take(DIAG_CLIP).collect();
                         if shown != self.last_reply {
-                            diag(&format!("reply {shown}"));
+                            info!("reply {shown}");
                             self.last_reply = shown;
                         }
                         set_link(Link::Connected);
@@ -166,7 +173,10 @@ impl Conn {
 
 #[cfg(test)]
 mod tests {
+    use super::super::activity;
+    use super::super::log::take_logged;
     use super::*;
+    use crate::game::state::GameState;
 
     const LOC: &str = "wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)";
 
@@ -256,7 +266,7 @@ mod tests {
             .write_all(&frame(2, &format!("{{\"secret\":\"{LOC}\"}}")))
             .unwrap();
         let err = conn.pump().unwrap_err();
-        diag(&format!("connection lost: {err}"));
+        info!("connection lost: {err}");
         set_link(Link::Off);
         let logged = take_logged();
         assert!(logged.iter().any(|l| l.starts_with("reply ")), "{logged:?}");
@@ -277,12 +287,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "needs a running Discord client"]
     fn live_handshake() {
         let mut conn = Conn::open().expect("Discord running with IPC");
         std::thread::sleep(Duration::from_millis(500));
         let (op, body) = conn.next_frame().unwrap().expect("subscribe reply");
-        println!("{op} {body}");
+        crate::console::say(format_args!("{op} {body}"));
         assert_eq!(op, 1);
         assert_eq!(json_str(&body, "cmd").as_deref(), Some("SUBSCRIBE"));
         assert_ne!(json_str(&body, "evt").as_deref(), Some("ERROR"));
@@ -303,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "needs a running Discord client"]
     fn live_set_activity() {
         let mut gs = GameState::default();
         feed(&mut gs, "03:59:35", &format!("[Behaviour] Joining {LOC}"));
@@ -325,10 +335,10 @@ mod tests {
         conn.command(|n| set_activity_cmd(pid, n, Some(&a)))
             .unwrap();
         let reply = live_reply(&mut conn);
-        println!("{reply}");
+        crate::console::say(format_args!("{reply}"));
         std::thread::sleep(Duration::from_secs(3));
         conn.command(|n| set_activity_cmd(pid, n, None)).unwrap();
-        println!("{}", live_reply(&mut conn));
+        crate::console::say(format_args!("{}", live_reply(&mut conn)));
         assert_ne!(json_str(&reply, "evt").as_deref(), Some("ERROR"), "{reply}");
     }
 }

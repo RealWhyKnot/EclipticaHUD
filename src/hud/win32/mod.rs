@@ -8,30 +8,65 @@ mod window;
 
 use crate::history::History;
 use crate::hud::app::App;
-use crate::hud::app::{fit_scale, WINDOW_STEPS};
+use crate::hud::app::{WINDOW_STEPS, fit_scale};
+use crate::hud::flags::Flag;
 use crate::hud::render::{
-    Hit, LogHit, PartyHit, Renderer, LOGICAL_H, LOGICAL_W, LOG_H, LOG_W, MAX_ALPHA, MAX_SCALE,
-    MIN_ALPHA, MIN_SCALE, PARTY_H, PARTY_W,
+    Hit, LOG_H, LOG_W, LOGICAL_H, LOGICAL_W, LogHit, MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE,
+    PARTY_H, PARTY_W, PartyHit, Renderer,
 };
 use crate::update;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::Graphics::Dwm::*;
-use windows_sys::Win32::Graphics::Gdi::*;
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::HiDpi::*;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE,
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Dwm::{
+    DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    DwmSetWindowAttribute,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::*;
+use windows_sys::Win32::Graphics::Gdi::{
+    BeginPaint, BitBlt, EndPaint, GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST,
+    MONITOR_DEFAULTTONULL, MONITOR_FROM_FLAGS, MONITORINFO, MonitorFromRect, PAINTSTRUCT, SRCCOPY,
+    ScreenToClient,
+};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem, GetDpiForWindow,
+    SetProcessDpiAwarenessContext,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_ESCAPE,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DispatchMessageW, GW_OWNER, GWLP_USERDATA,
+    GetCursorPos, GetMessageW, GetWindow, GetWindowLongPtrW, GetWindowRect, HTCAPTION, HTCLIENT,
+    HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_HAND, IDC_SIZENS, IsWindowVisible, LWA_ALPHA,
+    LoadCursorW, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SPI_GETWORKAREA, SW_HIDE,
+    SW_SHOW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
+    SetCursor, SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    SystemParametersInfoW, TranslateMessage, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY,
+    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
+    WM_NCMOUSEMOVE, WM_PAINT, WM_SETCURSOR, WM_TIMER, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+};
 
-use log_proc::*;
-use main_proc::*;
-use party_proc::*;
-use placement::*;
-use store::*;
-use window::*;
+use log_proc::log_wndproc;
+use main_proc::wndproc;
+use party_proc::party_wndproc;
+use placement::{
+    default_log_pos, default_party_pos, default_pos, keep_on_screen, load_pos, save_log_pos,
+    save_party_pos, save_pos, saved_pos, work_of,
+};
+use store::{
+    alpha_from, board_forgotten, board_from, board_key, data_file, load_board, load_discord,
+    load_party, load_skipped, load_sound, load_text, load_topmost, load_usage, save_alpha,
+    save_board, save_discord, save_party, save_scale, save_skipped, save_sound, save_topmost,
+    save_usage, save_window, scale_from, usage_answered, window_from, write_data,
+};
+use window::{
+    MOVING, app_mut, apply_alpha, apply_dwm, apply_size, dpi_changed, drag_window, fit_windows,
+    keep_all_on_screen, point, repaint, repaint_log, repaint_party, sync_log, sync_party,
+    sync_topmost, track_leave,
+};
 
 const TIMER_ID: usize = 1;
 
@@ -41,15 +76,16 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-pub fn run() {
+pub(crate) fn run() {
     update::cleanup_old();
     update::spawn_check(load_skipped());
+    // SAFETY: the App outlives the message loop that holds its pointer, and every buffer passed here outlives its call.
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let dpi = GetDpiForSystem();
         let mut app = App::new(dpi);
-        app.sound_on = load_sound();
-        app.topmost = load_topmost();
+        app.flags.set(Flag::Sound, load_sound());
+        app.flags.set(Flag::Topmost, load_topmost());
         app.set_scale(load_text("scale.txt").map_or(1.0, |t| scale_from(&t)));
         app.set_alpha(load_text("alpha.txt").map_or(MAX_ALPHA, |t| alpha_from(&t)));
         app.set_window(
@@ -57,8 +93,8 @@ pub fn run() {
         );
         app.set_history(data_file("history.db").and_then(|p| History::open(&p)));
         app.backfill_history();
-        app.set_usage(load_usage(), false);
-        app.usage_ask = !usage_answered();
+        app.restore_usage(load_usage());
+        app.flags.set(Flag::UsageAsk, !usage_answered());
         crate::usage::spawn(data_file("history.db"));
         let (board_on, board_deleting) = board_from(&load_board());
         if board_on {
@@ -82,21 +118,21 @@ pub fn run() {
         wc.hInstance = module;
         wc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
         wc.lpszClassName = class_name.as_ptr();
-        RegisterClassW(&wc);
+        RegisterClassW(&raw const wc);
         let log_class = wide("EclipticaHUDLog");
         let mut lc: WNDCLASSW = std::mem::zeroed();
         lc.lpfnWndProc = Some(log_wndproc);
         lc.hInstance = module;
         lc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
         lc.lpszClassName = log_class.as_ptr();
-        RegisterClassW(&lc);
+        RegisterClassW(&raw const lc);
         let party_class = wide("EclipticaHUDParty");
         let mut pc: WNDCLASSW = std::mem::zeroed();
         pc.lpfnWndProc = Some(party_wndproc);
         pc.hInstance = module;
         pc.hCursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
         pc.lpszClassName = party_class.as_ptr();
-        RegisterClassW(&pc);
+        RegisterClassW(&raw const pc);
 
         let (x, y) = saved_pos("pos.txt", w, h).unwrap_or_else(|| default_pos(w, h));
         let title = wide("Ecliptica HUD");
@@ -112,7 +148,7 @@ pub fn run() {
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             module,
-            &mut app as *mut App as *mut core::ffi::c_void,
+            (&raw mut app).cast::<core::ffi::c_void>(),
         );
         apply_dwm(hwnd);
         apply_alpha(&app, hwnd);
@@ -133,9 +169,9 @@ pub fn run() {
         }
 
         let mut msg: MSG = std::mem::zeroed();
-        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        while GetMessageW(&raw mut msg, std::ptr::null_mut(), 0, 0) > 0 {
+            TranslateMessage(&raw const msg);
+            DispatchMessageW(&raw const msg);
         }
     }
     crate::relay::HUB.shutdown(std::time::Duration::from_millis(2500));

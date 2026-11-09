@@ -3,7 +3,7 @@ use super::*;
 fn lines(msgs: &[&str]) -> Vec<(u64, String)> {
     msgs.iter()
         .enumerate()
-        .map(|(i, m)| (100 + i as u64, m.to_string()))
+        .map(|(i, m)| (100 + crate::num::to_u64(i), m.to_string()))
         .collect()
 }
 
@@ -279,7 +279,7 @@ fn opting_in_on_an_older_build_still_keeps_earlier_data_out() {
     let mut floors: Vec<(String, u64)> = h.usage_floors().into_iter().collect();
     floors.sort();
     assert_eq!(floors, got[2..].to_vec());
-    assert!(h.party_saved_after(0, 10).is_empty());
+    assert_eq!(h.party_saved_after(0, 10).len(), 0);
     drop(h);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -316,7 +316,10 @@ fn wal_is_capped_and_truncated() {
             .unwrap();
     assert_eq!(limit, WAL_LIMIT);
     let biggest = fill(&mut h, &path, "a", 60);
-    assert!(biggest > WAL_LIMIT as u64 * 2, "wal only reached {biggest}");
+    assert!(
+        biggest > crate::num::to_u64(WAL_LIMIT) * 2,
+        "wal only reached {biggest}"
+    );
     let grown = wal_size(&path);
     assert!(grown > 0);
 
@@ -335,9 +338,9 @@ fn wal_is_capped_and_truncated() {
     assert!(h.checkpoint());
     let took = started.elapsed();
     assert_eq!(wal_size(&path), 0);
-    println!(
+    crate::console::say(format_args!(
         "wal peaked at {biggest} bytes, {grown} before the checkpoint, truncate took {took:?}"
-    );
+    ));
     assert_eq!(h.stored("a"), 60 * 400);
     assert_eq!(h.stored("b"), 2 * 400);
 

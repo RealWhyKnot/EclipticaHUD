@@ -1,13 +1,14 @@
-use super::hit::{Hit, LogHit, PartyHit};
 use super::Ctl;
+use super::hit::{Hit, LogHit, PartyHit};
 use crate::discord::Link;
+use crate::hud::flags::{Flag, Flags};
 use crate::hud::timeline::Filter;
 use crate::relay::party::PartyRow;
 use crate::update::Badge;
 use crate::vr::VrStatus;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum RunSync {
+pub(crate) enum RunSync {
     #[default]
     Idle,
     Waiting,
@@ -15,18 +16,18 @@ pub enum RunSync {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Env {
+pub(crate) enum Env {
     NoVrchat,
     NotInWorld,
     InWorld,
 }
 
-pub struct Frame {
+pub(crate) struct Frame {
+    pub flags: Flags,
     pub now: u64,
     pub env: Env,
     pub pages: usize,
     pub view_page: usize,
-    pub settings_open: bool,
     pub scale: f32,
     pub scale_max: f32,
     pub alpha: u8,
@@ -39,40 +40,25 @@ pub struct Frame {
     pub pressed: Option<Hit>,
     pub tip: Option<Hit>,
     pub vr: VrStatus,
-    pub log_ok: bool,
-    pub log_open: bool,
-    pub topmost: bool,
     pub progress_shown: f32,
     pub dps_shown: f32,
     pub fight_dps_shown: f32,
     pub taken_shown: f32,
     pub taken_rate_shown: f32,
     pub update: Badge,
-    pub prompt: bool,
-    pub sound_on: bool,
     pub discord: Link,
-    pub discord_on: bool,
-    pub usage_on: bool,
-    pub usage_failing: bool,
-    pub board_on: bool,
     pub board_status: u8,
     pub board_delete: u8,
-    pub ask_usage: bool,
-    pub party_open: bool,
     pub view_run: Option<usize>,
     pub view_group: Option<usize>,
     pub group_pages: usize,
-    pub run_sel: bool,
-    pub group_sel: bool,
-    pub stages_btn: bool,
-    pub stages: bool,
     pub split_top: usize,
     pub sync: RunSync,
 }
 
 impl Frame {
     pub(super) fn live(&self) -> bool {
-        !self.run_sel && !self.group_sel
+        !self.flags.has(Flag::RunSelected) && !self.flags.has(Flag::GroupSelected)
     }
 
     pub(super) fn hov(&self, h: Hit) -> bool {
@@ -83,8 +69,8 @@ impl Frame {
         self.pressed == Some(h)
     }
 
-    pub(super) fn ctl(&self, h: Hit, enabled: bool, on: bool) -> Ctl {
-        Ctl::of(enabled, on, self.hov(h), self.prs(h))
+    pub(super) fn ctl(&self, h: Hit) -> Ctl {
+        Ctl::rest(self.hov(h)).held(self.prs(h))
     }
 
     pub(super) fn empty(&self) -> bool {
@@ -92,7 +78,7 @@ impl Frame {
     }
 }
 
-pub struct LogView {
+pub(crate) struct LogView {
     pub scroll: f32,
     pub filter: Filter,
     pub hover: Option<LogHit>,
@@ -104,7 +90,7 @@ pub struct LogView {
 }
 
 #[derive(Default, Clone, PartialEq, Eq, Debug)]
-pub struct PartyFight {
+pub(crate) struct PartyFight {
     pub name: String,
     pub secs: u64,
     pub live: bool,
@@ -112,7 +98,7 @@ pub struct PartyFight {
 }
 
 #[derive(Default, Clone, PartialEq, Eq, Debug)]
-pub struct PartyPane {
+pub(crate) struct PartyPane {
     pub on: bool,
     pub ready: bool,
     pub link: crate::relay::Link,
@@ -125,12 +111,12 @@ pub struct PartyPane {
 }
 
 impl PartyPane {
-    pub fn you(&self) -> Option<usize> {
+    pub(crate) fn you(&self) -> Option<usize> {
         self.rows.iter().position(|r| r.you)
     }
 }
 
-pub struct PartyView<'a> {
+pub(crate) struct PartyView<'a> {
     pub pane: &'a PartyPane,
     pub hover: Option<PartyHit>,
     pub pressed: Option<PartyHit>,
@@ -140,15 +126,14 @@ pub struct PartyView<'a> {
 
 impl PartyView<'_> {
     pub(super) fn ctl(&self, h: PartyHit, on: bool) -> Ctl {
-        Ctl::of(true, on, self.hover == Some(h), self.pressed == Some(h))
+        Ctl::rest(self.hover == Some(h))
+            .lit(on)
+            .held(self.pressed == Some(h))
     }
 
     pub(super) fn ctl_if(&self, h: PartyHit, enabled: bool) -> Ctl {
-        Ctl::of(
-            enabled,
-            false,
-            self.hover == Some(h),
-            self.pressed == Some(h),
-        )
+        Ctl::rest(self.hover == Some(h))
+            .held(self.pressed == Some(h))
+            .usable(enabled)
     }
 }

@@ -1,9 +1,13 @@
 use super::enemies::*;
 use super::tests::{frame, pix, png};
+use super::theme::{AMBER, DIM, F_BOSS, F_LABEL};
 use super::*;
 use crate::discord::Link;
 use crate::game::state::GameState;
+use crate::hud::flags::Flag;
+use std::fmt::Write as _;
 use windows_sys::Win32::Foundation::SIZE;
+use windows_sys::Win32::Graphics::Gdi::{DT_LEFT, GdiFlush};
 
 const DPIS: [u32; 6] = [48, 72, 96, 120, 144, 192];
 const CARD_TOP: i32 = 82;
@@ -58,7 +62,7 @@ fn stage_gs(spawns: usize, retire: Option<u64>) -> GameState {
     );
     for slot in 0..spawns {
         feed(
-            140 + slot as u64 / 10,
+            140 + crate::num::to_u64(slot) / 10,
             &format!("Initializing Enemy POOL ID{slot} as ENEMY ID 1"),
         );
     }
@@ -77,7 +81,7 @@ fn stage_frame() -> Frame {
         view_run: Some(0),
         view_group: None,
         group_pages: 2,
-        discord_on: true,
+        flags: frame().flags.with(Flag::Discord, true),
         discord: Link::Connected,
         vr: crate::vr::VrStatus::On,
         ..frame()
@@ -87,9 +91,15 @@ fn stage_frame() -> Frame {
 fn text_size(r: &Renderer, font: usize, s: &str) -> (i32, i32) {
     let buf: Vec<u16> = s.encode_utf16().collect();
     let mut size = SIZE { cx: 0, cy: 0 };
+    // SAFETY: the DC and font belong to the live renderer, and the pointer and length describe `buf`.
     unsafe {
-        SelectObject(r.dc, r.fonts[font] as _);
-        GetTextExtentPoint32W(r.dc, buf.as_ptr(), buf.len() as i32, &mut size);
+        SelectObject(r.dc, r.fonts[font].cast());
+        GetTextExtentPoint32W(
+            r.dc,
+            buf.as_ptr(),
+            crate::num::to_i32(buf.len()),
+            &raw mut size,
+        );
     }
     (size.cx, size.cy)
 }
@@ -158,7 +168,7 @@ const SHOWN: [Shown; 8] = [
 
 fn inputs() -> Vec<ClearingIn> {
     let mut v = Vec::new();
-    for secs in [0, 59, 3_599, 359_999, u32::MAX as u64] {
+    for secs in [0, 59, 3_599, 359_999, u64::from(u32::MAX)] {
         for tokens in [None, Some((0, 1)), Some((2, 3)), Some((999, 999))] {
             for e in SHOWN {
                 v.push(ClearingIn {
@@ -331,33 +341,39 @@ fn live_state_reaches_the_card() {
 }
 
 fn out_dir() -> std::path::PathBuf {
-    let dir = std::env::var("EHUD_ENEMIES_OUT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir().join("ehud-enemies").join("final"));
+    let dir = std::env::var("EHUD_ENEMIES_OUT").map_or_else(
+        |_| std::env::temp_dir().join("ehud-enemies").join("final"),
+        std::path::PathBuf::from,
+    );
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
 
 fn save_png(r: &Renderer, path: &std::path::Path) {
+    // SAFETY: GdiFlush takes no arguments and only waits for pending drawing.
     unsafe { GdiFlush() };
-    let (w, h) = (r.width as u32, r.height as u32);
-    let mut rgb = Vec::with_capacity((w * h * 3) as usize);
-    for y in 0..h as i32 {
-        for x in 0..w as i32 {
+    let (w, h) = (r.width.cast_unsigned(), r.height.cast_unsigned());
+    let mut rgb = Vec::with_capacity(crate::num::to_usize(w * h * 3));
+    for y in 0..h.cast_signed() {
+        for x in 0..w.cast_signed() {
             let c = pix(r, x, y);
-            rgb.extend_from_slice(&[c as u8, (c >> 8) as u8, (c >> 16) as u8]);
+            rgb.extend_from_slice(&[
+                crate::num::to_u8(c & 0xff),
+                crate::num::to_u8((c >> 8) & 0xff),
+                crate::num::to_u8((c >> 16) & 0xff),
+            ]);
         }
     }
     std::fs::write(path, png(w, h, &rgb)).unwrap();
 }
 
 #[test]
-#[ignore]
+#[ignore = "writes images for review"]
 fn write_enemy_counter_images() {
     let dir = out_dir();
     let mut boxes = String::new();
     for dpi in [48u32, 192] {
-        let scale = format!("scale{:.1}", dpi as f32 / 96.0);
+        let scale = format!("scale{:.1}", crate::num::to_f32(dpi) / 96.0);
         for (name, n, retire) in CASES {
             let gs = stage_gs(n, retire);
             let f = stage_frame();
@@ -372,20 +388,21 @@ fn write_enemy_counter_images() {
             let slots = clearing_slots(&c);
             let (b, _) = ink(&r, slots.last().unwrap());
             let dy = r.px(BODY_DY);
-            boxes.push_str(&format!(
-                "A_{name}_{scale} {} {} {} {}\n",
+            let _ = writeln!(
+                boxes,
+                "A_{name}_{scale} {} {} {} {}",
                 b.l,
                 b.t + dy,
                 b.r,
                 b.b + dy
-            ));
+            );
         }
     }
     std::fs::write(dir.join("counter_boxes.txt"), boxes).unwrap();
 }
 
 #[test]
-#[ignore]
+#[ignore = "prints numbers for review"]
 fn print_enemy_layout_numbers() {
     let probe = |n: usize, clear: bool, secs: u64, tokens: Option<(u32, u32)>| ClearingIn {
         secs,
@@ -401,7 +418,7 @@ fn print_enemy_layout_numbers() {
             ("clear", probe(0, true, 75, Some((1, 3)))),
             (
                 "worst",
-                probe(usize::MAX, false, u32::MAX as u64, Some((999, 999))),
+                probe(usize::MAX, false, u64::from(u32::MAX), Some((999, 999))),
             ),
         ] {
             let w = measure(&r, &c);
@@ -412,13 +429,13 @@ fn print_enemy_layout_numbers() {
                     format!("'{}' x{}..{} y{}..{}", s.text, b.l, b.r, b.t, b.b)
                 })
                 .collect();
-            println!(
+            crate::console::say(format_args!(
                 "dpi {dpi:3} {tag:5} edge {:3}px pair {:3}px slack {:4}px | {}",
                 w.edge,
                 w.pair,
                 w.slack,
                 items.join(" ; ")
-            );
+            ));
         }
     }
 }

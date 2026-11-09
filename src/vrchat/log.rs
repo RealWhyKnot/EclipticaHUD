@@ -10,12 +10,12 @@ const RESCAN: Duration = Duration::from_secs(1);
 const MAX_LINE: usize = 1 << 20;
 const DRAINS: u8 = 5;
 
-pub fn log_dir() -> Option<PathBuf> {
+pub(crate) fn log_dir() -> Option<PathBuf> {
     let profile = std::env::var_os("USERPROFILE")?;
     Some(Path::new(&profile).join("AppData/LocalLow/VRChat/VRChat"))
 }
 
-pub fn all_logs(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn all_logs(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -32,25 +32,25 @@ pub fn all_logs(dir: &Path) -> Vec<PathBuf> {
     logs
 }
 
-pub fn newest_log(dir: &Path) -> Option<PathBuf> {
+pub(crate) fn newest_log(dir: &Path) -> Option<PathBuf> {
     all_logs(dir).pop()
 }
 
-pub fn open_shared(path: &Path) -> std::io::Result<File> {
+pub(crate) fn open_shared(path: &Path) -> std::io::Result<File> {
     std::fs::OpenOptions::new()
         .read(true)
         .share_mode(SHARE_ALL)
         .open(path)
 }
 
-pub fn read_lines(path: &Path, f: impl FnMut(&str)) -> std::io::Result<()> {
+pub(crate) fn read_lines(path: &Path, f: impl FnMut(&str)) -> std::io::Result<()> {
     read_lines_from(std::io::BufReader::new(open_shared(path)?), f)
 }
 
 fn read_lines_from(mut reader: impl BufRead, mut f: impl FnMut(&str)) -> std::io::Result<()> {
     let mut raw = Vec::new();
     while (&mut reader)
-        .take(MAX_LINE as u64 + 1)
+        .take(crate::num::to_u64(MAX_LINE) + 1)
         .read_until(b'\n', &mut raw)?
         > 0
     {
@@ -68,10 +68,12 @@ fn read_lines_from(mut reader: impl BufRead, mut f: impl FnMut(&str)) -> std::io
 fn file_id(file: &File) -> Option<(u32, u32, u32)> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
     };
+    // SAFETY: BY_HANDLE_FILE_INFORMATION is plain data for which all zeroes is a valid value.
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+    // SAFETY: the handle is open for as long as `file`, and `info` is a live struct.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &raw mut info) };
     (ok != 0).then_some((
         info.dwVolumeSerialNumber,
         info.nFileIndexHigh,
@@ -80,7 +82,7 @@ fn file_id(file: &File) -> Option<(u32, u32, u32)> {
 }
 
 #[derive(Default)]
-pub struct LogWatch {
+pub(crate) struct LogWatch {
     dir: Option<PathBuf>,
     pub path: Option<PathBuf>,
     pub pass: u64,
@@ -94,7 +96,7 @@ pub struct LogWatch {
 }
 
 impl LogWatch {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         LogWatch {
             dir: log_dir(),
             rescan: RESCAN,
@@ -103,14 +105,14 @@ impl LogWatch {
     }
 
     #[cfg(test)]
-    pub fn for_dir(dir: PathBuf) -> Self {
+    pub(crate) fn for_dir(dir: PathBuf) -> Self {
         LogWatch {
             dir: Some(dir),
             ..Default::default()
         }
     }
 
-    pub fn poll(&mut self, mut on_line: impl FnMut(&str)) -> bool {
+    pub(crate) fn poll(&mut self, mut on_line: impl FnMut(&str)) -> bool {
         let Some(dir) = self.dir.as_deref() else {
             return false;
         };
@@ -172,14 +174,14 @@ impl LogWatch {
         if len == self.offset || file.seek(SeekFrom::Start(self.offset)).is_err() {
             return false;
         }
-        let mut buf = [0u8; CHUNK];
+        let mut buf = vec![0u8; CHUNK];
         while self.offset < len {
             let n = match file.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => n,
             };
             got = true;
-            self.offset += n as u64;
+            self.offset += crate::num::to_u64(n);
             let mut data = &buf[..n];
             while let Some(nl) = data.iter().position(|&b| b == b'\n') {
                 let (head, tail) = data.split_at(nl);
@@ -269,7 +271,7 @@ mod tests {
             (vec!["fresh \u{1d04}\u{29c} log".to_string()], false)
         );
         assert_eq!(w.path.as_deref(), Some(log_b.as_path()));
-        assert_eq!(all_logs(&dir), [log_a.clone(), log_b.clone()]);
+        assert_eq!(all_logs(&dir), [log_a, log_b.clone()]);
 
         drop(fa);
         std::fs::remove_dir_all(&dir).unwrap();
@@ -338,7 +340,7 @@ mod tests {
         for _ in 0..3 {
             append(&log, &vec![b'y'; CHUNK * 3]);
             assert_eq!(collect(&mut w), (Vec::new(), false));
-            assert!(w.carry.capacity() == 0);
+            assert_eq!(w.carry.capacity(), 0);
         }
         append(&log, b"end of junk\nafter\r\npart");
         assert_eq!(collect(&mut w), (vec!["after".to_string()], false));
@@ -384,14 +386,14 @@ mod tests {
         assert_eq!(got[3], "c");
         let mut got = Vec::new();
         read_lines_from(std::io::Cursor::new(b"one\ntwo".to_vec()), |l| {
-            got.push(l.to_string())
+            got.push(l.to_string());
         })
         .unwrap();
         assert_eq!(got, ["one", "two"]);
     }
 
     fn lines(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
+        items.iter().map(std::string::ToString::to_string).collect()
     }
 
     fn rotation_dir(name: &str) -> (PathBuf, PathBuf, PathBuf) {
@@ -451,7 +453,7 @@ mod tests {
         assert_eq!(collect(&mut w), (lines(&["boss killed"]), false));
         assert_eq!(w.carry, b"cut of");
         assert_eq!(collect(&mut w), (Vec::new(), true));
-        assert!(w.carry.is_empty());
+        assert_eq!(w.carry.len(), 0);
         assert_eq!(collect(&mut w), (lines(&["fresh"]), false));
         std::fs::remove_dir_all(&dir).unwrap();
     }

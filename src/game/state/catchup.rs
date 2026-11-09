@@ -1,11 +1,11 @@
 use super::{GameState, Mode};
 use crate::game::run::{Borrowed, BossFight};
 
-pub const MAX_MARKS: usize = 24;
+pub(crate) const MAX_MARKS: usize = 24;
 const SLACK: u64 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Mark {
+pub(crate) struct Mark {
     pub boss: bool,
     pub name: String,
     pub start: u64,
@@ -15,7 +15,7 @@ pub struct Mark {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Summary {
+pub(crate) struct Summary {
     pub start: u64,
     pub stages: Option<u32>,
     pub marks: Vec<Mark>,
@@ -45,7 +45,7 @@ fn record(m: &Mark, end: u64) -> BossFight {
 }
 
 impl GameState {
-    pub fn summary(&self) -> Option<Summary> {
+    pub(crate) fn summary(&self) -> Option<Summary> {
         let run = self.live_run()?;
         let open = (self.stage_stats.start_ts != 0).then_some(&self.stage_stats);
         let mut marks: Vec<Mark> = run
@@ -73,7 +73,7 @@ impl GameState {
         stage.chain(fight).min_by_key(|m| m.start)
     }
 
-    pub fn catch_up(&mut self, s: &Summary) -> Option<bool> {
+    pub(crate) fn catch_up(&mut self, s: &Summary) -> Option<bool> {
         if s.marks.is_empty() || s.marks.windows(2).any(|w| w[0].start > w[1].start) {
             return Some(false);
         }
@@ -102,7 +102,7 @@ impl GameState {
         let earlier = &s.marks[..k];
         let run = self.runs.last_mut().filter(|r| r.end_ts.is_none())?;
         let start = s.start.min(earlier.first().map_or(u64::MAX, |m| m.start));
-        let listed = s.marks.iter().filter(|m| !m.boss).count() as u32;
+        let listed = crate::num::to_u32(s.marks.iter().filter(|m| !m.boss).count());
         let skipped = s.stages.and_then(|n| n.checked_sub(listed));
         let counted = run.from_start || run.borrowed.is_some_and(|b| b.skipped.is_some());
         let learns = skipped.is_some() && !counted;
@@ -134,14 +134,14 @@ impl GameState {
         Some(true)
     }
 
-    pub fn needs_history(&self) -> bool {
+    pub(crate) fn needs_history(&self) -> bool {
         match self.live_run() {
             Some(r) => !r.from_start && r.borrowed.is_none_or(|b| b.skipped.is_none()),
             None => self.mode == Mode::Intermission,
         }
     }
 
-    pub fn drop_borrowed(&mut self) {
+    pub(crate) fn drop_borrowed(&mut self) {
         let Some(run) = self.runs.last_mut() else {
             return;
         };
@@ -159,14 +159,13 @@ impl GameState {
             .map(|f| f.start_ts)
             .chain(open.then_some(self.stage_stats.start_ts))
             .min();
-        match b.start_ts.or(own) {
-            Some(start) => run.start_ts = start,
-            None => {
-                self.runs.pop();
-                self.stage_no = None;
-                self.changed = true;
-                return;
-            }
+        if let Some(start) = b.start_ts.or(own) {
+            run.start_ts = start;
+        } else {
+            self.runs.pop();
+            self.stage_no = None;
+            self.changed = true;
+            return;
         }
         run.stage_no = run.stage_count(open);
         if live {

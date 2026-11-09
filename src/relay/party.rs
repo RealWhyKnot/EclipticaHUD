@@ -1,11 +1,11 @@
-use super::proto::{Member, Totals, MAX_MEMBERS};
+use super::proto::{MAX_MEMBERS, Member, Totals};
 use std::collections::VecDeque;
 
-pub const DPS_WINDOW_MS: u64 = 10_000;
+pub(crate) const DPS_WINDOW_MS: u64 = 10_000;
 const MAX_SAMPLES: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PartyRow {
+pub(crate) struct PartyRow {
     pub name: String,
     pub you: bool,
     pub live: bool,
@@ -104,25 +104,25 @@ impl Row {
 }
 
 #[derive(Default, Debug)]
-pub struct Party {
+pub(crate) struct Party {
     rows: Vec<Row>,
     names: Vec<(Member, String)>,
     gone: Vec<(Member, String)>,
 }
 
 impl Party {
-    pub fn reset_room(&mut self) {
+    pub(crate) fn reset_room(&mut self) {
         self.rows.clear();
         self.names.clear();
         self.gone.clear();
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.rows.clear();
         self.gone.clear();
     }
 
-    pub fn set_names(&mut self, names: Vec<(Member, String)>) {
+    pub(crate) fn set_names(&mut self, names: Vec<(Member, String)>) {
         let old = std::mem::replace(&mut self.names, names);
         let keep = |h: &Member, names: &[(Member, String)], rows: &[Row]| {
             !names.iter().any(|(n, _)| n == h) && rows.iter().any(|r| !r.you && r.hash == *h)
@@ -143,11 +143,16 @@ impl Party {
             .map(|(_, n)| n)
     }
 
-    pub fn others(&self) -> usize {
+    pub(crate) fn others(&self) -> usize {
         self.rows.iter().filter(|r| !r.you).count()
     }
 
-    pub fn apply_snap(&mut self, now: u64, entries: &[(Member, Totals)], own: Option<Member>) {
+    pub(crate) fn apply_snap(
+        &mut self,
+        now: u64,
+        entries: &[(Member, Totals)],
+        own: Option<Member>,
+    ) {
         for row in self.rows.iter_mut().filter(|r| !r.you) {
             if !entries.iter().any(|(h, _)| *h == row.hash) {
                 row.freeze(now);
@@ -157,28 +162,27 @@ impl Party {
             if Some(hash) == own {
                 continue;
             }
-            match self.rows.iter_mut().find(|r| !r.you && r.hash == hash) {
-                Some(row) => row.update(now, dmg),
-                None => {
-                    if self.others() >= MAX_MEMBERS {
-                        let Some(i) = self.oldest_frozen() else {
-                            continue;
-                        };
-                        self.rows.remove(i);
-                    }
-                    self.rows.push(Row::new(hash, false, now, dmg));
+            if let Some(row) = self.rows.iter_mut().find(|r| !r.you && r.hash == hash) {
+                row.update(now, dmg);
+            } else {
+                if self.others() >= MAX_MEMBERS {
+                    let Some(i) = self.oldest_frozen() else {
+                        continue;
+                    };
+                    self.rows.remove(i);
                 }
+                self.rows.push(Row::new(hash, false, now, dmg));
             }
         }
     }
 
-    pub fn disconnected(&mut self, now: u64) {
+    pub(crate) fn disconnected(&mut self, now: u64) {
         for row in self.rows.iter_mut().filter(|r| !r.you) {
             row.freeze(now);
         }
     }
 
-    pub fn set_own(&mut self, now: u64, hash: Member, dmg: Option<Totals>) {
+    pub(crate) fn set_own(&mut self, now: u64, hash: Member, dmg: Option<Totals>) {
         let own = self.rows.iter_mut().find(|r| r.you);
         match (own, dmg) {
             (Some(row), Some(d)) if row.hash == hash => row.update(now, d),
@@ -200,7 +204,7 @@ impl Party {
             .map(|(i, _)| i)
     }
 
-    pub fn view(&self, now: u64) -> Vec<PartyRow> {
+    pub(crate) fn view(&self, now: u64) -> Vec<PartyRow> {
         let mut shown: Vec<(&Row, String)> = self
             .rows
             .iter()
@@ -223,8 +227,11 @@ impl Party {
                 dmg: r.dmg,
                 taken: r.taken,
                 life: r.life,
-                share: (total > 0)
-                    .then(|| ((r.dmg as u128 * 100 + total as u128 / 2) / total as u128) as u32),
+                share: (total > 0).then(|| {
+                    crate::num::to_u32(
+                        (u128::from(r.dmg) * 100 + u128::from(total) / 2) / u128::from(total),
+                    )
+                }),
                 dps: r.dps(now),
             });
         }
@@ -391,20 +398,20 @@ mod tests {
         assert_eq!(v[0].name, "Alice");
         p.clear();
         p.snap(3000, &[(A, 7)], None);
-        assert!(p.view(3000).is_empty());
+        assert_eq!(p.view(3000).len(), 0);
         p.set_names(names(&[(A, "Alice")]));
         p.set_names(Vec::new());
         assert_eq!(p.view(3000)[0].name, "Alice");
         p.reset_room();
         p.snap(4000, &[(A, 1)], None);
-        assert!(p.view(4000).is_empty());
+        assert_eq!(p.view(4000).len(), 0);
     }
 
     #[test]
     fn a_full_table_evicts_the_row_that_froze_first() {
         let mut p = Party::default();
         let id = |i: u64| -> Member { (i + 100).to_le_bytes() };
-        let all: Vec<(Member, u64)> = (0..MAX_MEMBERS as u64)
+        let all: Vec<(Member, u64)> = (0..crate::num::to_u64(MAX_MEMBERS))
             .map(|i| (id(i), if i == 0 { 9000 } else { 1000 }))
             .collect();
 
@@ -439,15 +446,15 @@ mod tests {
         p.snap(0, &[(A, 10), (B, 20)], None);
         assert_eq!(p.view(0)[0].name, "Ben");
         p.clear();
-        assert!(p.view(0).is_empty());
+        assert_eq!(p.view(0).len(), 0);
         p.snap(0, &[(C, 5), (A, 7)], None);
         let v = p.view(0);
         assert_eq!(row(&v, "Ann").dmg, 7);
         assert_eq!(row(&v, "Cat").dmg, 5);
         p.reset_room();
-        assert!(p.view(0).is_empty());
+        assert_eq!(p.view(0).len(), 0);
         p.snap(0, &[(C, 5)], None);
-        assert!(p.view(0).is_empty());
+        assert_eq!(p.view(0).len(), 0);
         p.set_names(names(&[(C, "Cat")]));
         assert_eq!(p.view(0)[0].name, "Cat");
     }
@@ -523,14 +530,14 @@ mod tests {
         p.own(0, ME, Some(1));
         let hash = |n: u64| -> Member { n.to_le_bytes() };
         for round in 0..10u64 {
-            let snap: Vec<(Member, u64)> = (0..MAX_MEMBERS as u64)
+            let snap: Vec<(Member, u64)> = (0..crate::num::to_u64(MAX_MEMBERS))
                 .map(|i| (hash(round * 100 + i), i))
                 .collect();
             p.snap(round * 1000, &snap, Some(ME));
             assert!(p.others() <= MAX_MEMBERS);
         }
         p.set_names(
-            (0..MAX_MEMBERS as u64)
+            (0..crate::num::to_u64(MAX_MEMBERS))
                 .map(|i| (hash(900 + i), format!("P{i}")))
                 .collect(),
         );

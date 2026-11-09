@@ -20,10 +20,11 @@ pub(super) fn log_name(p: &Path) -> Option<String> {
 
 impl Archive {
     pub(super) fn settle(&mut self, live: bool) {
-        if std::mem::replace(&mut self.live, live) && !live {
-            if let Some(db) = self.db.as_ref() {
-                db.checkpoint();
-            }
+        if std::mem::replace(&mut self.live, live)
+            && !live
+            && let Some(db) = self.db.as_ref()
+        {
+            db.checkpoint();
         }
     }
 
@@ -58,12 +59,12 @@ impl Archive {
             return;
         }
         let (have, skew) = *self.have.get_or_insert_with(|| db.resume(&name, kept));
-        let n = kept.len() as u64;
+        let n = crate::num::to_u64(kept.len());
         let skip = have.saturating_sub(self.next).min(n);
         let first = (self.next + skip).saturating_sub(skew);
         self.next += n;
         if skip < n || end > self.end {
-            db.archive(&name, first, &kept[skip as usize..], end);
+            db.archive(&name, first, &kept[crate::num::to_usize(skip)..], end);
             self.end = self.end.max(end);
         }
     }
@@ -100,8 +101,8 @@ pub(super) fn backfill(gs: &mut GameState, dir: Option<&Path>, mut db: Option<&m
                 if read.is_ok() {
                     if let Some(db) = db.as_deref_mut() {
                         let (have, skew) = db.resume(&name, &kept);
-                        let have = (have as usize).min(kept.len());
-                        let first = (have as u64).saturating_sub(skew);
+                        let have = crate::num::to_usize(have).min(kept.len());
+                        let first = crate::num::to_u64(have).saturating_sub(skew);
                         db.archive(&name, first, &kept[have..], end);
                     }
                     gs.log_rotated();

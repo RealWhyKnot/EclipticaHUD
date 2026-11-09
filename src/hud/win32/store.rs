@@ -1,4 +1,4 @@
-use super::*;
+use super::{MAX_ALPHA, MAX_SCALE, MIN_ALPHA, MIN_SCALE, PathBuf, WINDOW_STEPS};
 
 pub(super) fn data_file(name: &str) -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA")?;
@@ -120,18 +120,21 @@ pub(super) fn save_party(on: bool) {
 }
 
 pub(super) fn scale_from(text: &str) -> f32 {
-    text.trim()
-        .parse::<u32>()
-        .map_or(1.0, |p| (p as f32 / 100.0).clamp(MIN_SCALE, MAX_SCALE))
+    text.trim().parse::<u32>().map_or(1.0, |p| {
+        (crate::num::to_f32(p) / 100.0).clamp(MIN_SCALE, MAX_SCALE)
+    })
 }
 
 pub(super) fn save_scale(scale: f32) {
-    write_data("scale.txt", ((scale * 100.0).round() as i32).to_string());
+    write_data(
+        "scale.txt",
+        crate::num::to_i32((scale * 100.0).round()).to_string(),
+    );
 }
 
 pub(super) fn alpha_from(text: &str) -> u8 {
     text.trim().parse::<u32>().map_or(MAX_ALPHA, |p| {
-        p.clamp(MIN_ALPHA as u32, MAX_ALPHA as u32) as u8
+        crate::num::to_u8(p.clamp(u32::from(MIN_ALPHA), u32::from(MAX_ALPHA)))
     })
 }
 

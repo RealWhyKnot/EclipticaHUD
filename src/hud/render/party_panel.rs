@@ -1,15 +1,25 @@
 use super::fmt::{compact, group_digits};
 use super::frame::{PartyPane, PartyView};
 use super::hit::PartyHit;
-use super::layout::*;
-use super::theme::*;
-use super::{wide, Renderer};
+use super::layout::{
+    M, PARTY_BAR, PARTY_CARD1, PARTY_CARD2, PARTY_CLOSE_BTN, PARTY_DMG, PARTY_H, PARTY_NAME,
+    PARTY_NEWER, PARTY_OLDER, PARTY_PAGE, PARTY_RANK, PARTY_ROW_H, PARTY_ROW_Y, PARTY_ROWS,
+    PARTY_TAKEN, PARTY_TOGGLE, PARTY_W,
+};
+use super::theme::{
+    ACCENT, AMBER, BG, CARD, CARD_HI, DANGER, DIM, EDGE, F_BIG, F_BODY, F_LABEL, F_TINY,
+    GLYPH_CLOSE, GLYPH_NEXT, GLYPH_PREV, GOOD, TEXT, mix,
+};
+use super::{Renderer, wide};
 use crate::game::event::{fmt_clock, fmt_date};
 use crate::game::state::Life;
-use crate::relay::party::PartyRow;
 use crate::relay::Link;
+use crate::relay::party::PartyRow;
 use windows_sys::Win32::Foundation::RECT;
-use windows_sys::Win32::Graphics::Gdi::*;
+use windows_sys::Win32::Graphics::Gdi::{
+    DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_VCENTER, DT_WORDBREAK, DrawTextW,
+    GdiFlush, SelectObject, SetTextColor,
+};
 
 const OFF_LINES: [&str; 3] = [
     "While a boss fight is on, the HUD sends the server how much damage you've dealt and taken, at most once a second.",
@@ -41,7 +51,7 @@ fn clock(secs: u64) -> String {
 }
 
 impl PartyPane {
-    pub fn board_head(&self) -> &'static str {
+    pub(crate) fn board_head(&self) -> &'static str {
         if self.saved.is_some() {
             return "SAVED FIGHT";
         }
@@ -52,7 +62,7 @@ impl PartyPane {
         }
     }
 
-    pub fn board_empty(&self) -> Option<&'static str> {
+    pub(crate) fn board_empty(&self) -> Option<&'static str> {
         if !self.rows.is_empty() {
             return None;
         }
@@ -66,17 +76,17 @@ impl PartyPane {
         })
     }
 
-    pub fn saved_when(&self) -> Option<String> {
+    pub(crate) fn saved_when(&self) -> Option<String> {
         self.saved
             .map(|at| format!("{}, {}", fmt_date(at), &fmt_clock(at)[..5]))
     }
 
-    pub fn page_label(&self) -> String {
+    pub(crate) fn page_label(&self) -> String {
         let total = self.pages + 1;
         format!("{}/{}", total - self.page.min(self.pages), total)
     }
 
-    pub fn tip(&self, hit: PartyHit) -> &'static str {
+    pub(crate) fn tip(&self, hit: PartyHit) -> &'static str {
         match (hit, self.on, self.ready, self.link) {
             (PartyHit::Status, true, true, Link::Full) => {
                 "Too many players are sharing in this instance right now"
@@ -88,7 +98,7 @@ impl PartyPane {
         }
     }
 
-    pub fn status(&self) -> (&'static str, u32) {
+    pub(crate) fn status(&self) -> (&'static str, u32) {
         match (self.on, self.ready, self.link) {
             (false, _, _) => ("off", DIM),
             (true, false, _) => ("waiting for Ecliptica", DIM),
@@ -134,16 +144,21 @@ impl PartyPane {
     }
 }
 
+#[derive(Clone, Copy)]
+struct BoardLook {
+    leader: u64,
+    full: bool,
+    full_taken: bool,
+    stale: bool,
+}
+
 impl Renderer {
-    pub fn draw_party(&mut self, v: &PartyView) {
+    pub(crate) fn draw_party(&mut self, v: &PartyView) {
         let p = v.pane;
         self.fill(0, 0, PARTY_W, PARTY_H, BG);
         let vc = DT_VCENTER;
         self.text_rect(
-            M,
-            8,
-            160,
-            24,
+            (M, 8, 160, 24),
             F_LABEL,
             ACCENT,
             DT_LEFT | vc,
@@ -151,7 +166,7 @@ impl Renderer {
         );
         if !v.vr {
             let (tx, ty, _, th) = PARTY_TOGGLE;
-            self.text_rect(tx - 88, ty, 80, th, F_TINY, DIM, DT_RIGHT | vc, "sharing");
+            self.text_rect((tx - 88, ty, 80, th), F_TINY, DIM, DT_RIGHT | vc, "sharing");
             let word = if p.on { "On" } else { "Off" };
             self.text_button(PARTY_TOGGLE, v.ctl(PartyHit::Toggle, p.on), word);
             self.glyph_button(PARTY_CLOSE_BTN, v.ctl(PartyHit::Close, false), GLYPH_CLOSE);
@@ -164,6 +179,7 @@ impl Renderer {
         if let Some(hit) = v.tip.filter(|_| !v.vr) {
             self.tooltip(hit.rect(), p.tip(hit), PARTY_W, PARTY_H);
         }
+        // SAFETY: GdiFlush takes no arguments and only waits for pending drawing.
         unsafe { GdiFlush() };
     }
 
@@ -176,7 +192,7 @@ impl Renderer {
         let when = p.saved_when();
         let shown = when.as_deref().unwrap_or(word);
         let ww = self.unscale(self.text_w(F_TINY, shown));
-        self.text_rect(x, cy + 6, w, 18, F_TINY, DIM, DT_RIGHT | vc, shown);
+        self.text_rect((x, cy + 6, w, 18), F_TINY, DIM, DT_RIGHT | vc, shown);
         let lead = if when.is_none() {
             self.dot(x + w - ww - 14, cy + 11, 8, color);
             26
@@ -186,10 +202,7 @@ impl Renderer {
         let title = p.fight_title();
         let right = x + w;
         self.text_rect(
-            x,
-            cy + 6,
-            w - ww - lead,
-            18,
+            (x, cy + 6, w - ww - lead, 18),
             F_LABEL,
             DIM,
             DT_LEFT | vc,
@@ -211,19 +224,37 @@ impl Renderer {
             (true, Some(i)) => {
                 let rank = ordinal(i + 1);
                 let rw = self.unscale(self.text_w(F_BIG, &rank));
-                self.text_rect(x, cy + 28, rw + 2, 36, F_BIG, TEXT, DT_LEFT | vc, &rank);
+                self.text_rect((x, cy + 28, rw + 2, 36), F_BIG, TEXT, DT_LEFT | vc, &rank);
                 let sx = x + rw + 10;
                 let of = format!("of {} sharing", p.rows.len());
-                self.text_rect(sx, cy + 29, right - sx, 18, F_BODY, TEXT, DT_LEFT | vc, &of);
+                self.text_rect(
+                    (sx, cy + 29, right - sx, 18),
+                    F_BODY,
+                    TEXT,
+                    DT_LEFT | vc,
+                    &of,
+                );
                 let gap = p
                     .gap_line()
                     .unwrap_or_else(|| "no one else here has sent damage yet".to_string());
-                self.text_rect(sx, cy + 47, right - sx, 16, F_TINY, DIM, DT_LEFT | vc, &gap);
+                self.text_rect(
+                    (sx, cy + 47, right - sx, 16),
+                    F_TINY,
+                    DIM,
+                    DT_LEFT | vc,
+                    &gap,
+                );
                 return;
             }
         };
-        self.text_rect(x, cy + 28, right - x, 18, F_BODY, TEXT, DT_LEFT | vc, &head);
-        self.text_rect(x, cy + 47, right - x, 16, F_TINY, DIM, DT_LEFT | vc, &sub);
+        self.text_rect(
+            (x, cy + 28, right - x, 18),
+            F_BODY,
+            TEXT,
+            DT_LEFT | vc,
+            &head,
+        );
+        self.text_rect((x, cy + 47, right - x, 16), F_TINY, DIM, DT_LEFT | vc, &sub);
     }
 
     fn draw_party_pager(&self, v: &PartyView) {
@@ -238,22 +269,18 @@ impl Renderer {
             v.ctl_if(PartyHit::Newer, p.page > 0),
             GLYPH_NEXT,
         );
-        let (ix, iy, iw, ih) = PARTY_PAGE;
         let label = p.page_label();
-        self.text_rect(ix, iy, iw, ih, F_TINY, DIM, DT_CENTER | DT_VCENTER, &label);
+        self.text_rect(PARTY_PAGE, F_TINY, DIM, DT_CENTER | DT_VCENTER, &label);
     }
 
-    fn draw_party_board(&self, p: &PartyPane) {
+    fn draw_party_board(&self, pane: &PartyPane) {
         let (cx, cy, cw, ch) = PARTY_CARD2;
         self.rround(cx, cy, cw, ch, 8, CARD);
-        let (x, w) = (cx + 12, cw - 24);
+        let (x, width) = (cx + 12, cw - 24);
         let vc = DT_VCENTER;
-        if !p.on && p.saved.is_none() {
+        if !pane.on && pane.saved.is_none() {
             self.text_rect(
-                x,
-                cy + 6,
-                w,
-                18,
+                (x, cy + 6, width, 18),
                 F_LABEL,
                 DIM,
                 DT_LEFT | vc,
@@ -261,151 +288,189 @@ impl Renderer {
             );
             let mut y = cy + 34;
             for line in OFF_LINES {
-                y += self.para(x, y, w, F_BODY, DIM, line) + 12;
+                y += self.para(x, y, width, F_BODY, DIM, line) + 12;
             }
             return;
         }
-        self.text_rect(x, cy + 6, w, 18, F_LABEL, DIM, DT_LEFT | vc, p.board_head());
-        if let Some(msg) = p.board_empty() {
+        self.text_rect(
+            (x, cy + 6, width, 18),
+            F_LABEL,
+            DIM,
+            DT_LEFT | vc,
+            pane.board_head(),
+        );
+        if let Some(msg) = pane.board_empty() {
             let (by, bh) = (cy + 24, ch - 24);
-            self.text_rect(x, by, w, bh, F_BODY, DIM, DT_CENTER | vc, msg);
+            self.text_rect((x, by, width, bh), F_BODY, DIM, DT_CENTER | vc, msg);
             return;
         }
-        let n = p.rows.len();
-        let count = if p.here >= n {
-            format!("{n} of {} here sharing", p.here)
+        let total = pane.rows.len();
+        let count = if pane.here >= total {
+            format!("{total} of {} here sharing", pane.here)
         } else {
-            format!("{n} sharing")
+            format!("{total} sharing")
         };
         let (dx, dw) = PARTY_DMG;
         let (tx, tw) = PARTY_TAKEN;
-        let hw = self.unscale(self.text_w(F_LABEL, p.board_head()));
+        let hw = self.unscale(self.text_w(F_LABEL, pane.board_head()));
         let lw = self.unscale(self.text_w(F_LABEL, "DEALT"));
         let count_x = x + hw + 10;
         let count_w = dx + dw - lw - 6 - count_x;
         self.text_rect(
-            count_x,
-            cy + 6,
-            count_w,
-            18,
+            (count_x, cy + 6, count_w, 18),
             F_TINY,
             DIM,
             DT_LEFT | vc,
             &count,
         );
-        self.text_rect(dx, cy + 6, dw, 18, F_LABEL, DIM, DT_RIGHT | vc, "DEALT");
+        self.text_rect((dx, cy + 6, dw, 18), F_LABEL, DIM, DT_RIGHT | vc, "DEALT");
         self.text_rect(
-            tx,
-            cy + 6,
-            tw,
-            18,
+            (tx, cy + 6, tw, 18),
             F_LABEL,
             mix(DIM, DANGER, 0.5),
             DT_RIGHT | vc,
             "TAKEN",
         );
-        let board = p.board();
-        let leader = p.rows[0].dmg.max(1);
+        let board = pane.board();
+        let leader = pane.rows[0].dmg.max(1);
         let full = board
             .iter()
-            .all(|(_, r)| self.text_w(F_BODY, &group_digits(r.dmg)) <= self.px(dw));
+            .all(|(_, row)| self.text_w(F_BODY, &group_digits(row.dmg)) <= self.px(dw));
         let full_t = board
             .iter()
-            .all(|(_, r)| self.text_w(F_BODY, &group_digits(r.taken)) <= self.px(tw));
-        let stale = p.link != Link::Connected && p.saved.is_none();
-        let h = PARTY_ROW_H;
-        for (slot, (i, r)) in board.into_iter().enumerate() {
-            let y = PARTY_ROW_Y + slot as i32 * h;
-            let base = if r.you { CARD_HI } else { CARD };
-            let dead = dead_look(Life::from_wire(r.life));
-            if let Some((tone, _)) = dead {
-                self.rround(cx + 6, y, cw - 12, h, 5, mix(base, tone, 0.22));
-            } else if r.you {
-                self.rround(cx + 6, y, cw - 12, h, 5, CARD_HI);
-            }
-            let ink = if stale && !r.you { DIM } else { TEXT };
-            let name_ink = if r.you { ACCENT } else { ink };
-            let rank = (i + 1).to_string();
-            let (rx, rw) = PARTY_RANK;
-            self.text_rect(rx, y, rw, h, F_TINY, DIM, DT_RIGHT | vc, &rank);
-            let (nx, nw) = PARTY_NAME;
-            match dead {
-                Some((tone, _)) => {
-                    let pw = self.unscale(self.text_w(F_LABEL, "DEAD")) + 12;
-                    if tone == DANGER {
-                        self.rround(nx, y + 4, pw, h - 8, 4, mix(base, DANGER, 0.7));
-                        self.text_rect(nx, y, pw, h, F_LABEL, TEXT, DT_CENTER | vc, "DEAD");
-                    } else {
-                        self.outline(nx, y + 4, pw, h - 8, 4, AMBER);
-                        self.text_rect(nx, y, pw, h, F_LABEL, AMBER, DT_CENTER | vc, "DEAD");
-                    }
-                    let tx = nx + pw + 6;
-                    self.text_rect(
-                        tx,
-                        y,
-                        nw - pw - 6,
-                        h,
-                        F_BODY,
-                        name_ink,
-                        DT_LEFT | vc,
-                        &r.name,
-                    );
-                }
-                None => {
-                    self.text_rect(nx, y, nw, h, F_BODY, name_ink, DT_LEFT | vc, &r.name);
-                }
-            }
-            let frac = r.dmg as f32 / leader as f32;
-            let bar = match (r.you, stale) {
-                (true, _) => ACCENT,
-                (false, false) => EDGE,
-                (false, true) => mix(EDGE, CARD, 0.5),
-            };
-            let (bx, bw) = PARTY_BAR;
-            self.bar_on(bx, y + h / 2 - 2, bw, 4, frac, bar, BG);
-            let num = if full {
-                group_digits(r.dmg)
-            } else {
-                compact(r.dmg)
-            };
-            self.text_rect(dx, y, dw, h, F_BODY, ink, DT_RIGHT | vc, &num);
-            let t = if full_t {
-                group_digits(r.taken)
-            } else {
-                compact(r.taken)
-            };
-            let tink = if stale && !r.you {
-                DIM
-            } else {
-                mix(TEXT, DANGER, 0.6)
-            };
-            self.text_rect(tx, y, tw, h, F_BODY, tink, DT_RIGHT | vc, &t);
+            .all(|(_, row)| self.text_w(F_BODY, &group_digits(row.taken)) <= self.px(tw));
+        let stale = pane.link != Link::Connected && pane.saved.is_none();
+        let look = BoardLook {
+            leader,
+            full,
+            full_taken: full_t,
+            stale,
+        };
+        for (slot, (index, row)) in board.into_iter().enumerate() {
+            self.party_board_row(row, slot, index, &look);
         }
     }
 
-    pub(super) fn para(&self, x: i32, y: i32, w: i32, font: usize, color: u32, s: &str) -> i32 {
+    fn party_board_row(&self, row: &PartyRow, slot: usize, index: usize, look: &BoardLook) {
+        let (cx, _, cw, _) = PARTY_CARD2;
+        let vc = DT_VCENTER;
+        let (dx, dw) = PARTY_DMG;
+        let (tx, tw) = PARTY_TAKEN;
+        let height = PARTY_ROW_H;
+        let BoardLook {
+            leader,
+            full,
+            full_taken: full_t,
+            stale,
+        } = *look;
+        let y = PARTY_ROW_Y + crate::num::to_i32(slot) * height;
+        let base = if row.you { CARD_HI } else { CARD };
+        let dead = dead_look(Life::from_wire(row.life));
+        if let Some((tone, _)) = dead {
+            self.rround(cx + 6, y, cw - 12, height, 5, mix(base, tone, 0.22));
+        } else if row.you {
+            self.rround(cx + 6, y, cw - 12, height, 5, CARD_HI);
+        }
+        let ink = if stale && !row.you { DIM } else { TEXT };
+        let name_ink = if row.you { ACCENT } else { ink };
+        let rank = (index + 1).to_string();
+        let (rx, rw) = PARTY_RANK;
+        self.text_rect((rx, y, rw, height), F_TINY, DIM, DT_RIGHT | vc, &rank);
+        let (nx, nw) = PARTY_NAME;
+        match dead {
+            Some((tone, _)) => {
+                let pw = self.unscale(self.text_w(F_LABEL, "DEAD")) + 12;
+                if tone == DANGER {
+                    self.rround(nx, y + 4, pw, height - 8, 4, mix(base, DANGER, 0.7));
+                    self.text_rect((nx, y, pw, height), F_LABEL, TEXT, DT_CENTER | vc, "DEAD");
+                } else {
+                    self.outline(nx, y + 4, pw, height - 8, 4, AMBER);
+                    self.text_rect((nx, y, pw, height), F_LABEL, AMBER, DT_CENTER | vc, "DEAD");
+                }
+                let tx = nx + pw + 6;
+                self.text_rect(
+                    (tx, y, nw - pw - 6, height),
+                    F_BODY,
+                    name_ink,
+                    DT_LEFT | vc,
+                    &row.name,
+                );
+            }
+            None => {
+                self.text_rect(
+                    (nx, y, nw, height),
+                    F_BODY,
+                    name_ink,
+                    DT_LEFT | vc,
+                    &row.name,
+                );
+            }
+        }
+        let frac = crate::num::to_f32(row.dmg) / crate::num::to_f32(leader);
+        let bar = match (row.you, stale) {
+            (true, _) => ACCENT,
+            (false, false) => EDGE,
+            (false, true) => mix(EDGE, CARD, 0.5),
+        };
+        let (bx, bw) = PARTY_BAR;
+        self.bar_on((bx, y + height / 2 - 2, bw, 4), frac, bar, BG);
+        let num = if full {
+            group_digits(row.dmg)
+        } else {
+            compact(row.dmg)
+        };
+        self.text_rect((dx, y, dw, height), F_BODY, ink, DT_RIGHT | vc, &num);
+        let taken = if full_t {
+            group_digits(row.taken)
+        } else {
+            compact(row.taken)
+        };
+        let tink = if stale && !row.you {
+            DIM
+        } else {
+            mix(TEXT, DANGER, 0.6)
+        };
+        self.text_rect((tx, y, tw, height), F_BODY, tink, DT_RIGHT | vc, &taken);
+    }
+
+    pub(super) fn para(
+        &self,
+        x: i32,
+        y: i32,
+        width: i32,
+        font: usize,
+        color: u32,
+        text: &str,
+    ) -> i32 {
+        // SAFETY: `self.dc` and the font are owned by this renderer, and the text buffer outlives the call.
         unsafe {
-            SelectObject(self.dc, self.fonts[font] as _);
+            SelectObject(self.dc, self.fonts[font].cast());
             SetTextColor(self.dc, color);
-            let mut buf = wide(s);
+            let mut buf = wide(text);
             let flags = DT_LEFT | DT_WORDBREAK | DT_NOPREFIX;
-            let mut r = RECT {
+            let mut rect = RECT {
                 left: self.px(x),
                 top: self.px(y),
-                right: self.px(x + w),
+                right: self.px(x + width),
                 bottom: self.px(y),
             };
             DrawTextW(
                 self.dc,
                 buf.as_mut_ptr(),
-                buf.len() as i32,
-                &mut r,
+                crate::num::to_i32(buf.len()),
+                &raw mut rect,
                 flags | DT_CALCRECT,
             );
-            let h = r.bottom - r.top;
-            r.right = self.px(x + w);
-            DrawTextW(self.dc, buf.as_mut_ptr(), buf.len() as i32, &mut r, flags);
-            self.unscale(h)
+            let height = rect.bottom - rect.top;
+            rect.right = self.px(x + width);
+            DrawTextW(
+                self.dc,
+                buf.as_mut_ptr(),
+                crate::num::to_i32(buf.len()),
+                &raw mut rect,
+                flags,
+            );
+            self.unscale(height)
         }
     }
 }

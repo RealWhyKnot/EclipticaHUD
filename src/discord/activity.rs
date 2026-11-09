@@ -1,4 +1,5 @@
-use super::*;
+use super::{GameState, Life, Mode, REPO, base_name, boss_name, phase_name, stage_name};
+use std::fmt::Write as _;
 
 const CYCLE_SECS: u64 = 15;
 
@@ -57,7 +58,9 @@ pub(super) fn esc(s: &str) -> String {
         match c {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if u32::from(c) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", u32::from(c));
+            }
             c => out.push(c),
         }
     }
@@ -106,12 +109,12 @@ fn count(n: u64, one: &str, many: &str) -> String {
 fn short(n: u64) -> String {
     match n {
         0..=9_999 => n.to_string(),
-        10_000..=999_999 => format!("{:.1}k", n as f64 / 1000.0),
-        _ => format!("{:.2}M", n as f64 / 1_000_000.0),
+        10_000..=999_999 => format!("{:.1}k", crate::num::to_f64(n) / 1000.0),
+        _ => format!("{:.2}M", crate::num::to_f64(n) / 1_000_000.0),
     }
 }
 
-pub fn valid_location(s: &str) -> bool {
+pub(super) fn valid_location(s: &str) -> bool {
     let Some((world, inst)) = s.split_once(':') else {
         return false;
     };
@@ -127,98 +130,51 @@ pub fn valid_location(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"~()_-.".contains(&b))
 }
 
-pub fn web_join_url(location: &str) -> Option<String> {
+pub(super) fn web_join_url(location: &str) -> Option<String> {
     let (world, inst) = location.split_once(':')?;
     valid_location(location)
         .then(|| format!("https://vrchat.com/home/launch?worldId={world}&instanceId={inst}"))
 }
 
 fn party_id(location: &str) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in location.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
     }
     format!("{h:016x}")
 }
 
-pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
-    let at = |ts: u64| unix_now.saturating_sub(now.saturating_sub(ts));
+struct Card {
+    details: String,
+    state: Vec<String>,
+    large: String,
+    large_text: String,
+    since: Option<u64>,
+}
+
+pub(crate) fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
     let run = gs.runs.last().filter(|r| r.end_ts.is_none());
-    let mut state: Vec<String> = Vec::new();
-    let mut large = "logo".to_string();
-    let mut large_text = "Ecliptica".to_string();
-    let mut since = run.map(|r| r.start_ts);
-    let details = match gs.mode {
+    let mut card = Card {
+        details: String::new(),
+        state: Vec::new(),
+        large: "logo".to_string(),
+        large_text: "Ecliptica".to_string(),
+        since: run.map(|r| r.start_ts),
+    };
+    card.details = match gs.mode {
         Mode::Idle if !gs.in_ecliptica() => return None,
         Mode::Idle | Mode::Lobby => {
-            since = None;
+            card.since = None;
             "In the lobby".to_string()
         }
-        Mode::Intermission => {
-            if let Some(r) = run {
-                let mut facts = vec![
-                    format!("{} down", count(r.kills() as u64, "boss", "bosses")),
-                    format!("{} damage dealt", short(r.dmg())),
-                    format!("{} damage taken", short(r.taken())),
-                ];
-                if r.deaths > 0 {
-                    facts.push(count(r.deaths.into(), "death", "deaths"));
-                }
-                facts.push(format!(
-                    "{}m in the run",
-                    now.saturating_sub(r.start_ts) / 60
-                ));
-                state.push(pick(&facts, unix_now));
-            }
-            match gs.stage_no {
-                Some(n) => format!("Intermission after stage {n}"),
-                None => "Intermission".to_string(),
-            }
-        }
-        Mode::Stage => match gs.boss.as_deref() {
-            Some(boss) => {
-                let base = base_name(boss);
-                let name = boss_name(base);
-                if let Some(key) = boss_art(base) {
-                    large = key;
-                }
-                large_text = name.to_string();
-                since = Some(gs.fight_start);
-                state.push(format!("{} DPS", short(gs.fight_dps(now))));
-                state.push(format!("{} damage", short(gs.fight_dmg)));
-                state.push(format!("{} taken", short(gs.fight_taken)));
-                format!("Fighting {name}")
-            }
-            None => {
-                large_text = stage_name(&gs.stage).to_string();
-                let s = &gs.stage_stats;
-                let mut facts = Vec::new();
-                if let Some((got, total)) = gs.tokens_shown() {
-                    facts.push(format!("{got}/{}", count(total as u64, "token", "tokens")));
-                }
-                if let Some(n) = gs.stage_no {
-                    facts.push(format!("Stage {n}"));
-                }
-                facts.push(format!("{} DPS while clearing", short(gs.stage_dps(now))));
-                facts.push(format!("{} damage dealt", short(s.dmg)));
-                facts.push(format!("{} damage taken", short(s.taken)));
-                facts.push(format!("{} taken", count(s.hits.into(), "hit", "hits")));
-                if let Some(d) = run.map(|r| r.deaths).filter(|d| *d > 0) {
-                    facts.push(count(d.into(), "death", "deaths"));
-                }
-                if s.start_ts > 0 {
-                    facts.push(format!("Clearing for {}m", gs.stage_secs(now) / 60));
-                }
-                state.push(pick(&facts, unix_now));
-                format!("{} | {}", stage_name(&gs.stage), phase_name(gs.progress))
-            }
-        },
+        Mode::Intermission => intermission(gs, run, now, unix_now, &mut card),
+        Mode::Stage => stage(gs, run, now, unix_now, &mut card),
     };
-    if gs.boss.is_some() {
-        if let Some(d) = run.map(|r| r.deaths).filter(|d| *d > 0) {
-            state.push(count(d.into(), "death", "deaths"));
-        }
+    if gs.boss.is_some()
+        && let Some(d) = run.map(|r| r.deaths).filter(|d| *d > 0)
+    {
+        card.state.push(count(d.into(), "death", "deaths"));
     }
     let life = match gs.life(now) {
         Life::Down => Some("Dead, can be revived"),
@@ -227,29 +183,113 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
         _ => None,
     };
     if let Some(life) = life {
-        state.insert(0, life.to_string());
+        card.state.insert(0, life.to_string());
     }
+    let start = card
+        .since
+        .map(|ts| unix_now.saturating_sub(now.saturating_sub(ts)));
+    Some(payload(gs, &card, start))
+}
 
+fn intermission(
+    gs: &GameState,
+    run: Option<&crate::game::run::Run>,
+    now: u64,
+    unix_now: u64,
+    card: &mut Card,
+) -> String {
+    if let Some(r) = run {
+        let mut facts = vec![
+            format!(
+                "{} down",
+                count(crate::num::to_u64(r.kills()), "boss", "bosses")
+            ),
+            format!("{} damage dealt", short(r.dmg())),
+            format!("{} damage taken", short(r.taken())),
+        ];
+        if r.deaths > 0 {
+            facts.push(count(r.deaths.into(), "death", "deaths"));
+        }
+        facts.push(format!(
+            "{}m in the run",
+            now.saturating_sub(r.start_ts) / 60
+        ));
+        card.state.push(pick(&facts, unix_now));
+    }
+    match gs.stage_no {
+        Some(n) => format!("Intermission after stage {n}"),
+        None => "Intermission".to_string(),
+    }
+}
+
+fn stage(
+    gs: &GameState,
+    run: Option<&crate::game::run::Run>,
+    now: u64,
+    unix_now: u64,
+    card: &mut Card,
+) -> String {
+    if let Some(boss) = gs.boss.as_deref() {
+        let base = base_name(boss);
+        let name = boss_name(base);
+        if let Some(key) = boss_art(base) {
+            card.large = key;
+        }
+        card.large_text = name.to_string();
+        card.since = Some(gs.fight_start);
+        card.state.push(format!("{} DPS", short(gs.fight_dps(now))));
+        card.state.push(format!("{} damage", short(gs.fight_dmg)));
+        card.state.push(format!("{} taken", short(gs.fight_taken)));
+        format!("Fighting {name}")
+    } else {
+        card.large_text = stage_name(&gs.stage).to_string();
+        let s = &gs.stage_stats;
+        let mut facts = Vec::new();
+        if let Some((got, total)) = gs.tokens_shown() {
+            facts.push(format!(
+                "{got}/{}",
+                count(u64::from(total), "token", "tokens")
+            ));
+        }
+        if let Some(n) = gs.stage_no {
+            facts.push(format!("Stage {n}"));
+        }
+        facts.push(format!("{} DPS while clearing", short(gs.stage_dps(now))));
+        facts.push(format!("{} damage dealt", short(s.dmg)));
+        facts.push(format!("{} damage taken", short(s.taken)));
+        facts.push(format!("{} taken", count(s.hits.into(), "hit", "hits")));
+        if let Some(d) = run.map(|r| r.deaths).filter(|d| *d > 0) {
+            facts.push(count(d.into(), "death", "deaths"));
+        }
+        if s.start_ts > 0 {
+            facts.push(format!("Clearing for {}m", gs.stage_secs(now) / 60));
+        }
+        card.state.push(pick(&facts, unix_now));
+        format!("{} | {}", stage_name(&gs.stage), phase_name(gs.progress))
+    }
+}
+
+fn payload(gs: &GameState, card: &Card, start: Option<u64>) -> String {
     let location = gs.location.as_deref().filter(|l| valid_location(l));
     let join_url = location.and_then(web_join_url);
     let secret = location.filter(|l| l.len() <= TEXT_MAX);
     let github = format!("https://github.com/{REPO}/releases/latest");
     let mut fields = vec![
         "\"type\":5".to_string(),
-        format!("\"details\":{}", esc(&clip(&details))),
+        format!("\"details\":{}", esc(&clip(&card.details))),
     ];
     if let (Some(url), Some(_)) = (&join_url, secret) {
         fields.push(format!("\"details_url\":{}", esc(url)));
     }
-    if !state.is_empty() {
-        fields.push(format!("\"state\":{}", esc(&clip(&state.join(" | ")))));
+    if !card.state.is_empty() {
+        fields.push(format!("\"state\":{}", esc(&clip(&card.state.join(" | ")))));
     }
-    if let Some(ts) = since {
-        fields.push(format!("\"timestamps\":{{\"start\":{}}}", at(ts)));
+    if let Some(ts) = start {
+        fields.push(format!("\"timestamps\":{{\"start\":{ts}}}"));
     }
     let mut assets = vec![
-        format!("\"large_image\":{}", esc(&large)),
-        format!("\"large_text\":{}", esc(&clip(&large_text))),
+        format!("\"large_image\":{}", esc(&card.large)),
+        format!("\"large_text\":{}", esc(&clip(&card.large_text))),
         format!("\"large_url\":{}", esc(&github)),
     ];
     if let Some(key) = class_art(&gs.class) {
@@ -257,37 +297,37 @@ pub fn activity(gs: &GameState, now: u64, unix_now: u64) -> Option<String> {
         assets.push(format!("\"small_text\":{}", esc(&clip(&gs.class))));
     }
     fields.push(format!("\"assets\":{{{}}}", assets.join(",")));
-    match secret {
-        Some(loc) => fields.push(format!(
+    if let Some(loc) = secret {
+        fields.push(format!(
             "\"party\":{{\"id\":{}}},\"secrets\":{{\"join\":{}}}",
             esc(&party_id(loc)),
             esc(loc)
-        )),
-        None => {
-            let mut buttons = Vec::new();
-            if let Some(url) = &join_url {
-                buttons.push(format!(
-                    "{{\"label\":\"Join in VRChat\",\"url\":{}}}",
-                    esc(url)
-                ));
-            }
+        ));
+    } else {
+        let mut buttons = Vec::new();
+        if let Some(url) = &join_url {
             buttons.push(format!(
-                "{{\"label\":\"Get EclipticaHUD\",\"url\":{}}}",
-                esc(&github)
+                "{{\"label\":\"Join in VRChat\",\"url\":{}}}",
+                esc(url)
             ));
-            fields.push(format!("\"buttons\":[{}]", buttons.join(",")));
         }
+        buttons.push(format!(
+            "{{\"label\":\"Get EclipticaHUD\",\"url\":{}}}",
+            esc(&github)
+        ));
+        fields.push(format!("\"buttons\":[{}]", buttons.join(",")));
     }
-    Some(format!("{{{}}}", fields.join(",")))
+    format!("{{{}}}", fields.join(","))
 }
 
 fn pick(facts: &[String], unix_now: u64) -> String {
-    facts[(unix_now / CYCLE_SECS) as usize % facts.len()].clone()
+    facts[crate::num::to_usize(unix_now / CYCLE_SECS) % facts.len()].clone()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::update::json_str;
 
     const LOC: &str = "wrld_0fb88df3-2057-4c2f-8e06-e948864378fd:87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)";
 
@@ -344,7 +384,9 @@ mod tests {
         ));
         assert_eq!(
             web_join_url(LOC).as_deref(),
-            Some("https://vrchat.com/home/launch?worldId=wrld_0fb88df3-2057-4c2f-8e06-e948864378fd&instanceId=87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)")
+            Some(
+                "https://vrchat.com/home/launch?worldId=wrld_0fb88df3-2057-4c2f-8e06-e948864378fd&instanceId=87887~hidden(usr_4e64b21b-fbd0-4c12-8b55-c8c500b517b1)~region(use)"
+            )
         );
     }
 
@@ -549,8 +591,14 @@ mod tests {
         let mut seen = Vec::new();
         for (t, line) in [
             ("04:00:03", "ECLIPTICA - now in lobby"),
-            ("04:01:00", "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer"),
-            ("04:02:00", "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1"),
+            (
+                "04:01:00",
+                "ECLIPTICA - now in stage: Stage_Hall of Beginnings on phase: 0 as class: Spellhammer",
+            ),
+            (
+                "04:02:00",
+                "ECLIPTICA - now fighting boss: Kakarot(Clone) on phase: 0.1",
+            ),
             ("04:02:01", "Dealing 500 STRIKE damage"),
             ("04:02:30", "Boss Kakarot dead, personal damage dealt: "),
         ] {
@@ -567,7 +615,7 @@ mod tests {
         }
         let src = include_str!("activity.rs");
         let body = &src[..src.find("\nmod tests").unwrap()];
-        assert!(body.contains("pub fn activity("));
+        assert!(body.contains("pub(crate) fn activity("));
         let idents: Vec<&str> = body
             .split(|c: char| !(c.is_alphanumeric() || c == '_'))
             .collect();

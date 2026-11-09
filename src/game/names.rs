@@ -1,7 +1,7 @@
 use crate::game::run::base_name;
 use std::borrow::Cow;
 
-pub fn phase_name(x: f32) -> &'static str {
+pub(crate) fn phase_name(x: f32) -> &'static str {
     if x < 0.2 {
         "Primal"
     } else if x < 0.4 {
@@ -17,7 +17,7 @@ pub fn phase_name(x: f32) -> &'static str {
     }
 }
 
-pub fn player_summon(name: &str) -> bool {
+pub(crate) fn player_summon(name: &str) -> bool {
     name.strip_prefix("Neko")
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
@@ -81,7 +81,7 @@ fn readable(id: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-pub fn boss_name(internal: &str) -> Cow<'_, str> {
+pub(crate) fn boss_name(internal: &str) -> Cow<'_, str> {
     let id = boss_id(internal);
     if let Some(name) = known_boss(id) {
         return Cow::Borrowed(name);
@@ -94,7 +94,7 @@ pub fn boss_name(internal: &str) -> Cow<'_, str> {
     }
 }
 
-pub fn stage_name(internal: &str) -> &str {
+pub(crate) fn stage_name(internal: &str) -> &str {
     match internal {
         "BalboaRuins" => "Balboa Ruins",
         "Bringer" => "Bringer's Desert",
@@ -117,8 +117,8 @@ mod tests {
     fn phase_boundaries() {
         assert_eq!(phase_name(0.0), "Primal");
         assert_eq!(phase_name(0.2), "Penumbral");
-        assert_eq!(phase_name(0.4324887), "Antumbral");
-        assert_eq!(phase_name(0.8158672), "Eclipse");
+        assert_eq!(phase_name(0.432_488_7), "Antumbral");
+        assert_eq!(phase_name(0.815_867_2), "Eclipse");
         assert_eq!(phase_name(1.0), "Eye of the Eclipse");
     }
 

@@ -1,0 +1,16 @@
+[files]
+extend-exclude = [
+  "*.lock",
+  "package-lock.json",
+  "packages.lock.json",
+  "pnpm-lock.yaml",
+  "vendor/",
+  "third_party/",
+  "node_modules/",
+  ".yarn/",
+]
+
+[default.extend-words]
+corus = "corus"
+nd = "nd"
+tme = "tme"

@@ -14,7 +14,7 @@ fn header() -> Header {
 fn lines(msgs: &[&str]) -> Vec<(u64, String)> {
     msgs.iter()
         .enumerate()
-        .map(|(i, m)| (1_790_000_000 + i as u64, m.to_string()))
+        .map(|(i, m)| (1_790_000_000 + crate::num::to_u64(i), m.to_string()))
         .collect()
 }
 
@@ -139,7 +139,9 @@ fn chunks_once_a_second_with_rising_seq() {
 #[test]
 fn big_bursts_split_into_several_chunks() {
     let mut o = Outbox::default();
-    o.push((0..MAX_LINES as u64 + 5).map(|i| (i, "Dealing 1 STRIKE damage".to_string())));
+    o.push(
+        (0..crate::num::to_u64(MAX_LINES) + 5).map(|i| (i, "Dealing 1 STRIKE damage".to_string())),
+    );
     o.flush(KEY, header, 1, Instant::now());
     assert_eq!(o.queue.len(), 2);
     assert_eq!(
@@ -212,7 +214,7 @@ fn no_name_means_nothing_is_sent() {
     };
     o.flush(KEY, || h, 1, Instant::now());
     assert!(o.queue.is_empty());
-    assert!(o.lines.is_empty());
+    assert_eq!(o.lines.len(), 0);
 }
 
 #[test]
@@ -257,7 +259,7 @@ fn long_outage_starts_a_new_stream() {
     let mut o = Outbox::default();
     let first = o.stream.clone();
     let t = Instant::now();
-    for i in 0..=MAX_QUEUE as u64 {
+    for i in 0..=crate::num::to_u64(MAX_QUEUE) {
         o.push(lines(&["Dealing 1 STRIKE damage"]));
         o.flush(KEY, header, i, t + Duration::from_secs(i));
     }
