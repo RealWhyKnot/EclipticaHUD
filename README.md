@@ -1,6 +1,3 @@
-> [!NOTE]
-> **Oct 22, 2026:** Ecliptica had a big update and we're still catching the HUD up to it.
-
 <p align="center">
   <img src=".github/assets/banner.png" alt="Ecliptica HUD" width="100%">
 </p>
