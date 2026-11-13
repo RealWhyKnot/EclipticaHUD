@@ -10,7 +10,7 @@ use std::path::PathBuf;
 pub(crate) fn scan(path: Option<String>) {
     let paths: Vec<PathBuf> = match path {
         Some(p) => vec![p.into()],
-        None => log_dir().map(|d| all_logs(&d)).unwrap_or_default(),
+        None => log_dir().map_or_default(|d| all_logs(&d)),
     };
     if paths.is_empty() {
         crate::console::complain(format_args!("no VRChat log found"));

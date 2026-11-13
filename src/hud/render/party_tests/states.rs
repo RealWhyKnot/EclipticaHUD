@@ -88,7 +88,7 @@ fn your_row_is_marked_and_toggle_shows_state() {
         );
         let lost = PartyPane {
             link: Link::Retrying,
-            ..p.clone()
+            ..p
         };
         let rl = draw(dpi, &lost, false);
         let other = |r: &Renderer| {

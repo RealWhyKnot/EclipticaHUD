@@ -405,11 +405,7 @@ fn session(hub: &'static Hub, conn: &Conn, want: &Want) -> Outcome {
         let dmg = s.dmg;
         let run = s.run.as_ref().map(|r| &r.summary);
         if runs.due(now, run) {
-            let payload = s
-                .run
-                .as_ref()
-                .map(super::OwnRun::encode)
-                .unwrap_or_default();
+            let payload = s.run.as_ref().map_or_default(super::OwnRun::encode);
             drop(s);
             if !conn.ws.send(&Msg::Run(payload).encode()) {
                 break Outcome::Lost;

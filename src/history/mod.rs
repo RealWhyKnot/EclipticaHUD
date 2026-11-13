@@ -285,8 +285,7 @@ impl History {
             return Vec::new();
         };
         q.query_map([], |r| r.get(0))
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default()
+            .map_or_default(|rows| rows.flatten().collect())
     }
 
     pub(crate) fn replay(&self, name: &str, mut f: impl FnMut(u64, &str)) -> u64 {

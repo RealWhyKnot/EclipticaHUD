@@ -71,7 +71,7 @@ impl Archive {
 }
 
 pub(super) fn backfill(gs: &mut GameState, dir: Option<&Path>, mut db: Option<&mut History>) {
-    let files = dir.map(all_logs).unwrap_or_default();
+    let files = dir.map_or_default(all_logs);
     let newest = files.last().and_then(|p| log_name(p));
     let mut logs: BTreeMap<String, Option<PathBuf>> = files
         .iter()

@@ -50,8 +50,7 @@ impl History {
             return Vec::new();
         };
         q.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)?.cast_unsigned())))
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default()
+            .map_or_default(|rows| rows.flatten().collect())
     }
 
     pub(crate) fn usage_cursors(&self) -> HashMap<String, u64> {
@@ -59,8 +58,7 @@ impl History {
             return HashMap::new();
         };
         q.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)?.cast_unsigned())))
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default()
+            .map_or_default(|rows| rows.flatten().collect())
     }
 
     pub(crate) fn usage_floors(&self) -> HashMap<String, u64> {
@@ -68,8 +66,7 @@ impl History {
             return HashMap::new();
         };
         q.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)?.cast_unsigned())))
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default()
+            .map_or_default(|rows| rows.flatten().collect())
     }
 
     pub(crate) fn snapshot<T>(&self, f: impl FnOnce() -> T) -> T {
@@ -113,8 +110,7 @@ impl History {
             .query_map(params![seq.cast_signed(), crate::num::to_i64(limit)], |r| {
                 Ok((r.get::<_, i64>(6)?.cast_unsigned(), party_head(r)?))
             })
-            .map(|rows| rows.flatten().collect())
-            .unwrap_or_default();
+            .map_or_default(|rows| rows.flatten().collect());
         heads
             .into_iter()
             .map(|(seq, head)| {

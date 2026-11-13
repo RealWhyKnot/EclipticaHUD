@@ -56,8 +56,7 @@ impl History {
                 taken: r.get::<_, i64>(3)?.cast_unsigned(),
             })
         })
-        .map(|rows| rows.flatten().collect())
-        .unwrap_or_default()
+        .map_or_default(|rows| rows.flatten().collect())
     }
 
     pub(crate) fn party_count(&self, skip: u64) -> usize {
