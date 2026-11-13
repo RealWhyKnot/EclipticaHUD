@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 license = "GPL-3.0-or-later"
+publish = false
 description = "Boss target and damage HUD for Ecliptica in VRChat, desktop panel plus SteamVR overlay"
 
 [dependencies]
@@ -47,6 +48,8 @@ unreachable_pub = "deny"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
 dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"

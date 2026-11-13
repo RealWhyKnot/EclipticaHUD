@@ -9,8 +9,3 @@ extend-exclude = [
   "node_modules/",
   ".yarn/",
 ]
-
-[default.extend-words]
-corus = "corus"
-nd = "nd"
-tme = "tme"
