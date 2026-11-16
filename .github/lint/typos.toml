@@ -9,3 +9,10 @@ extend-exclude = [
   "node_modules/",
   ".yarn/",
 ]
+
+[default.extend-identifiers]
+TME_LEAVE = "TME_LEAVE"
+
+[default.extend-words]
+Corus = "Corus"
+nd = "nd"
