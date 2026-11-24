@@ -12,24 +12,22 @@
 
 <p align="center">
   <a href="https://github.com/RealWhyKnot/EclipticaHUD/releases/latest">Download</a> ·
-  <a href="https://github.com/RealWhyKnot/EclipticaHUD/issues">Report a bug</a>
+  <a href="https://github.com/RealWhyKnot/EclipticaHUD/issues/new?template=bug_report.yml">Report a bug</a> ·
+  <a href="docs/privacy.md">Privacy</a> ·
+  <a href=".github/SECURITY.md">Security</a>
 </p>
 
 EclipticaHUD reads your VRChat log and shows the boss, who it's targeting, your damage and your runs in Ecliptica. It opens as a desktop panel and as a SteamVR overlay on your left controller.
 
-## Shared damage
+## Data sharing
 
-Open the party window (the button next to settings) and turn sharing on to see the boss damage dealt and taken by everyone in your instance who also shares. It's off by default.
+Three optional features send data to `ecliptica.whyknot.dev`. All are off until you turn them on. [docs/privacy.md](docs/privacy.md) has the full list.
 
-During a boss fight the HUD sends your damage dealt and taken to `ecliptica.whyknot.dev` at most once a second, along with hashes of the instance and your VRChat user ID. Names come from each player's own log, and the server keeps nothing on disk.
+- Shared damage (party window) sends your boss damage dealt and taken, hashes of the instance and your VRChat user ID, and your current run's stages and bosses, so everyone sharing in your instance sees each other's numbers. The server keeps nothing on disk.
+- Share fight data (settings) asks once. When on, it uploads the Ecliptica lines from your log about every ten minutes, with player names and user IDs removed on your PC first. The server keeps these uploads as files.
+- Leaderboard (settings) is covered below.
 
-It also sends the stages and bosses of your current run and when each one started and ended. If you join partway through a run, the HUD fills in the stages and bosses you missed from players who share, and the run line says "syncing with party" until it has them. That history only shows for the current run and isn't saved.
-
-## Sharing fight data
-
-The HUD asks once whether you want to share fight data, and it stays off unless you say yes. You can change your answer later with the Share fight data switch in settings. With it on, the HUD sends the Ecliptica lines it reads from your log to `ecliptica.whyknot.dev` about every ten minutes, to help us improve the HUD. That includes boss and enemy names, stages, the damage you dealt and took and what hit you, the player count, the world ID and instance number, and the HUD version. It also sends the run, fight and stage totals the HUD works out from those lines. In other worlds it only notes that you left Ecliptica. Saved shared fights go too, as numbers with no names attached.
-
-Player names and user IDs are taken out on your PC before anything is sent. Other players show up as P1, P2 and so on, and you show up as "you". The numbering starts over for each log file and for each saved fight. The instance keeps its number but loses the owner and region tags, and a named instance is sent as a hash instead of its name. Each upload starts with the date, the clock time of its first line and your UTC offset; after that, each line only keeps how long after the previous one it came. Each log file gets an ID made from its name and a random key that stays on your PC, so the server can join uploads from the same session. Nothing from before you turned the switch on is sent. The server keeps the uploads as files.
+Nothing from before you turned a switch on is sent, and nothing outside Ecliptica. Turn a switch off and nothing new is sent. To remove kills already on the leaderboard, see below.
 
 ## Leaderboard
 
@@ -49,7 +47,22 @@ Download `ecliptica-hud-<version>.exe` from the [latest release](https://github.
 
 ## Build
 
-You need MSVC, CMake and LLVM. Then run `cargo build --release`.
+You need:
+
+- Rust, stable. CI uses the latest stable and `Cargo.toml` sets 1.99 as the minimum.
+- MSVC (Visual Studio C++ build tools) on 64-bit Windows.
+- CMake.
+- LLVM, with `LIBCLANG_PATH` pointing at its `bin` folder (for example `C:\Program Files\LLVM\bin`). The build needs it for bindgen.
+
+Then run `cargo build --release`. The exe is `target/release/ecliptica-hud.exe`.
+
+## Game wiki
+
+The Ecliptica game wiki is at [ecliptica.miraheze.org](https://ecliptica.miraheze.org).
+
+## Bug reports and changes
+
+Open an [issue](https://github.com/RealWhyKnot/EclipticaHUD/issues/new/choose) for bugs and ideas. Please don't send a pull request without talking to me first. [CONTRIBUTING.md](CONTRIBUTING.md) explains why. For security problems, see [SECURITY.md](.github/SECURITY.md).
 
 ## License
 
