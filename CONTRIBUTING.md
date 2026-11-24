@@ -27,7 +27,7 @@ cargo test --workspace --all-targets --locked
 cargo build --release --locked
 ```
 
-The style rules run with `python3 -B .github/lint/style_check.py` and the shell and Rust style rules with `bash .githooks/check-shell`.
+The style rules run with `python -B .github/lint/style_check.py`, the shell checks with `bash .github/lint/check-shell`, and the full gate with `bash .githooks/pre-push`.
 
 ### Commits
 

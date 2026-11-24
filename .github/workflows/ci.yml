@@ -42,7 +42,7 @@ jobs:
         run: python3 -B .github/lint/style_check.py
 
       - name: Shell and Rust style rules
-        run: bash .githooks/check-shell
+        run: bash .github/lint/check-shell
 
   test:
     name: Lint, build and test
