@@ -12,7 +12,7 @@
 
 <p align="center">
   <a href="https://github.com/RealWhyKnot/EclipticaHUD/releases/latest">Download</a> ·
-  <a href="https://github.com/RealWhyKnot/EclipticaHUD/issues/new?template=bug_report.yml">Report a bug</a> ·
+  <a href="https://github.com/RealWhyKnot/EclipticaHUD/issues/new">Report a bug</a> ·
   <a href="docs/privacy.md">Privacy</a> ·
   <a href=".github/SECURITY.md">Security</a>
 </p>
@@ -62,7 +62,7 @@ The Ecliptica game wiki is at [ecliptica.miraheze.org](https://ecliptica.mirahez
 
 ## Bug reports and changes
 
-Open an [issue](https://github.com/RealWhyKnot/EclipticaHUD/issues/new/choose) for bugs and ideas. Please don't send a pull request without talking to me first. [CONTRIBUTING.md](CONTRIBUTING.md) explains why. For security problems, see [SECURITY.md](.github/SECURITY.md).
+Open an [issue](https://github.com/RealWhyKnot/EclipticaHUD/issues/new) for bugs and ideas. Please don't send a pull request without talking to me first. [CONTRIBUTING.md](CONTRIBUTING.md) explains why. For security problems, see [SECURITY.md](.github/SECURITY.md).
 
 ## License
 
